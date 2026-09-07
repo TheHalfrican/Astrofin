@@ -101,8 +101,14 @@ html.af-backdrop .backdropContainer {
   color: var(--af-text-primary);
 }
 
-/* The Jellyfin blue, everywhere it leaks through as an accent. */
+/* The Jellyfin blue, everywhere it leaks through as an accent.
+ * .emby-button.button-link is spelled out because jf-web 10.11.11's own
+ * `.emby-button` colour rule is (0,1,0) at the same weight as a bare
+ * `.button-link`, and won on source order — the tag list on a details page
+ * came out white. */
 .button-link,
+.emby-button.button-link,
+.emby-button.button-link:hover,
 .button-flat:hover,
 .buttonActive,
 .upNextDialog-countdownText,
@@ -585,8 +591,10 @@ html.af-home #homeTab .card.af-focused .cardText {
 
 /* Kind badge. jf-web 10.11.11 has no badge element, but it does put the item
  * type on .card[data-type]; astrofin-theme.js copies a display form of it into
- * data-af-kind. Only the three types whose name reads well. */
-html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
+ * data-af-kind, on the .card AND on its .cardScalable — attr() resolves
+ * against the pseudo-element's own originating element, so with the attribute
+ * only on the ancestor .card the badge rendered as an empty 0x0 box. */
+html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   content: attr(data-af-kind);
   position: absolute;
   left: 14px;
@@ -658,8 +666,10 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
  * icon buttons, tabs, nav items and card actions out of it, plus jf-web
  * 10.11.11's two deliberately chrome-less variants — .button-link (inline text
  * links, e.g. the tag list on a details page) and .button-flat (the round
- * icon+label detail actions). */
-.emby-button:not(.raised):not(.button-submit):not(.paper-icon-button-light):not(.emby-tab-button):not(.navMenuOption):not(.cardOverlayButton):not(.textActionButton):not(.itemAction):not(.button-link):not(.button-flat) {
+ * icon+label detail actions). .listItem covers the action-sheet rows, which
+ * are `button.listItem.listItem-button.actionSheetMenuItem.emby-button` in
+ * 10.11.11 and turned the subtitle/audio pickers into a wall of pills. */
+.emby-button:not(.raised):not(.button-submit):not(.paper-icon-button-light):not(.emby-tab-button):not(.navMenuOption):not(.cardOverlayButton):not(.textActionButton):not(.itemAction):not(.button-link):not(.button-flat):not(.listItem) {
   border-radius: var(--af-radius-pill);
   background: var(--af-glass-fill-soft);
   border: 1px solid var(--af-edge-strong);
@@ -779,60 +789,191 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
 /* ===================================================================== */
 /* (h) Player OSD                                                         */
 /* Frosted bar plus cyan timeline. Layout, hide/show and timing stay with  */
-/* jellyfin-web and the native shims — colours and surfaces only.          */
-/* jf-web 10.11.11: .videoOsdBottom / .osdControls / .osdTimeText /        */
-/* .mdl-slider-background-lower|upper                                      */
+/* jellyfin-web and the native shims — surfaces, colour and the vertical   */
+/* rhythm only.                                                            */
+/*                                                                        */
+/* Verified live against jf-web 10.11.11 while playing (see                */
+/* docs/design/theme-injection.md, "Playback verification"):               */
+/*   - .videoOsdBottom > .osdControls > .osdTextContainer                  */
+/*     .osdMainTextContainer (holding an EMPTY h3.osdTitle - 10.11.11 puts */
+/*     the title in the top OSD banner instead), then a .flex row of       */
+/*     .startTimeText / .sliderContainer / .endTimeText, then .buttons.    */
+/*   - the top OSD banner is .skinHeader.osdHeader, not a .videoOsdTop.    */
+/*   - the progress TRACK is .mdl-slider-background-flex (jf paints it     */
+/*     rgba(255,255,255,.3)); .mdl-slider-background-upper is the BUFFERED */
+/*     span (inline left/width %), .mdl-slider-background-lower the played */
+/*     span; chapter ticks are .sliderMarker.watched / .unwatched.         */
+/*                                                                        */
+/* NOTHING here may be opaque: both bands sit over mpv. Every surface is a */
+/* sub-1 alpha wash so the frame keeps showing through.                    */
 /* ===================================================================== */
 
+/* The band is the bar. jf-web's own 120px top padding turned the element   */
+/* into a 274px scrim over the picture; drop the gradient and keep just     */
+/* enough padding to float the bar off the bottom edge.                     */
 .videoOsdBottom {
-  background: linear-gradient(0deg, rgba(var(--af-bg-base-rgb), .92), rgba(var(--af-bg-base-rgb), 0));
+  background: none;
+  padding-top: var(--af-space-3);
+  padding-bottom: var(--af-space-3);
   color: var(--af-text-primary);
 }
+
+/* Frosted bar: semi-transparent wash + blur, never a solid fill. The
+ * brightness() in the backdrop filter is what buys 4.5:1 for 16px text over
+ * a bright frame without making the surface opaque. */
 .videoOsdBottom .osdControls {
   border-radius: var(--af-radius-panel);
-  background: var(--af-glass);
-  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
-  backdrop-filter: blur(var(--af-glass-blur-panel));
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-surface-raised-rgb), .40),
+    rgba(var(--af-bg-base-rgb), .48));
+  -webkit-backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
+  backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
   border: 1px solid var(--af-edge-luminous);
-  padding: var(--af-space-4) var(--af-space-6);
+  border-top-color: var(--af-edge-strong); /* 1px luminous top hairline */
+  padding: var(--af-space-3) var(--af-space-6);
   margin: 0 clamp(16px, 4vw, var(--af-gutter));
 }
-.videoOsdBottom .osdTimeText {
+
+/* Vertical tightening, so the bar hugs one scrubber row plus one control
+ * row. 10.11.11 leaves .osdTitle empty on this path, so its container must
+ * not reserve its 11px margin. */
+.videoOsdBottom .osdControls .osdMainTextContainer {
+  margin-bottom: 0;
+}
+.videoOsdBottom .osdTitle:not(:empty) {
+  margin-bottom: var(--af-space-2);
+}
+.videoOsdBottom .osdControls .buttons {
+  padding-top: 0;
+}
+.videoOsdBottom .sliderContainer {
+  margin-top: var(--af-space-1);
+  margin-bottom: var(--af-space-1);
+}
+
+/* Time: Plex Mono everywhere, not just the "ends at" line. jf-web 10.11.11
+ * uses .startTimeText/.endTimeText (= .osdPositionText/.osdDurationText). */
+.videoOsdBottom .osdTimeText,
+.videoOsdBottom .startTimeText,
+.videoOsdBottom .endTimeText,
+.videoOsdBottom .osdPositionText,
+.videoOsdBottom .osdDurationText {
   font: var(--af-type-meta);
   letter-spacing: var(--af-tracking-meta);
   color: var(--af-text-primary);
+  font-variant-numeric: tabular-nums;
 }
+.videoOsdBottom .osdTimeText {
+  color: var(--af-text-muted);
+}
+
 .videoOsdBottom .osdTitle,
 .videoOsdBottom .osdTitleSmall {
+  font: var(--af-type-tile);
   font-family: var(--af-font-display);
-  font-weight: 300;
 }
 .videoOsdBottom .osdMediaInfo .mediaInfoText {
   background: var(--af-glass-fill-soft);
 }
-.videoOsdBottom .mdl-slider-background-lower {
-  background-color: var(--af-accent-primary);
+
+/* Scrubber. Track / buffered / played, in three distinguishable steps. */
+.videoOsdBottom .mdl-slider-background-flex {
+  background-color: var(--af-progress-track-soft);
+  border-radius: var(--af-radius-pill);
 }
 .videoOsdBottom .mdl-slider-background-upper {
-  background-color: var(--af-progress-track);
+  background-color: rgba(var(--af-accent-primary-rgb), .26);
+}
+.videoOsdBottom .mdl-slider-background-lower {
+  background-color: var(--af-accent-primary);
+  border-radius: var(--af-radius-pill);
 }
 .videoOsdBottom .mdl-slider-background-flex-inner,
 .videoOsdBottom .mdl-slider-background-flex {
   height: 3px;
 }
+.videoOsdBottom .mdl-slider {
+  color: var(--af-accent-primary);
+}
 .videoOsdBottom .mdl-slider::-webkit-slider-thumb {
   background: var(--af-accent-primary);
   border-color: var(--af-accent-primary);
+  box-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .55);
 }
+
+/* Chapter markers keep jf-web's shape — thin vertical ticks spanning the
+ * track (2x12px, positioned with `left: calc(N% - 1px)`). Colour only:
+ * accent on the part already played, a bright neutral ahead of it. */
+.videoOsdBottom .sliderMarker.watched {
+  background-color: var(--af-accent-primary);
+}
+.videoOsdBottom .sliderMarker.unwatched {
+  background-color: rgba(var(--af-text-primary-rgb), .6);
+}
+
+/* Minimal icon buttons: muted at rest, primary on hover/focus. */
 .videoOsdBottom .paper-icon-button-light {
-  color: var(--af-text-primary);
+  color: var(--af-text-muted);
+  padding: 6px;
+  transition:
+    color var(--af-dur-tile) var(--af-ease-out),
+    background var(--af-dur-tile) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
 }
+.videoOsdBottom .paper-icon-button-light .material-icons {
+  font-size: 26px; /* >= 24px for the 3 m rule */
+}
+@media (hover: hover) and (pointer: fine) {
+  .videoOsdBottom .paper-icon-button-light:hover:not(:disabled) {
+    color: var(--af-text-primary);
+    background-color: var(--af-glass-fill-soft);
+  }
+}
+.videoOsdBottom .paper-icon-button-light:focus-visible,
+.videoOsdBottom .paper-icon-button-light.show-focus:focus {
+  outline: none;
+  color: var(--af-text-primary);
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+.videoOsdBottom .paper-icon-button-light:active:not(:disabled) {
+  color: var(--af-accent-primary);
+}
+
 .sliderBubble {
   background: var(--af-glass-fill);
   border: 1px solid var(--af-edge-chip);
   border-radius: var(--af-radius-sm);
   color: var(--af-text-primary);
   font: var(--af-type-meta-sm);
+}
+
+/* Top OSD banner. jf-web 10.11.11 reuses .skinHeader and adds .osdHeader; it
+ * carries the back button and the item title. Over video it becomes a light
+ * scrim rather than the app's glass slab — outranking the `!important`
+ * background in section (d) by coming later at equal specificity. */
+.skinHeader.osdHeader,
+.skinHeader.osdHeader.skinHeader-withBackground,
+.skinHeader.osdHeader.skinHeader-blurred {
+  height: 68px;
+  min-height: 0;
+  justify-content: center;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-bg-base-rgb), .80) 0%,
+    rgba(var(--af-bg-base-rgb), .52) 62%,
+    rgba(var(--af-bg-base-rgb), 0) 100%) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-bottom: 0;
+}
+.skinHeader.osdHeader .headerLeft .pageTitle {
+  font: var(--af-type-tile);
+  font-family: var(--af-font-display);
+  letter-spacing: var(--af-tracking-display);
+  color: var(--af-text-primary);
 }
 
 /* ===================================================================== */
@@ -850,9 +991,56 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   border-radius: var(--af-radius-panel) !important;
   color: var(--af-text-primary);
 }
-.actionSheetMenuItem:hover,
-.actionSheetMenuItem:focus {
+/* The inner content pane must not double the surface or the corners. */
+.actionSheet > .actionSheetContent {
+  background: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 0;
+}
+.actionSheetTitle {
+  font: var(--af-type-section);
+  font-size: 24px;
+  letter-spacing: var(--af-tracking-display);
+}
+/* Glass popover rows: flat, full-bleed, hairline-separated — never pills.
+ * jf-web 10.11.11 renders them as .emby-button, which section (f) now
+ * excludes via :not(.listItem). */
+.actionSheet .actionSheetMenuItem {
+  border: 0;
+  border-radius: var(--af-radius-sm);
+  background: transparent;
+  font: var(--af-type-body);
+  font-size: 18px; /* readable from 3 m */
+  color: var(--af-text-primary);
+  transition:
+    color var(--af-dur-tile) var(--af-ease-out),
+    background var(--af-dur-tile) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+.actionSheet .actionSheetMenuItem + .actionSheetMenuItem {
+  box-shadow: inset 0 1px 0 0 var(--af-hairline);
+}
+.actionSheet .actionSheetMenuItem:hover,
+.actionSheet .actionSheetMenuItem:focus {
   background: var(--af-glass-fill-soft);
+  box-shadow: none;
+}
+.actionSheet .actionSheetMenuItem:focus-visible,
+.actionSheet .actionSheetMenuItem.show-focus:focus {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+/* Selected track. jf-web 10.11.11 marks it by leaving the check icon
+ * visible: unselected rows carry an inline `visibility:hidden`, the
+ * selected row's icon has no style attribute at all. Colouring the icon
+ * works with or without :has(); :has() carries it to the label too. */
+.actionSheet .actionsheetMenuItemIcon {
+  color: var(--af-accent-primary);
+}
+.actionSheet .actionSheetMenuItem:has(> .actionsheetMenuItemIcon:not([style])) {
+  color: var(--af-accent-primary);
 }
 .formDialogHeader:not(.formDialogHeader-clear) {
   border-bottom: 1px solid var(--af-hairline);
