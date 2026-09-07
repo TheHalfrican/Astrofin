@@ -12,7 +12,7 @@ export APPDIR="${HERE}"
 # "exec ld-linux ... binary" approach, this preserves /proc/self/exe pointing
 # to the actual binary — critical for CEF, which re-executes /proc/self/exe
 # for renderer/GPU/utility subprocesses.
-INTERP_DIR="/tmp/.jf-cef-interp"
+INTERP_DIR="/tmp/.astrofin-cef-interp"
 case "$(uname -m)" in
     x86_64)  LD_SONAME=ld-linux-x86-64.so.2 ;;
     aarch64) LD_SONAME=ld-linux-aarch64.so.1 ;;
@@ -31,4 +31,4 @@ export GNUTLS_SYSTEM_PRIORITY_FILE="${HERE}/usr/share/crypto-policies/DEFAULT/gn
 # LD_LIBRARY_PATH for library resolution (bundled first, host fallback for GPU).
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec "${HERE}/usr/bin/jellium-desktop" "$@"
+exec "${HERE}/usr/bin/astrofin" "$@"

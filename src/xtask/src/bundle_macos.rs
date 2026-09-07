@@ -50,7 +50,7 @@ pub fn complete(app: &Path) -> Result<()> {
         );
         println!("Fixing CEF framework paths...");
         install_name_tool(&["-id", &new, &cef_fw_lib.to_string_lossy()])?;
-        let bin = macos_dir.join("jellium-desktop");
+        let bin = macos_dir.join("astrofin");
         install_name_tool(&["-change", &old, &new, &bin.to_string_lossy()])?;
     } else {
         eprintln!(
@@ -78,7 +78,7 @@ pub fn complete(app: &Path) -> Result<()> {
             queue.push(p);
         }
     }
-    queue.push(macos_dir.join("jellium-desktop"));
+    queue.push(macos_dir.join("astrofin"));
 
     let mut iter = 0;
     while !queue.is_empty() {
@@ -330,7 +330,7 @@ fn codesign(app: &Path, fw_dir: &Path, macos_dir: &Path, entitlements: &Path) ->
     }
 
     println!("  Signing executable with entitlements");
-    sign(&macos_dir.join("jellium-desktop"), Some(entitlements))?;
+    sign(&macos_dir.join("astrofin"), Some(entitlements))?;
 
     println!("  Signing app bundle");
     sign(app, Some(entitlements))?;

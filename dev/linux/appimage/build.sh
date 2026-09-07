@@ -5,7 +5,7 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-IMG="jellium-desktop-appimage:base"
+IMG="astrofin-appimage:base"
 VERSION="$(cargo run --quiet --manifest-path "${PROJECT_ROOT}/src/xtask/Cargo.toml" -- version)"
 
 if command -v podman >/dev/null 2>&1; then

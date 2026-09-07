@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Jellium Desktop - macOS dependency installer
+# Astrofin - macOS dependency installer
 # Run once to install all build dependencies
 set -eu
 

@@ -7,7 +7,7 @@ sdk-extensions:
   # libclang.so for bindgen (jfn-mpv build.rs runs bindgen on mpv +
   # libavcodec headers; bindgen dlopens libclang at build time).
   - org.freedesktop.Sdk.Extension.llvm20
-command: jellium-desktop
+command: astrofin
 finish-args:
   - --socket=wayland
   - --socket=x11
@@ -157,7 +157,7 @@ modules:
               stable-only: true
               url-template: https://www.freedesktop.org/software/uchardet/releases/uchardet-$version.tar.xz
 
-  - name: jellium-desktop
+  - name: astrofin
     buildsystem: simple
     build-options:
       # Force ld to resolve libmpv's transitive ffmpeg deps from the base
@@ -168,7 +168,7 @@ modules:
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
       prepend-ld-library-path: /usr/lib/sdk/llvm20/lib
       env:
-        CARGO_HOME: /run/build/jellium-desktop/cargo
+        CARGO_HOME: /run/build/astrofin/cargo
         CEF_PATH: /app/cef
         EXTERNAL_MPV_DIR: /app
         # bindgen dlopens libclang from this SDK extension dir.
@@ -178,7 +178,7 @@ modules:
         - --share=network
     build-commands:
       - cargo xtask install --external-cef /app/cef --external-mpv /app --no-kde-palette --prefix /app
-      - mkdir -p /app/bin && ln -sf ../jellium-desktop /app/bin/jellium-desktop
+      - mkdir -p /app/bin && ln -sf ../astrofin /app/bin/astrofin
       # Mount point for the codecs-extra extension (add-extensions above);
       # flatpak refuses to mount an extension whose directory is absent.
       - mkdir -p /app/lib/x86_64-linux-gnu/codecs-extra

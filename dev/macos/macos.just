@@ -19,7 +19,7 @@ build: deps
 [group('run')]
 [macos]
 run *args: build
-    "build/output/Jellium Desktop.app/Contents/MacOS/jellium-desktop" {{args}}
+    "build/output/Astrofin.app/Contents/MacOS/astrofin" {{args}}
 
 # Run the standalone mpv CLI built from the submodule (forwards args)
 [group('run')]

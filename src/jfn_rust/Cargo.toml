@@ -9,7 +9,7 @@ name = "jfn_rust"
 crate-type = ["rlib"]
 
 [[bin]]
-name = "jellium-desktop"
+name = "astrofin"
 path = "src/main.rs"
 
 [features]

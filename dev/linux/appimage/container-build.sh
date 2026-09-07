@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run inside the appimage build container (jellium-desktop-appimage:base).
+# Run inside the appimage build container (astrofin-appimage:base).
 # Bind mounts (set up by `just appimage build`):
 #   /src           rw  -- repo root (CEF + submodules must be populated by host)
 #   /build         rw  -- cargo + meson incremental state, persists on host
@@ -20,7 +20,7 @@ esac
 cd /src
 
 cargo xtask build --out /build
-strip /build/*.so /build/jellium-desktop
+strip /build/*.so /build/astrofin
 
 BUILD=/build
 
@@ -30,7 +30,7 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share"
 
 # Binary + CEF resources (CEF finds resources relative to /proc/self/exe)
-cp "$BUILD"/jellium-desktop "$APPDIR/usr/bin/"
+cp "$BUILD"/astrofin "$APPDIR/usr/bin/"
 cp "$BUILD"/*.pak "$APPDIR/usr/bin/"
 cp "$BUILD"/icudtl.dat "$APPDIR/usr/bin/"
 cp "$BUILD"/v8_context_snapshot.bin "$APPDIR/usr/bin/"
@@ -58,7 +58,7 @@ if [ ! -e "$APPDIR/usr/lib/${LD_SONAME}" ]; then
     cp -a "/usr/lib/${LD_SONAME}" "$APPDIR/usr/lib/"
 fi
 
-# mpv lib (xtask build copies it next to jellium-desktop)
+# mpv lib (xtask build copies it next to astrofin)
 cp "$BUILD"/libmpv.so.2 "$APPDIR/usr/lib/"
 
 # Fedora's ffmpeg links GnuTLS; GnuTLS needs a system priority file from
@@ -152,8 +152,8 @@ done
 # Patch ELF interpreter to a runtime symlink so /proc/self/exe still points at
 # the binary itself — required for CEF, which re-execs /proc/self/exe for its
 # renderer/GPU/utility subprocesses. AppRun creates the symlink at startup.
-patchelf --set-interpreter "/tmp/.jf-cef-interp/${LD_SONAME}" \
-    "$APPDIR/usr/bin/jellium-desktop"
+patchelf --set-interpreter "/tmp/.astrofin-cef-interp/${LD_SONAME}" \
+    "$APPDIR/usr/bin/astrofin"
 
 # AppDir root files (per AppImage spec)
 cp "$APPDIR/usr/share/applications/net.nullsum.JelliumDesktop.desktop" "$APPDIR/"

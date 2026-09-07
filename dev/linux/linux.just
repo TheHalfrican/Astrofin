@@ -16,7 +16,7 @@ build: linux_common::deps
 [group('run')]
 [linux]
 run *args: build
-    build/jellium-desktop {{args}}
+    build/astrofin {{args}}
 
 # Run the mpv CLI
 [group('run')]
@@ -42,7 +42,7 @@ run-hyprland *args:
 [group('run')]
 [linux]
 run-cage *args: build
-    cage -- build/jellium-desktop {{args}}
+    cage -- build/astrofin {{args}}
 
 [group('package')]
 mod appimage 'appimage/appimage.just'

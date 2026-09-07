@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
-# Jellium Desktop - create distributable DMG from a built app bundle.
+# Astrofin - create distributable DMG from a built app bundle.
 # Assumes `cargo xtask install --prefix build/output` has already run.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-APP_NAME="Jellium Desktop.app"
+APP_NAME="Astrofin.app"
 APP_DIR="${PROJECT_ROOT}/build/output/${APP_NAME}"
 DIST_DIR="${PROJECT_ROOT}/dist"
 
