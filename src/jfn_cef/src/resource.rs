@@ -38,10 +38,12 @@ macro_rules! embedded {
 static RESOURCES: &[(&str, Embedded)] = &[
     embedded!("about.html", "text/html"),
     embedded!("about.js", "application/javascript"),
+    embedded!("astrofin-fonts.css", "text/css"),
+    embedded!("astrofin-tokens.css", "text/css"),
     embedded!("client-settings.js", "application/javascript"),
     embedded!("connectivityHelper.js", "application/javascript"),
     embedded!("input-plugin.js", "application/javascript"),
-    embedded!("logo.png", "image/png"),
+    embedded!("logo-mark.svg", "image/svg+xml"),
     embedded!("mpv-audio-player.js", "application/javascript"),
     embedded!("mpv-player-base.js", "application/javascript"),
     embedded!("mpv-video-player.js", "application/javascript"),

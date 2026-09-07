@@ -141,8 +141,8 @@ Categories: **UV** = user-visible string · **FS** = filesystem path/dir name ·
 | ″ | 23 | `VALUE "InternalName", "jellium-desktop"` | UV | `"astrofin"` |
 | ″ | 24 | `VALUE "OriginalFilename", "jellium-desktop.exe"` | UV | `"astrofin.exe"` |
 | ″ | 25 | `VALUE "ProductName", "Jellium Desktop"` | UV | `"Astrofin"` |
-| `src/web/logo.png` | — | Jellyfin logo shown in About + overlay | UV/art | Replace with Astrofin logo (deferrable) |
-| `resources/macos/AppIcon.icns` | — | app icon | art | Replace (deferrable) |
+| ~~`src/web/logo.png`~~ | — | Jellyfin logo shown in About + overlay | UV/art | **done** — deleted; About and the overlay use `src/web/logo-mark.svg` |
+| ~~`resources/macos/AppIcon.icns`~~ | — | app icon | art | **done** — regenerated from `resources/brand/astrofin-icon.svg` |
 
 ## 1e. xtask (build/packaging code)
 
@@ -617,9 +617,11 @@ flatpak file is wrong and predates the fork.)
 
 ## 6b. Safe to defer
 
-- Artwork: `src/web/logo.png`, `resources/macos/AppIcon.icns`, `resources/win/*.ico`,
-  `resources/linux/*.svg` *content*. Rename the **files** now (so the build wiring is final), swap
-  the **pixels** later. `about.js:50` `logo.alt = 'Jellyfin'` can be fixed with the artwork.
+- ~~Artwork: `src/web/logo.png`, `resources/macos/AppIcon.icns`, `resources/win/*.ico`,
+  `resources/linux/*.svg` *content*~~ — **done** on `feat/ui-assets`. `src/web/logo.png` is gone,
+  replaced by `src/web/logo-mark.svg`; the icon containers are generated from the 1024 master
+  `resources/brand/astrofin-icon.svg` by `dev/tools/brand/build-icons.mjs`. `about.js` now says
+  `logo.alt = 'Astrofin'`.
 - ~~ObjC class renames (`JellyfinApplication`, `JellyfinInputView`, …) and the Windows
   `JellyfinCefInput` class name~~ — **done** on `chore/hygiene-renames`.
 - `jmp-*` CSS/DOM prefixes and `jmpInfo` / `window.jmpNative` — keep indefinitely; they are the
