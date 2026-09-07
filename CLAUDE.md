@@ -1,7 +1,7 @@
 # Project Notes
 
 ## Build / Run
-All app code is Rust; the cargo workspace lives in `src/` and produces the `jellium-desktop` binary. Everything is driven through `just` — recipes are OS-gated via `[macos]`/`[linux]`/`[windows]` attributes, so the same command works everywhere:
+All app code is Rust; the cargo workspace lives in `src/` and produces the `astrofin` binary. Everything is driven through `just` — recipes are OS-gated via `[macos]`/`[linux]`/`[windows]` attributes, so the same command works everywhere:
 ```
 just deps      # one-time: submodules, CEF download, macOS brew packages
 just build     # build + stage a runnable tree in build/ (+ .app bundle on macOS)
@@ -36,7 +36,7 @@ mpv is the authoritative source of playback state. All state (position, speed, p
 
 ## Astrofin fork — status and working notes (2026-09-07)
 
-This repository is **Astrofin**, a fork of andrewrabert/jellium-desktop (upstream remote `upstream`; `origin` pushes to both GitHub `TheHalfrican/Astrofin` and the self-hosted Gitea). Rebrand of the app itself (name, exe, config dirs, ids) is PLANNED, not done: see `docs/rebrand-plan.md` (exhaustive checklist + migration design + orchestrator decisions in §7). UI redesign direction: `docs/design-brief.md` (PS5-in-space; tokens/CSS vars to come from Claude Design).
+This repository is **Astrofin**, a fork of andrewrabert/jellium-desktop (upstream remote `upstream`; `origin` pushes to both GitHub `TheHalfrican/Astrofin` and the self-hosted Gitea). Rebrand of the app itself (name, exe, config dirs, ids) is DONE on `feat/rebrand-astrofin` (commits ce433b5..HEAD): binary `astrofin[.exe]`, per-user dirs `%APPDATA%\astrofin` / `%LOCALAPPDATA%\astrofin` (with a one-shot import of an existing `jellium-desktop` profile), app id `io.github.thehalfrican.Astrofin`, env prefix `ASTROFIN_*`. Artwork pixels and the optional ObjC/window-class hygiene renames are still open. See `docs/rebrand-plan.md` (exhaustive checklist + migration design + orchestrator decisions in §7). UI redesign direction: `docs/design-brief.md` (PS5-in-space; tokens/CSS vars to come from Claude Design).
 
 Done on `main`:
 - Native file dialogs (`src/jfn_cef/src/client_impl/dialog.rs` → `Platform::open_file_dialog` → `src/windows/src/file_dialog.rs`), plus CEF 151.3.24 which contains the upstream OSR file-chooser crash fix. Together these resolve upstream #681. macOS/Linux fall back to a graceful cancel (no dialog yet).

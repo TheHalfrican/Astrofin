@@ -10,6 +10,10 @@
       Astrofin is a desktop client for Jellyfin media server,
       built on the Chromium Embedded Framework (CEF) with mpv for video playback.
     </p>
+    <p>
+      Astrofin is a fork of Jellium Desktop by Andrew Rabert. It is not affiliated
+      with or endorsed by the Jellium Desktop project or the Jellyfin project.
+    </p>
   </description>
   <launchable type="desktop-id">io.github.thehalfrican.Astrofin.desktop</launchable>
   <icon type="stock">io.github.thehalfrican.Astrofin</icon>

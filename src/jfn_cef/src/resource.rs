@@ -65,11 +65,16 @@ fn theme_css() -> Vec<u8> {
     format!(":root{{--bg-color:{BG_COLOR_HEX}}}").into_bytes()
 }
 
+/// GPL-2 section 2(a) asks a modified version to say so; for a GUI the
+/// customary place is the About box rather than a startup banner.
+const UPSTREAM_CREDIT: &str = "Jellium Desktop (GPL-2.0)";
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AboutData<'a> {
     app: &'a str,
     cef: &'a CefVersion,
+    based_on: &'a str,
     config_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     log_file: Option<String>,
@@ -80,6 +85,7 @@ fn about_js_payload() -> Vec<u8> {
     let data = AboutData {
         app: crate::APP_VERSION_FULL,
         cef: crate::cef_version(),
+        based_on: UPSTREAM_CREDIT,
         config_dir: abs_path(&jfn_paths::config_dir().to_string_lossy()),
         log_file: (!log_path.is_empty()).then(|| abs_path(&log_path)),
     };

@@ -34,7 +34,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "version=$(dev/tools/version.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo run --quiet --manifest-path src/xtask/Cargo.toml -- version)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -139,13 +139,13 @@ jobs:
       - name: Create DMG
         run: |
           brew install create-dmg
-          APP_NAME="Jellium Desktop"
+          APP_NAME="Astrofin"
           VERSION="${{ steps.version.outputs.version }}"
-          DMG_NAME="JelliumDesktop-${VERSION}-macos-12-x86_64.dmg"
+          DMG_NAME="Astrofin-${VERSION}-macos-12-x86_64.dmg"
           mkdir -p dist
 
           create-dmg \
-            --volname "Jellium Desktop v${VERSION}" \
+            --volname "Astrofin v${VERSION}" \
             --no-internet-enable \
             --window-size 500 300 \
             --icon-size 100 \
@@ -163,4 +163,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-12-x86_64
-          path: dist/JelliumDesktop-*.dmg
+          path: dist/Astrofin-*.dmg

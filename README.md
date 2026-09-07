@@ -1,27 +1,32 @@
-# Jellium Desktop
+# Astrofin
 
-An unofficial [Jellyfin](https://jellyfin.org) desktop client built on [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
+Astrofin is an unofficial [Jellyfin](https://jellyfin.org) desktop client built on
+[CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
+
+Astrofin is a fork of [Jellium Desktop](https://github.com/andrewrabert/jellium-desktop) by
+Andrew Rabert, released — like the original — under the GNU General Public License v2. It is
+not affiliated with or endorsed by the Jellium Desktop project or the Jellyfin project. See
+[NOTICE](NOTICE) for the list of changes and [LICENSE](LICENSE) for the license text.
 
 ## Downloads
 ### Linux
 - AppImage
-  - [x86_64](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-linux-appimage/main/linux-appimage-x86_64.zip)
-  - [aarch64](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-linux-appimage/main/linux-appimage-aarch64.zip)
-- Arch Linux (AUR): [jellium-desktop-git](https://aur.archlinux.org/packages/jellium-desktop-git)
-- [Flatpak (non-Flathub bundle)](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-linux-flatpak/main/linux-flatpak-x86_64.zip)
+  - [x86_64](https://nightly.link/TheHalfrican/Astrofin/workflows/build-linux-appimage/main/linux-appimage-x86_64.zip)
+  - [aarch64](https://nightly.link/TheHalfrican/Astrofin/workflows/build-linux-appimage/main/linux-appimage-aarch64.zip)
+- [Flatpak (non-Flathub bundle)](https://nightly.link/TheHalfrican/Astrofin/workflows/build-linux-flatpak/main/linux-flatpak-x86_64.zip)
 
 ### macOS
-- [Apple Silicon](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-macos/main/macos-arm64.zip)
-- [Intel](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-macos/main/macos-x86_64.zip)
+- [Apple Silicon](https://nightly.link/TheHalfrican/Astrofin/workflows/build-macos/main/macos-arm64.zip)
+- [Intel](https://nightly.link/TheHalfrican/Astrofin/workflows/build-macos/main/macos-x86_64.zip)
 
 After installing, remove quarantine: 
 ```
-sudo xattr -cr /Applications/Jellium\ Desktop.app
+sudo xattr -cr /Applications/Astrofin.app
 ```
 
 ### Windows
-- [x64](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-windows/main/windows-x64.zip)
-- [arm64](https://nightly.link/andrewrabert/jellium-desktop/workflows/build-windows/main/windows-arm64.zip)
+- [x64](https://nightly.link/TheHalfrican/Astrofin/workflows/build-windows/main/windows-x64.zip)
+- [arm64](https://nightly.link/TheHalfrican/Astrofin/workflows/build-windows/main/windows-arm64.zip)
 
 
 ## Development

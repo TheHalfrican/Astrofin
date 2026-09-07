@@ -1,0 +1,15 @@
+Astrofin
+Copyright (C) 2026 TheHalfrican and Astrofin contributors
+
+Astrofin is a modified version of Jellium Desktop
+(https://github.com/andrewrabert/jellium-desktop),
+Copyright (C) Andrew Rabert and the Jellium Desktop contributors.
+
+Changes from upstream include renaming the project, its executable,
+its per-user directories and its application identifiers, and adding a
+first-run migration that imports an existing Jellium Desktop profile.
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of the GNU General Public License version 2 as published
+by the Free Software Foundation. See LICENSE for the full text.
+This program is distributed WITHOUT ANY WARRANTY.

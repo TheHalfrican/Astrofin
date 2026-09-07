@@ -79,6 +79,7 @@
 
     addRow('App version', data.app, false);
     addRow('CEF version', data.cef, false);
+    if (data.basedOn) addRow('Based on', data.basedOn, false);
     if (data.configDir) addRow('Config directory', data.configDir, true);
     if (data.logFile) addRow('Current log file', data.logFile, true);
 

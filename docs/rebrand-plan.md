@@ -1,5 +1,11 @@
 # Astrofin rebrand — mechanical rename checklist
 
+> **Status: implemented** on branch `feat/rebrand-astrofin` — §6d steps 1-5 landed as
+> `ce433b5` (paths + migration), `193cc84` (binary name), `288240a` (runtime identity),
+> `c5846d3` (resources + packaging) and the commit that adds this note (CI, README, NOTICE,
+> About-panel attribution). §6d step 6 (artwork pixels, ObjC/window-class hygiene renames,
+> the memfd name and the AppUserModelID hardening) is deliberately **not** done — see §7.1.
+
 Repo surveyed: `C:\Users\NoahM\Documents\RustProjects\jellium-desktop` (read-only survey, nothing modified).
 Search scope: everything except `third_party/`, `.cache/`, `target/`, `build/`, `dist/`, `.git/`.
 Raw hit count: **141 occurrences of `jellium|nullsum` (case-insensitive) across 49 files**, plus
