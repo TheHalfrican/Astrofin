@@ -66,6 +66,21 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
     };
     match key {
         "hwdec" => jfn_config::set_hwdec(value),
+        // The only setting that takes effect immediately: mpv recompiles the
+        // shader chain on the next frame, so the switch is visible mid-playback.
+        // An unknown value is rejected to the default rather than persisted.
+        "videoMode" => {
+            let mode = jfn_mpv::VideoMode::parse(value).unwrap_or_default();
+            if mode.as_str() != value {
+                jfn_logging::log(
+                    jfn_logging::CATEGORY_CEF,
+                    jfn_logging::LEVEL_WARN,
+                    &format!("unknown videoMode {value:?}; using {}", mode.as_str()),
+                );
+            }
+            jfn_config::set_video_mode(mode.as_str());
+            jfn_mpv::video_mode::apply_current(mode);
+        }
         "audioPassthrough" => jfn_config::set_audio_passthrough(value),
         "audioExclusive" => jfn_config::set_audio_exclusive(value == "true"),
         "audioChannels" => jfn_config::set_audio_channels(value),

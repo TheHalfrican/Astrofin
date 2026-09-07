@@ -51,6 +51,7 @@ impl Default for JfnWindowGeometry {
 struct SettingsData {
     server_url: String,
     hwdec: String,
+    video_mode: String,
     audio_passthrough: String,
     audio_channels: String,
     log_level: String,
@@ -69,6 +70,7 @@ impl Default for SettingsData {
         Self {
             server_url: String::new(),
             hwdec: String::new(),
+            video_mode: String::new(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
             log_level: String::new(),
@@ -120,6 +122,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     hwdec: Option<String>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    video_mode: Option<String>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<String>,
@@ -201,6 +206,9 @@ struct CliSettings<'a> {
     hwdec: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    video_mode: Option<&'a str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,6 +245,9 @@ impl SettingsData {
         }
         if let Some(v) = file.hwdec {
             self.hwdec = v;
+        }
+        if let Some(v) = file.video_mode {
+            self.video_mode = v;
         }
         if let Some(v) = file.audio_passthrough {
             self.audio_passthrough = v;
@@ -311,6 +322,7 @@ impl SettingsData {
             window_maximized: Some(self.window.maximized),
             hwdec: (!self.hwdec.is_empty() && self.hwdec != HWDEC_DEFAULT)
                 .then(|| self.hwdec.clone()),
+            video_mode: (!self.video_mode.is_empty()).then(|| self.video_mode.clone()),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -328,6 +340,7 @@ impl SettingsData {
     fn cli_json(&self, hwdec_opts: &[&str]) -> String {
         let view = CliSettings {
             hwdec: (!self.hwdec.is_empty()).then_some(self.hwdec.as_str()),
+            video_mode: (!self.video_mode.is_empty()).then_some(self.video_mode.as_str()),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then_some(self.audio_passthrough.as_str()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -520,6 +533,9 @@ macro_rules! bool_accessors {
 
 string_accessors!(server_url, set_server_url, server_url);
 string_accessors!(hwdec, set_hwdec, hwdec);
+// video_mode: upscaling preset key (`movies` | `anime` | `off`). Empty means
+// "never chosen"; the caller resolves that to the built-in default.
+string_accessors!(video_mode, set_video_mode, video_mode);
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
@@ -703,6 +719,7 @@ mod tests {
         let data = SettingsData {
             server_url: "http://host".into(),
             hwdec: "vaapi".into(),
+            video_mode: "anime".into(),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
             log_level: "debug".into(),
@@ -738,6 +755,7 @@ mod tests {
                 "windowY",
                 "windowMaximized",
                 "hwdec",
+                "videoMode",
                 "audioPassthrough",
                 "audioExclusive",
                 "audioChannels",
@@ -794,6 +812,7 @@ mod tests {
     fn cli_json_emits_the_web_ui_contract() {
         let data = SettingsData {
             hwdec: "vaapi".into(),
+            video_mode: "movies".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
@@ -803,6 +822,7 @@ mod tests {
             keys(&text),
             [
                 "hwdec",
+                "videoMode",
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
@@ -811,6 +831,7 @@ mod tests {
                 "hwdecOptions",
             ]
         );
+        assert!(text.contains(r#""videoMode":"movies""#));
         assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,

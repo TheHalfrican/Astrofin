@@ -91,7 +91,8 @@
         settings: {
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
-                hwdec: _savedSettings.hwdec || 'auto'
+                hwdec: _savedSettings.hwdec || 'auto',
+                videoMode: _savedSettings.videoMode || 'movies'
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -111,7 +112,12 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions },
+                { key: 'videoMode', displayName: 'Video mode', help: 'GPU upscaling preset, applied live. Movies: FSRCNNX x2 + sharp scalers. Anime: Anime4K Mode A (HQ). Off: use mpv.conf as-is. Both presets skip upscaling for content already at display resolution.', options: [
+                    { value: 'movies', title: 'Movies — FSRCNNX x2 + sharp scalers' },
+                    { value: 'anime', title: 'Anime — Anime4K Mode A (HQ)' },
+                    { value: 'off', title: 'Off — use mpv.conf as-is' }
+                ]}
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },

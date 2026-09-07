@@ -144,6 +144,7 @@ fn setup_mpv_environment() {
 
 struct StartupOptions {
     hwdec: String,
+    video_mode: jfn_mpv::VideoMode,
     audio_passthrough: String,
     audio_exclusive: bool,
     audio_channels: String,
@@ -155,6 +156,7 @@ struct StartupOptions {
 
 fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     let saved_hwdec = jfn_config::hwdec();
+    let saved_video_mode = jfn_config::video_mode();
     let saved_pass = jfn_config::audio_passthrough();
     let saved_chans = jfn_config::audio_channels();
     let saved_log_level = jfn_config::log_level();
@@ -167,6 +169,9 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     } else {
         saved_hwdec
     };
+    // Empty (never chosen) resolves to the built-in default, and so does an
+    // unparseable value left by a hand edit or an older/newer build.
+    let mut video_mode = saved_video_mode;
     let mut audio_passthrough = saved_pass;
     let mut audio_exclusive = saved_audio_exclusive;
     let mut audio_channels = saved_chans;
@@ -178,6 +183,9 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
 
     if let Some(v) = cli.hwdec.clone() {
         hwdec = v;
+    }
+    if let Some(v) = cli.video_mode.clone() {
+        video_mode = v;
     }
     if let Some(v) = cli.audio_passthrough.clone() {
         audio_passthrough = v;
@@ -208,6 +216,7 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
 
     StartupOptions {
         hwdec,
+        video_mode: jfn_mpv::VideoMode::parse(&video_mode).unwrap_or_default(),
         audio_passthrough,
         audio_exclusive,
         audio_channels,
@@ -560,6 +569,11 @@ pub fn jfn_app_main() -> c_int {
     // Logging is not up yet; the report is emitted right after init_logging.
     let migration = jfn_paths::migrate_legacy();
 
+    // Repair for profiles imported before the import learned to rewrite paths:
+    // absolute `glsl-shaders=` entries in mpv.conf still naming the legacy
+    // jellium-desktop folder. Idempotent, and a no-op on every other install.
+    let conf_repair = jfn_paths::repair_mpv_conf();
+
     let settings_path = jfn_paths::config_dir().join("settings.json");
     jfn_config::settings_init(&settings_path);
     jfn_config::settings_load();
@@ -569,6 +583,9 @@ pub fn jfn_app_main() -> c_int {
     init_logging(opts.log_file.clone(), &opts.log_level);
 
     for line in migration.info_lines() {
+        tracing::info!(target: "Main", "{line}");
+    }
+    for line in &conf_repair {
         tracing::info!(target: "Main", "{line}");
     }
     for line in migration.warnings() {
@@ -677,6 +694,11 @@ fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
     // override and gates boot readiness on it.
     jfn_mpv::api::jfn_mpv_request_background_color();
 
+    // Upscaling preset. Queued after the background-color read and before any
+    // file is loaded; mpv holds the shader chain as plain options, so it
+    // applies to the first frame of the first video.
+    jfn_mpv::video_mode::boot(opts.video_mode);
+
     // input-default-bindings=no drops the builtin CLOSE_WIN -> quit binding;
     // the WM close button needs it back.
     install_mpv_close_binding();
@@ -773,6 +795,13 @@ fn consume_boot_event(event: jfn_mpv::api::WaitEvent) -> BootEvent {
             apply_startup_background(value);
             BootEvent::Consumed
         }
+        // The video-mode baseline reads land during the VO wait; the ingest
+        // thread that normally consumes them does not exist yet.
+        jfn_mpv::api::WaitEvent::Event(jfn_mpv::Event::GetPropertyReply {
+            reply,
+            ref value,
+            ..
+        }) if jfn_mpv::video_mode::consume_reply(reply, value) => BootEvent::Consumed,
         jfn_mpv::api::WaitEvent::Event(event) => {
             let scale_raw = plat().get_scale();
             let scale = if scale_raw > 0.0 { scale_raw } else { 1.0 };
