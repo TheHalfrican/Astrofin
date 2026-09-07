@@ -1,0 +1,211 @@
+# jellium-desktop — Windows build environment notes
+
+Machine: The-Halfrican (Win 11 Pro 25H2, i9-14900K, RTX 4090)
+Repo: `C:\Users\NoahM\Documents\RustProjects\jellium-desktop` @ 28f2cf1 (fork of andrewrabert/jellium-desktop)
+Date: 2026-09-07. `just` is NOT installed; every step below calls the scripts / cargo directly.
+
+## Shell prerequisites (every new shell)
+
+Rust is installed but not on PATH:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"      # bash
+```
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"   # PowerShell
+```
+
+PowerShell 7 is the Store build, NOT at `C:\Program Files\PowerShell\7`:
+
+```
+C:\Users\NoahM\AppData\Local\Microsoft\WindowsApps\pwsh.exe
+```
+
+## Step 1 — libmpv (MSYS2 CLANG64 + meson)
+
+```
+pwsh -ExecutionPolicy Bypass -File dev\windows\build_mpv_source.ps1 -Arch x64
+```
+
+Wall time: **3m03s** (13:08:26 → 13:11:29). No elevation needed — the script
+downloaded the msys2-base sfx and extracted it to `C:\msys64` as a normal user.
+
+Artifacts (`third_party\mpv-install`, 173 MB total):
+
+| file | size |
+|---|---|
+| `lib\mpv.lib` | 13,578 B (54 exports, via dumpbin + lib.exe) |
+| `lib\libmpv-2.dll` | 14,676,480 B |
+| `lib\avcodec.lib` | 43,196 B |
+| `lib\*.dll` | 121 files (msys2 runtime closure) |
+| `include\` | `mpv`, `libavcodec`, `libavutil` |
+
+Versions pulled by pacman:
+
+```
+mpv          0.41.0-UNKNOWN (submodule fork)
+ffmpeg       9.0.1-3   -> avcodec-63 / avutil-61 / avformat-63 / avfilter-12
+libplacebo   7.360.1-2
+libass       0.17.5-1
+meson        1.12.0-1
+clang/llvm   22.1.8-2  -> libLLVM-22.dll
+shaderc      2026.3-1
+```
+
+## Step 2 — CEF
+
+```
+cargo xtask fetch-cef
+```
+
+Wall time: **62s** (13:08:54 → 13:09:56). Runs fine WITHOUT vcvars — rustc finds
+`link.exe` on its own.
+Result: `.cache\cef\151.3.16\cef_windows_x86_64` (592 MB including the `.tar.bz2`).
+CEF 151.3.16 + chromium 151.0.7922.109; the crate reports `151.3.0+151.3.16`.
+
+## Step 3 — app build
+
+```
+pwsh -ExecutionPolicy Bypass -File dev\windows\build.ps1
+```
+
+Wall time: **1m11s** (13:19:47 → 13:20:58) — dependencies had already been
+compiled by the two earlier failed attempts; a true from-scratch cargo build is
+roughly 4–5 min.
+`build.ps1` dot-sources `dev\windows\env.ps1` (vcvars64 + LIBCLANG_PATH +
+EXTERNAL_MPV_DIR) then runs
+`cargo xtask build --external-mpv=<repo>\third_party\mpv-install`.
+
+Artifacts in `build\` (572 MB excluding `build\cargo-target`):
+
+| file | size |
+|---|---|
+| `jellium-desktop.exe` | 6,730,240 B |
+| `libcef.dll` | 285,340,672 B |
+| `libmpv-2.dll` | 14,676,480 B |
+
+plus 129 DLLs total, `resources.pak`, `chrome_100_percent.pak`,
+`chrome_200_percent.pak`, `icudtl.dat`, `v8_context_snapshot.bin`, `locales\`,
+`vk_swiftshader_icd.json`, `archive.json`.
+`build\cargo-target` is a further ~2.2 GB.
+
+## Step 4 — smoke test: PASSED
+
+Launched `build\jellium-desktop.exe` with cwd = `build\`. Six processes (CEF is
+multi-process), main process 353 MB working set, still alive after 12 s.
+`%LOCALAPPDATA%\jellium-desktop\Logs\jellium-desktop.log` rotated and the new
+session contains:
+
+```
+2026-09-07T13:21:35 INFO [Main] jellium-desktop 0.1.0-dev+28f2cf1-dirty
+2026-09-07T13:21:35 INFO [Main] [FLOW] calling CefInitialize...
+2026-09-07T13:21:35 INFO [Main] [FLOW] CefInitialize returned ok in 82 ms
+2026-09-07T13:21:35 INFO [Main] mpv window ready in 104 ms
+2026-09-07T13:21:35 INFO [Main] mpv-version mpv v0.41.0-UNKNOWN
+2026-09-07T13:21:35 INFO [Main] ffmpeg-version 9.0.1
+```
+
+It reached the Jellyfin server at `192.168.50.76:8096` and loaded the web UI.
+Zero `ERROR` lines in the session.
+
+Note: `$proc.CloseMainWindow()` does NOT terminate it (CEF owns the top-level
+window); `Stop-Process -Force` was required. Nothing was left running afterwards.
+
+## Script edit made — `dev\windows\env.ps1` (REVIEW / UPSTREAM CANDIDATE)
+
+Symptom — `cargo xtask build` failed in `jfn-mpv`'s `build.rs` with:
+
+```
+Unable to find libclang: "the `libclang` shared library at
+C:\msys64\clang64\bin\libclang.dll could not be opened: LoadLibraryExW failed"
+```
+
+…even though `LIBCLANG_PATH` was correct and `C:\msys64\clang64\bin` was on PATH.
+
+Root cause: bindgen → clang-sys → libloading calls
+`LoadLibraryExW(path, NULL, 0)`, so `libclang.dll`'s own mingw dependencies
+(`libLLVM-22`, `libc++`, `libxml2-16`, `libzstd`, `zlib1`, `libiconv-2`,
+`libffi-8`) are resolved through PATH — first match wins. `env.ps1` **appended**
+`C:\msys64\clang64\bin`, and this machine has
+
+```
+%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_...\mingw64\bin
+```
+
+earlier on PATH. Bisected down to a single file: that directory's
+`libxml2-16.dll` alone reproduces the failure (its own dependencies cannot be
+resolved → ERROR_MOD_NOT_FOUND / 126 reported against `libclang.dll`). Git's
+`mingw64\bin` and the Vulkan SDK are harmless. CI does not hit this because a
+fresh GitHub runner has no competing mingw toolchain.
+
+Fix — one line plus an explanatory comment, in the `LIBCLANG_PATH` block:
+
+```diff
+-        $env:PATH = "$env:PATH;$MsysBin"
++        $env:PATH = "$MsysBin;$env:PATH"
+```
+
+No other repo file was touched; `git status` shows only `M dev/windows/env.ps1`.
+Nothing was committed or pushed. The original file is saved beside this note as
+`env.ps1.orig`.
+
+The same reasoning applies to `.github/workflows/build-windows.yml`
+(`set "PATH=%PATH%;%MSYS_BIN%"`) should it ever run on a dirtier machine.
+
+## Incremental rebuild after editing Rust sources
+
+From the repo root, with cargo on PATH:
+
+```
+pwsh -ExecutionPolicy Bypass -File dev\windows\build.ps1
+```
+
+Measured at **3 s** for a no-op rebuild; it reuses `build\cargo-target` and
+re-stages `build\`. Equivalent raw command if you are already inside a shell
+that has vcvars64 + `LIBCLANG_PATH` + `C:\msys64\clang64\bin` at the FRONT of
+PATH:
+
+```
+cargo xtask build --external-mpv=third_party\mpv-install
+```
+
+Other flags:
+
+- `dev\windows\build.ps1 -Clean` — wipe `build\` first (also drops `cargo-target`,
+  so the next build is fully cold)
+- `dev\windows\build_mpv_source.ps1 -Force` — rebuild libmpv; without `-Force` it
+  no-ops when `third_party\mpv-install\lib\mpv.lib` exists
+
+## Warnings / quirks worth knowing
+
+- `vcvars64.bat` from VS 2026 Build Tools v18.7.3 (MSVC 14.51.36231) prints
+  `'vswhere.exe' is not recognized as an internal or external command` while
+  loading. Harmless — `VSINSTALLDIR`/`INCLUDE`/`LIB` are still set correctly and
+  the whole workspace compiles.
+- `dev\windows\setup.ps1` still targets `Microsoft.VisualStudio.2022.BuildTools`
+  and tells you to open the "x64 Native Tools Command Prompt for VS 2022". The
+  installed 2026 Build Tools satisfy its vswhere check, so `setup.ps1` was never
+  needed here.
+- The user's PowerShell profile runs fastfetch, so every `pwsh -File ...`
+  invocation without `-NoProfile` prepends ASCII art to the build log.
+- `cmd.exe` on this machine has an AutoRun that also runs fastfetch — avoid
+  `cmd /c` for anything whose stdout you need to parse.
+- MSYS2 was freshly installed at `C:\msys64` by `build_mpv_source.ps1`
+  (~374 MB downloaded, ~2.6 GB installed). The first `bash -lc` afterwards prints
+  the one-time "MSYS2 is starting for the first time" setup banner.
+- `build\` and the user's installed copy in
+  `%LOCALAPPDATA%\Programs\Jellium Desktop` share `%APPDATA%\jellium-desktop`
+  (config) and `%LOCALAPPDATA%\jellium-desktop` (logs). Never run both at once.
+  Nothing under `%APPDATA%\jellium-desktop` was modified.
+- The version string embeds git state: `0.1.0-dev+28f2cf1-dirty` — dirty only
+  because of the `env.ps1` edit above.
+
+## Disk consumed
+
+```
+C:\msys64                    ~2.6 GB
+.cache\cef                    592 MB
+third_party\mpv-install       173 MB
+third_party\mpv\build         (meson build tree)
+build\                        2.8 GB (572 MB staged + ~2.2 GB cargo-target)
+```
