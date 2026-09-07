@@ -137,6 +137,18 @@ pub fn install(build_dir: &Path, prefix: &Path, _args: &crate::BuildArgs) -> Res
         &icd_dst,
     )?;
 
+    // Bundled GLSL shaders. Inside a bundle they belong in Contents/Resources,
+    // which is where `jfn_paths::resource_dir` looks once the binary sits in
+    // Contents/MacOS.
+    let shaders_src = build_dir.join("shaders");
+    if shaders_src.is_dir() {
+        let shaders_dst = resources_dir.join("shaders");
+        if shaders_dst.exists() {
+            std::fs::remove_dir_all(&shaders_dst)?;
+        }
+        xfs::copy_dir_recursive(&shaders_src, &shaders_dst)?;
+    }
+
     // Complete the bundle: dep-walk, install_name rewrites, codesign.
     bundle_macos::complete(&app)?;
     Ok(app)

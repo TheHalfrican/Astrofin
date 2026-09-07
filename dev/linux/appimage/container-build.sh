@@ -37,6 +37,11 @@ cp "$BUILD"/v8_context_snapshot.bin "$APPDIR/usr/bin/"
 cp -r "$BUILD"/locales "$APPDIR/usr/bin/"
 cp "$BUILD"/vk_swiftshader_icd.json "$APPDIR/usr/bin/" 2>/dev/null || true
 
+# Bundled GLSL user shaders for the Video mode setting; the runtime resolver
+# looks for them beside the binary.
+cp -r "$BUILD"/shaders "$APPDIR/usr/bin/"
+
+
 # CEF's own libs (ANGLE, SwiftShader) live in usr/bin/, separated from system
 # GPU libs in usr/lib/ which get removed below.
 cp "$BUILD"/libcef.so "$APPDIR/usr/bin/"

@@ -102,5 +102,27 @@ pub fn run(args: &BuildArgs) -> Result<()> {
 
     crate::platform::stage_cef(&out, &cef_info)?;
     crate::platform::stage_mpv(&out, &mpv_info, used_external_mpv, &bin_dst)?;
+    stage_shaders(&out)?;
+    Ok(())
+}
+
+/// Copy `resources/shaders/` next to the binary. The runtime resolver
+/// (`jfn_paths::resource_dir`) looks for it there on every platform; the macOS
+/// installer moves it into `Contents/Resources/` afterwards.
+///
+/// The destination is cleared first so a shader dropped upstream does not
+/// linger in an incremental build and keep resolving.
+pub fn stage_shaders(out: &std::path::Path) -> Result<()> {
+    let src = paths::shaders_source_dir();
+    if !src.is_dir() {
+        println!("No bundled shaders at {} — skipping", src.display());
+        return Ok(());
+    }
+    let dst = out.join("shaders");
+    if dst.exists() {
+        std::fs::remove_dir_all(&dst)
+            .with_context(|| format!("remove_dir_all {}", dst.display()))?;
+    }
+    xfs::copy_dir_recursive(&src, &dst)?;
     Ok(())
 }
