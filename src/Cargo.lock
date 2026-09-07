@@ -2534,8 +2534,10 @@ dependencies = [
  "bindgen",
  "crossbeam-channel",
  "jfn-color",
+ "jfn-paths",
  "parking_lot",
  "pkg-config",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

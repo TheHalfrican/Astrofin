@@ -383,6 +383,15 @@ pub fn jfn_playback_stop_mpv_event_thread() {
 
 fn ingest_events(rx: Receiver<Event>) {
     for event in rx {
+        // Video-mode baseline reads and chain read-backs: theirs alone, and
+        // nothing downstream has a use for them.
+        if let Event::GetPropertyReply {
+            reply, ref value, ..
+        } = event
+            && jfn_mpv::video_mode::consume_reply(reply, value)
+        {
+            continue;
+        }
         if let Event::PropertyChange { id, ref value, .. } = event
             && id == crate::ingest::observe_id::FULLSCREEN
             && let PropertyValue::Flag(f) = value

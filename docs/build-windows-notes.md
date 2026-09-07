@@ -176,6 +176,34 @@ Other flags:
 - `dev\windows\build_mpv_source.ps1 -Force` — rebuild libmpv; without `-Force` it
   no-ops when `third_party\mpv-install\lib\mpv.lib` exists
 
+## Building from a `.claude/worktrees/` agent worktree (MAX_PATH)
+
+`cef-dll-sys`'s CMake/ninja step compiles `libcef_dll/cpptoc/test/*.cc` into
+object paths under
+`build/cargo-target/release/build/cef-dll-sys-<hash>/out/build/…`. From the
+main tree those fit; from a worktree at `.claude/worktrees/<name>/` the extra
+~29 characters push the longest of them past 260 and `cl.exe` fails with
+
+```
+fatal error C1083: Cannot open compiler generated file: '': Invalid argument
+```
+
+for exactly the handful of longest file names. Ninja only reports
+`build stopped: subcommand failed`, with the real cause several hundred lines
+earlier, so this is easy to misread as a toolchain problem.
+
+Fix: build through a short junction rather than enabling long paths (`cl.exe`
+does not reliably honour them).
+
+```powershell
+cmd /c mklink /J C:\avm "C:\Users\NoahM\Documents\RustProjects\Astrofin\.claude\worktrees\<name>"
+pwsh -NoProfile -ExecutionPolicy Bypass -File C:\avm\dev\windows\build.ps1
+```
+
+No elevation needed. Everything still lands in the real worktree (`build/`,
+`build/cargo-target/`); only the paths handed to CMake are short. Remove with
+`rmdir C:\avm` — deleting a junction never touches its target.
+
 ## Warnings / quirks worth knowing
 
 - `vcvars64.bat` from VS 2026 Build Tools v18.7.3 (MSVC 14.51.36231) prints

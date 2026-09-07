@@ -635,6 +635,21 @@ flatpak file is wrong and predates the fork.)
 
 ## 6c. What breaks in the user's existing setup at `%APPDATA%\jellium-desktop\mpv`
 
+> **Superseded (feat/video-mode).** The out-of-repo mode switcher is gone: Movies/Anime/Off is now
+> a built-in setting (Settings -> Playback -> Video mode) that switches live through libmpv, the
+> shaders ship in `resources/shaders/`, and no `mpv.conf` rewrite or app restart is involved. See
+> `docs/video-modes.md`. Two rows of the table below are therefore resolved in-repo rather than by
+> handing the user an updated script:
+>
+> - the copied `mpv.conf`'s absolute `glsl-shaders=` paths are rewritten at import time, and an
+>   idempotent startup repair (`jfn_paths::repair_mpv_conf`) fixes profiles migrated before that
+>   landed, leaving one `mpv.conf.bak`;
+> - `switch-mode.ps1` and the two mode shortcuts no longer need Astrofin equivalents at all.
+>
+> Still open from this section: the `input-ipc-server` pipe name in the copied conf is left as-is
+> (harmless unless both apps run at once), and decision 7.2 below ("do NOT post-process the copied
+> mpv/mpv.conf") is overridden by the rewrite above.
+
 Confirmed on this machine:
 
 - `%APPDATA%\jellium-desktop\` — `settings.json` (serverUrl `http://192.168.50.76:8096`,

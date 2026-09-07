@@ -13,8 +13,12 @@ path = "src/lib.rs"
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 jfn-color = { path = "../color" }
+jfn-paths = { path = "../paths" }
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 bindgen = "0.72"

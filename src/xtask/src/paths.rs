@@ -30,6 +30,12 @@ pub fn mpv_build_dir(out: &std::path::Path) -> PathBuf {
     out.join("mpv-build")
 }
 
+/// GLSL user shaders bundled with the app, staged next to the binary as
+/// `shaders/`. See `resources/shaders/README.md`.
+pub fn shaders_source_dir() -> PathBuf {
+    repo_root().join("resources").join("shaders")
+}
+
 pub fn mpv_source_dir() -> PathBuf {
     repo_root().join("third_party").join("mpv")
 }

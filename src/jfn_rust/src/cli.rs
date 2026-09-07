@@ -50,6 +50,10 @@ pub struct Cli {
     #[arg(long)]
     pub hwdec: Option<String>,
 
+    /// Upscaling preset: movies | anime | off (default: movies).
+    #[arg(long)]
+    pub video_mode: Option<String>,
+
     /// Audio passthrough codecs, e.g. ac3,dts-hd,eac3,truehd.
     #[arg(long)]
     pub audio_passthrough: Option<String>,
@@ -178,8 +182,14 @@ mod tests {
 
     #[test]
     fn equals_form() {
-        let a = ok(&["app", "--hwdec=vaapi", "--remote-debug-port=9222"]);
+        let a = ok(&[
+            "app",
+            "--hwdec=vaapi",
+            "--video-mode=anime",
+            "--remote-debug-port=9222",
+        ]);
         assert_eq!(a.hwdec.as_deref(), Some("vaapi"));
+        assert_eq!(a.video_mode.as_deref(), Some("anime"));
         assert_eq!(a.remote_debug_port, Some(9222));
     }
 
@@ -203,6 +213,7 @@ mod tests {
         let _clear = EnvClear::new();
         let a = ok(&["app"]);
         assert!(a.hwdec.is_none());
+        assert!(a.video_mode.is_none());
         assert!(a.audio_passthrough.is_none());
         assert!(a.audio_channels.is_none());
         assert!(a.log_level.is_none());
@@ -240,6 +251,8 @@ mod tests {
             "app",
             "--hwdec",
             "vaapi",
+            "--video-mode",
+            "movies",
             "--log-level",
             "debug",
             "--log-file",
@@ -256,6 +269,7 @@ mod tests {
             "9222",
         ]);
         assert_eq!(a.hwdec.as_deref(), Some("vaapi"));
+        assert_eq!(a.video_mode.as_deref(), Some("movies"));
         assert_eq!(a.log_level.as_deref(), Some("debug"));
         assert_eq!(a.log_file.as_deref(), Some("/tmp/x.log"));
         assert_eq!(a.config_dir.as_deref(), Some("/tmp/config"));
@@ -333,5 +347,23 @@ mod tests {
     fn const_defaults_match_help_text() {
         assert_eq!(jfn_mpv::HWDEC_DEFAULT, "no");
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
+        assert_eq!(jfn_mpv::VideoMode::default().as_str(), "movies");
+        assert_eq!(jfn_mpv::VideoMode::options(), ["movies", "anime", "off"]);
+    }
+
+    #[test]
+    fn video_mode_accepts_every_wire_value_and_the_last_one_wins() {
+        for value in jfn_mpv::VideoMode::options() {
+            let a = ok(&["app", "--video-mode", value]);
+            assert_eq!(a.video_mode.as_deref(), Some(*value));
+        }
+        // Validation is the settings layer's job, not clap's: an unknown value
+        // parses and is then rejected into the default.
+        assert_eq!(
+            ok(&["app", "--video-mode=off", "--video-mode=anime"])
+                .video_mode
+                .as_deref(),
+            Some("anime")
+        );
     }
 }

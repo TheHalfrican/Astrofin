@@ -41,5 +41,7 @@ pub fn install(build_dir: &Path, prefix: &Path, args: &BuildArgs) -> Result<Path
         let runtime = mpv::runtime_library_name();
         xfs::copy_file(&build_dir.join(runtime), &prefix.join(runtime))?;
     }
+
+    crate::build::stage_shaders(prefix)?;
     Ok(prefix.to_path_buf())
 }

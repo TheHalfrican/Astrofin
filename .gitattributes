@@ -1,0 +1,4 @@
+# Bundled upstream GLSL shaders and their license texts are redistributed
+# verbatim; core.autocrlf=true would rewrite their line endings and make the
+# "byte-identical to upstream" claim in resources/shaders/README.md false.
+resources/shaders/** -text
