@@ -3,8 +3,9 @@
 > **Status: implemented** on branch `feat/rebrand-astrofin` — §6d steps 1-5 landed as
 > `ce433b5` (paths + migration), `193cc84` (binary name), `288240a` (runtime identity),
 > `c5846d3` (resources + packaging) and the commit that adds this note (CI, README, NOTICE,
-> About-panel attribution). §6d step 6 (artwork pixels, ObjC/window-class hygiene renames,
-> the memfd name and the AppUserModelID hardening) is deliberately **not** done — see §7.1.
+> About-panel attribution). Of §6d step 6 the ObjC/window-class hygiene renames, the memfd
+> name and the AppUserModelID hardening are **done** on branch `chore/hygiene-renames`;
+> **artwork pixels remain open** — see §6b.
 
 Repo surveyed: `C:\Users\NoahM\Documents\RustProjects\jellium-desktop` (read-only survey, nothing modified).
 Search scope: everything except `third_party/`, `.cache/`, `target/`, `build/`, `dist/`, `.git/`.
@@ -85,7 +86,7 @@ Categories: **UV** = user-visible string · **FS** = filesystem path/dir name ·
 | `src/x11/src/lifecycle.rs` | 23 | doc `Must match StartupWMClass in net.nullsum.JelliumDesktop.desktop` | DOC | `io.github.thehalfrican.Astrofin.desktop` |
 | `src/x11/src/lifecycle.rs` | 25 | `WM_CLASS_VALUE = b"net.nullsum.JelliumDesktop\0net.nullsum.JelliumDesktop\0"` | IPC | `b"io.github.thehalfrican.Astrofin\0io.github.thehalfrican.Astrofin\0"` |
 | `src/x11/src/lifecycle.rs` | 26 | `APP_TITLE = b"Jellium Desktop"` | UV | `b"Astrofin"` |
-| `src/x11/src/shm.rs` | 51 | `memfd_create(c"jellium-shm", …)` | IPC (memfd name, cosmetic) | `c"astrofin-shm"` |
+| `src/x11/src/shm.rs` | 51 | `memfd_create(c"jellium-shm", …)` | IPC (memfd name, cosmetic) | `c"astrofin-shm"` — **done** |
 | `src/x11/src/mpv_proxy.rs` | 955 | comment `a private, jellium-owned runtime dir` | DOC | `astrofin-owned` |
 | `src/linux_util/src/idle_inhibit.rs` | 59 | `&(what, "Jellium Desktop", "Media playback", "block")` — logind `Inhibit` who | UV | `"Astrofin"` |
 | `src/macos/src/lib.rs` | 75 | `CFString::from_str("Jellium Desktop media playback")` — IOPMAssertion name | UV | `"Astrofin media playback"` |
@@ -98,11 +99,11 @@ Categories: **UV** = user-visible string · **FS** = filesystem path/dir name ·
 
 | File | Line | Current text | Cat | Replacement |
 | --- | --- | --- | --- | --- |
-| `src/windows/src/input.rs` | 4 | comment `registers a JellyfinCefInput window class` | DOC | `AstrofinCefInput` |
-| `src/windows/src/input.rs` | 445 | `const CLASS_NAME: PCWSTR = w!("JellyfinCefInput")` | IPC (window class) | `w!("AstrofinCefInput")` — see §3 note (per-process, not a real collision, but rename for hygiene) |
-| `src/windows/src/input.rs` | 497 | log `CreateWindowExW(JellyfinCefInput) failed` | DOC | `AstrofinCefInput` |
-| `src/macos/src/input.rs` | 1, 275, 285 | `JellyfinInputView` NSView subclass | CODE | `AstrofinInputView` (optional; ObjC classes are per-process) |
-| `src/macos/src/init.rs` | 3, 45, 53, 55, 58, 81, 147, 152, 158, 159, 169–173, 224, 237, 242–252, 269–297, 345–348 | `JellyfinApplication`, `JellyfinAppIvars`, `JellyfinAppMenuTarget`, `JellyfinLifecycleObserver`, `JellyfinDisplayLinkTarget` | CODE | Optional rename to `Astrofin*`; **safe to defer** — purely internal ObjC runtime names |
+| `src/windows/src/input.rs` | 4 | comment `registers a JellyfinCefInput window class` | DOC | `AstrofinCefInput` — **done** |
+| `src/windows/src/input.rs` | 445 | `const CLASS_NAME: PCWSTR = w!("JellyfinCefInput")` | IPC (window class) | `w!("AstrofinCefInput")` — **done** (see §3 note: per-process, not a real collision, renamed for hygiene) |
+| `src/windows/src/input.rs` | 497 | log `CreateWindowExW(JellyfinCefInput) failed` | DOC | `AstrofinCefInput` — **done** |
+| `src/macos/src/input.rs` | 1, 275, 285 | `JellyfinInputView` NSView subclass | CODE | `AstrofinInputView` — **done** (ObjC classes are per-process) |
+| `src/macos/src/init.rs` | 3, 45, 53, 55, 58, 81, 147, 152, 158, 159, 169–173, 224, 237, 242–252, 269–297, 345–348 | `JellyfinApplication`, `JellyfinAppIvars`, `JellyfinAppMenuTarget`, `JellyfinLifecycleObserver`, `JellyfinDisplayLinkTarget` | CODE | Renamed to `Astrofin*` (plus `JellyfinWakeTarget`) — **done**; purely internal ObjC runtime names |
 | `src/web/csd.js` | 13 | `const HOST_TAG = 'jmp-titlebar'` | CODE/DOM | **Keep** — custom-element tag, no branding surface; renaming risks nothing but gains nothing |
 | `src/web/csd.js` | 51, 190–198, 213 | `--jmp-csd-height`, `.jmp-csd-inset` | CODE/CSS | **Keep** — internal CSS custom-property/class names |
 | `src/web/native-shim.js` | (many) | `jmpInfo`, `window.jmpNative` | CODE | **Keep** — jellyfin-web plugin-API compat surface inherited from jellyfin-media-player; renaming would need matching changes in every injected script |
@@ -447,14 +448,14 @@ Every identifier that two concurrently running installs would contend for.
 | 15 | AppImage ELF-interpreter dir | `dev/linux/appimage/AppRun:15` + `container-build.sh:152` | `/tmp/.jf-cef-interp/<ld.so>` | `/tmp/.astrofin-cef-interp/<ld.so>` | **Real hazard.** Both AppImages `ln -sf` into the same fixed path; whichever launched last repoints the symlink, and the other process's *future* re-execs of `/proc/self/exe` (CEF renderer/GPU spawn) load the wrong glibc. |
 | 16 | Windows exe file name | everywhere | `jellium-desktop.exe` | `astrofin.exe` | Not a lock, but the user's `switch-mode.ps1` does `Get-Process 'jellium-desktop'` and would match/kill the wrong app. |
 | 17 | Windows Win32 assembly identity | `resources/win/*.exe.manifest:5` | `net.nullsum.JelliumDesktop` | `io.github.thehalfrican.Astrofin` | Cosmetic (SxS identity), but part of the app-id family. |
-| 18 | Windows input window class | `src/windows/src/input.rs:445` | `JellyfinCefInput` | `AstrofinCefInput` | **Not** a cross-process collision — classes registered with an `HINSTANCE` are process-local. Rename for hygiene only. |
-| 19 | SMTC identity | `src/windows_sink/src/lib.rs` (`GetForWindow(hwnd)`) | derived from the process/HWND, **no string in the repo** | — | No repo change needed; Windows derives the app name/icon from the exe (and AppUserModelID if set). Because the exe name and VERSIONINFO `ProductName` change, SMTC shows "Astrofin" automatically. **Optional hardening:** call `SetCurrentProcessExplicitAppUserModelID("io.github.thehalfrican.Astrofin")` early in `jfn_windows` init so the taskbar/SMTC never conflates the two installs' shortcuts. |
+| 18 | Windows input window class | `src/windows/src/input.rs:445` | `JellyfinCefInput` | `AstrofinCefInput` — **done** | **Not** a cross-process collision — classes registered with an `HINSTANCE` are process-local. Rename for hygiene only. |
+| 19 | SMTC identity | `src/windows_sink/src/lib.rs` (`GetForWindow(hwnd)`) | derived from the process/HWND, **no string in the repo** | — | No repo change needed; Windows derives the app name/icon from the exe (and AppUserModelID if set). Because the exe name and VERSIONINFO `ProductName` change, SMTC shows "Astrofin" automatically. **Hardening — done:** `win_early_init` calls `SetCurrentProcessExplicitAppUserModelID("io.github.thehalfrican.Astrofin")` so the taskbar/SMTC never conflates the two installs' shortcuts. |
 | 20 | macOS bundle identifier | `resources/macos/Info.plist.in:12` | `net.nullsum.JelliumDesktop` | `io.github.thehalfrican.Astrofin` | **Critical on macOS** — LaunchServices keys everything (defaults, TCC grants, Dock slot, "already running") off CFBundleIdentifier. Identical ids = one app shadows the other. |
 | 21 | macOS `.app` directory | `src/xtask/src/platform_macos.rs:7` | `Jellium Desktop.app` | `Astrofin.app` | Same `/Applications` slot otherwise. |
-| 22 | ObjC runtime class names | `src/macos/src/init.rs`, `input.rs` | `Jellyfin*` | `Astrofin*` (optional) | Per-process; no collision. Deferrable. |
+| 22 | ObjC runtime class names | `src/macos/src/init.rs`, `input.rs` | `Jellyfin*` | `Astrofin*` — **done** | Per-process; no collision. |
 | 23 | logind `Inhibit` who-string | `src/linux_util/src/idle_inhibit.rs:59` | `Jellium Desktop` | `Astrofin` | No collision (fd-based), user-visible in `systemd-inhibit --list`. |
 | 24 | IOPMAssertion name | `src/macos/src/lib.rs:75` | `Jellium Desktop media playback` | `Astrofin media playback` | No collision; shows in `pmset -g assertions`. |
-| 25 | X11 memfd name | `src/x11/src/shm.rs:51` | `jellium-shm` | `astrofin-shm` | No collision (anonymous memfd); cosmetic in `/proc/*/fd`. |
+| 25 | X11 memfd name | `src/x11/src/shm.rs:51` | `jellium-shm` | `astrofin-shm` — **done** | No collision (anonymous memfd); cosmetic in `/proc/*/fd`. |
 | 26 | **mpv JSON IPC pipe** | *user's* `%APPDATA%\jellium-desktop\mpv\mpv.conf` | `\\.\pipe\jellium-mpv` | `\\.\pipe\astrofin-mpv` | **Outside the repo, but a real collision** — the migration copies `mpv/` verbatim, so both installs would try to own the same named pipe. See §6. |
 | 27 | Jellyfin device identity | `instance.json` UUID → device id + `device_name` | copied by the migration | — | Not a crash, but the Jellyfin server will see two sessions claiming the same device. **Recommendation:** copy `instance.json` (as decided, to preserve the session) but make the *default device name* distinct — `Astrofin (<hostname>)` — so the server's Devices list distinguishes them. If you'd rather have fully separate device rows, exclude `instance.json` from the migration; that costs a re-login. |
 
@@ -619,12 +620,14 @@ flatpak file is wrong and predates the fork.)
 - Artwork: `src/web/logo.png`, `resources/macos/AppIcon.icns`, `resources/win/*.ico`,
   `resources/linux/*.svg` *content*. Rename the **files** now (so the build wiring is final), swap
   the **pixels** later. `about.js:50` `logo.alt = 'Jellyfin'` can be fixed with the artwork.
-- ObjC class renames (`JellyfinApplication`, `JellyfinInputView`, …) and the Windows
-  `JellyfinCefInput` class name — process-local, no functional effect.
+- ~~ObjC class renames (`JellyfinApplication`, `JellyfinInputView`, …) and the Windows
+  `JellyfinCefInput` class name~~ — **done** on `chore/hygiene-renames`.
 - `jmp-*` CSS/DOM prefixes and `jmpInfo` / `window.jmpNative` — keep indefinitely; they are the
   jellyfin-web plugin-API compat surface inherited from jellyfin-media-player.
-- `src/x11/src/shm.rs:51` memfd name, `~/jellyfin-deps` CI cache dir, doc comments.
-- The `SetCurrentProcessExplicitAppUserModelID` hardening (§3 #19).
+- `src/x11/src/shm.rs:51` memfd name — **done** (`c"astrofin-shm"`). Still open:
+  `~/jellyfin-deps` CI cache dir, doc comments.
+- ~~The `SetCurrentProcessExplicitAppUserModelID` hardening (§3 #19).~~ — **done** in
+  `src/windows/src/platform.rs::win_early_init`.
 - Fixing the missing `dev/tools/version.sh` in the two macOS workflows (pre-existing breakage,
   independent of the rebrand — but it will block any macOS CI run).
 
