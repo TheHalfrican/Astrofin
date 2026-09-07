@@ -219,13 +219,17 @@ fn copy_leg(
             new_dir.display()
         ));
     }
-    if kind == "config" && new_dir.join("mpv").join("mpv.conf").is_file() {
-        report.info.push(format!(
-            "mpv config copied verbatim: absolute paths and the input-ipc-server pipe name inside \
-             {} may still point at the legacy jellium-desktop folder until the mode switcher is \
-             re-run from the new location",
-            new_dir.join("mpv").join("mpv.conf").display()
-        ));
+    if kind == "config" {
+        // The copy is byte-for-byte, so every absolute path inside mpv.conf
+        // still points into the legacy tree. The shaders those lines name were
+        // just copied under `new_dir`, so repoint them here rather than leaving
+        // mpv to fail loading them on the next launch.
+        let conf = new_dir.join("mpv").join("mpv.conf");
+        match rewrite_conf_in_place(&conf, legacy, new_dir) {
+            Ok(Some(line)) => report.info.push(line),
+            Ok(None) => {}
+            Err(e) => report.warn(format!("migration: rewriting {}: {e}", conf.display())),
+        }
     }
     Ok(counts)
 }
@@ -426,6 +430,185 @@ fn symlink_to(target: &Path, link: &Path, src: &Path) -> io::Result<()> {
     }
 }
 
+// =====================================================================
+// mpv.conf legacy-path repair
+// =====================================================================
+//
+// The import copies `mpv/mpv.conf` byte-for-byte, so any absolute path in it
+// — `glsl-shaders=` above all — still points into `…/jellium-desktop/mpv`.
+// Two entry points fix that: [`rewrite_conf_in_place`] runs as part of the
+// import, and [`repair_mpv_conf`] runs on every launch for installs that were
+// migrated before this code existed.
+
+/// Suffix of the one-time backup [`repair_mpv_conf`] leaves behind.
+const CONF_BACKUP_SUFFIX: &str = "mpv.conf.bak";
+
+/// Characters that end a path in an mpv config line: the list separator, the
+/// quoting mpv's config parser strips, and end of line. `:` is deliberately
+/// absent — it is the Unix list separator but also `C:` on Windows, and the
+/// only cost of stopping late is a token that fails the existence check.
+const PATH_TERMINATORS: &[char] = &['"', '\'', ';', ',', '\n', '\r'];
+
+/// Rewrite every absolute reference to `legacy` into `new_dir`, in both slash
+/// styles, leaving the rest of the text byte-identical.
+///
+/// Returns the new text plus the absolute paths each replacement produced (so
+/// a caller can check they resolve before committing), or `None` when the
+/// legacy directory is not mentioned at all.
+fn rewrite_legacy_paths(
+    text: &str,
+    legacy: &Path,
+    new_dir: &Path,
+) -> Option<(String, Vec<PathBuf>)> {
+    let legacy = legacy.to_string_lossy();
+    let new_dir = new_dir.to_string_lossy();
+    // Both styles, because mpv wants `/` in option values but the directory
+    // itself is spelled with `\` on Windows, and config files in the wild mix
+    // the two.
+    let pairs = [
+        (legacy.replace('\\', "/"), new_dir.replace('\\', "/")),
+        (legacy.replace('/', "\\"), new_dir.replace('/', "\\")),
+    ];
+
+    let mut out = text.to_string();
+    let mut rewritten = Vec::new();
+    for (from, to) in &pairs {
+        if from.is_empty() || from == to {
+            continue;
+        }
+        let (next, sites) = replace_all(&out, from, to);
+        for site in sites {
+            let tail = &next[site..];
+            let end = tail.find(PATH_TERMINATORS).unwrap_or(tail.len());
+            rewritten.push(PathBuf::from(&tail[..end]));
+        }
+        out = next;
+    }
+    (out != text).then_some((out, rewritten))
+}
+
+/// `str::replace` plus the byte offset of every replacement in the result.
+/// Case-insensitive on Windows, where `%APPDATA%` casing is not stable.
+fn replace_all(haystack: &str, needle: &str, replacement: &str) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(haystack.len());
+    let mut sites = Vec::new();
+    let mut rest = haystack;
+    while let Some(idx) = find_path(rest, needle) {
+        out.push_str(&rest[..idx]);
+        sites.push(out.len());
+        out.push_str(replacement);
+        rest = &rest[idx + needle.len()..];
+    }
+    out.push_str(rest);
+    (out, sites)
+}
+
+#[cfg(windows)]
+fn find_path(haystack: &str, needle: &str) -> Option<usize> {
+    // ASCII-only fold: enough for drive letters and the `AppData\Roaming`
+    // spelling NTFS is careless about, and never merges distinct non-ASCII
+    // user names.
+    haystack
+        .to_ascii_lowercase()
+        .find(&needle.to_ascii_lowercase())
+}
+
+#[cfg(not(windows))]
+fn find_path(haystack: &str, needle: &str) -> Option<usize> {
+    haystack.find(needle)
+}
+
+/// Import-time rewrite: the shaders were just copied under `new_dir`, so the
+/// rewritten paths resolve by construction and no backup is warranted (the
+/// legacy file is still there, untouched).
+fn rewrite_conf_in_place(conf: &Path, legacy: &Path, new_dir: &Path) -> io::Result<Option<String>> {
+    if !conf.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(conf)?;
+    let Some((rewritten, sites)) = rewrite_legacy_paths(&text, legacy, new_dir) else {
+        return Ok(None);
+    };
+    crate::write_atomic(conf, rewritten.as_bytes())?;
+    Ok(Some(format!(
+        "rewrote {} legacy path(s) in {} to point at the imported profile",
+        sites.len(),
+        conf.display()
+    )))
+}
+
+/// Repair an already-imported `mpv.conf` whose absolute paths still point at
+/// `…/jellium-desktop/mpv`.
+///
+/// Idempotent and conservative: it does nothing unless the legacy directory is
+/// actually named *and* at least one of the rewritten paths resolves to a file
+/// under the current config directory. The first repair leaves `mpv.conf.bak`
+/// beside the file; later launches find nothing to do.
+///
+/// Returns lines to log at `info` once logging is up — the same deferred
+/// reporting [`migrate_legacy`] uses, for the same reason.
+#[must_use]
+pub fn repair_mpv_conf() -> Vec<String> {
+    let new_dir = config_dir_raw();
+    repair_conf_at(
+        &new_dir.join("mpv").join("mpv.conf"),
+        &imp::config_base().join(LEGACY_APP_DIR_NAME),
+        &new_dir,
+    )
+}
+
+/// [`repair_mpv_conf`] with the three locations injected, so tests can drive
+/// it against a temp directory instead of the process-global config dir.
+fn repair_conf_at(conf: &Path, legacy: &Path, new_dir: &Path) -> Vec<String> {
+    if !conf.is_file() {
+        return Vec::new();
+    }
+    let text = match fs::read_to_string(conf) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("mpv.conf repair: reading {}: {e}", conf.display())],
+    };
+    let Some((rewritten, sites)) = rewrite_legacy_paths(&text, legacy, new_dir) else {
+        return Vec::new();
+    };
+    // "The referenced file exists under the new dir": without this a config
+    // that names the legacy folder for something we never imported would be
+    // rewritten into a path that resolves nowhere.
+    let resolved = sites.iter().filter(|p| p.is_file()).count();
+    if resolved == 0 {
+        return vec![format!(
+            "mpv.conf repair: {} still names {}, but none of the {} rewritten path(s) exist under \
+             {}; leaving it alone",
+            conf.display(),
+            legacy.display(),
+            sites.len(),
+            new_dir.display()
+        )];
+    }
+
+    let backup = conf.with_file_name(CONF_BACKUP_SUFFIX);
+    if !backup.exists()
+        && let Err(e) = fs::copy(conf, &backup)
+    {
+        return vec![format!(
+            "mpv.conf repair: could not write {}: {e}; leaving {} alone",
+            backup.display(),
+            conf.display()
+        )];
+    }
+    if let Err(e) = crate::write_atomic(conf, rewritten.as_bytes()) {
+        return vec![format!("mpv.conf repair: writing {}: {e}", conf.display())];
+    }
+    vec![format!(
+        "mpv.conf repair: repointed {} legacy path(s) ({resolved} resolve) in {} from {} to {}; \
+         backup at {}",
+        sites.len(),
+        conf.display(),
+        legacy.display(),
+        new_dir.display(),
+        backup.display()
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,23 +708,161 @@ mod tests {
         assert!(!new_dir.join("junk").exists());
     }
 
+    /// Superseded by the rewrite below: the import used to only warn about
+    /// stale paths, it now repoints them.
     #[test]
-    fn reports_mpv_conf_caveat_only_when_present() {
+    fn import_rewrites_legacy_paths_in_mpv_conf() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        write(&legacy.join("mpv").join("shaders").join("a.glsl"), "// s");
+        let fwd = legacy.to_string_lossy().replace('\\', "/");
+        let body = format!(
+            "input-ipc-server=\\\\.\\pipe\\jellium-mpv\nglsl-shaders=\"{fwd}/mpv/shaders/a.glsl\"\nscale=ewa_lanczossharp\n"
+        );
+        write(&legacy.join("mpv").join("mpv.conf"), &body);
+
+        let (_, report) = run(&legacy, &new_dir);
+
+        let conf = fs::read_to_string(new_dir.join("mpv").join("mpv.conf")).expect("read");
+        let new_fwd = new_dir.to_string_lossy().replace('\\', "/");
+        assert!(
+            conf.contains(&format!("glsl-shaders=\"{new_fwd}/mpv/shaders/a.glsl\"")),
+            "not repointed: {conf}"
+        );
+        assert!(
+            !conf.contains("jellium-desktop"),
+            "legacy path left: {conf}"
+        );
+        // Everything else is byte-identical, pipe name included.
+        assert!(conf.contains("input-ipc-server=\\\\.\\pipe\\jellium-mpv\n"));
+        assert!(conf.ends_with("scale=ewa_lanczossharp\n"));
+        assert!(
+            report
+                .info_lines()
+                .iter()
+                .any(|l| l.contains("legacy path"))
+        );
+        // The source survives untouched.
+        assert!(
+            fs::read_to_string(legacy.join("mpv").join("mpv.conf"))
+                .expect("read")
+                .contains("jellium-desktop")
+        );
+    }
+
+    #[test]
+    fn import_leaves_mpv_conf_alone_when_it_names_no_legacy_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        write(&legacy.join("mpv").join("mpv.conf"), "hwdec=auto-copy\n");
+
+        let (_, report) = run(&legacy, &new_dir);
+
+        assert_eq!(
+            fs::read_to_string(new_dir.join("mpv").join("mpv.conf")).expect("read"),
+            "hwdec=auto-copy\n"
+        );
+        assert!(
+            !report
+                .info_lines()
+                .iter()
+                .any(|l| l.contains("legacy path"))
+        );
+    }
+
+    /// A profile migrated before the rewrite existed, as on the developer's
+    /// own machine: repair has to fix it on the next launch.
+    fn repair_fixture(tmp: &Path, target_exists: bool) -> (PathBuf, PathBuf, PathBuf, String) {
+        let legacy = tmp.join("jellium-desktop");
+        let new_dir = tmp.join("astrofin");
+        if target_exists {
+            write(&new_dir.join("mpv").join("shaders").join("a.glsl"), "// s");
+        }
+        let fwd = legacy.to_string_lossy().replace('\\', "/");
+        let body = format!("glsl-shaders=\"{fwd}/mpv/shaders/a.glsl\"\nscale=mitchell\n");
+        let conf = new_dir.join("mpv").join("mpv.conf");
+        write(&conf, &body);
+        (conf, legacy, new_dir, body)
+    }
+
+    #[test]
+    fn repair_repoints_paths_backs_up_once_and_is_idempotent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (conf, legacy, new_dir, original) = repair_fixture(tmp.path(), true);
+
+        let lines = repair_conf_at(&conf, &legacy, &new_dir);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("repointed"), "{lines:?}");
+
+        let repaired = fs::read_to_string(&conf).expect("read");
+        let new_fwd = new_dir.to_string_lossy().replace('\\', "/");
+        assert!(repaired.contains(&format!("{new_fwd}/mpv/shaders/a.glsl")));
+        assert!(!repaired.contains("jellium-desktop"));
+        assert!(repaired.ends_with("scale=mitchell\n"));
+
+        let backup = conf.with_file_name("mpv.conf.bak");
+        assert_eq!(fs::read_to_string(&backup).expect("read"), original);
+
+        // Second launch: nothing left to do, and the backup is not clobbered.
+        assert!(repair_conf_at(&conf, &legacy, &new_dir).is_empty());
+        assert_eq!(fs::read_to_string(&conf).expect("read"), repaired);
+        assert_eq!(fs::read_to_string(&backup).expect("read"), original);
+    }
+
+    #[test]
+    fn repair_declines_when_the_rewritten_file_does_not_exist() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (conf, legacy, new_dir, original) = repair_fixture(tmp.path(), false);
+
+        let lines = repair_conf_at(&conf, &legacy, &new_dir);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("leaving it alone"), "{lines:?}");
+        assert_eq!(fs::read_to_string(&conf).expect("read"), original);
+        assert!(!conf.with_file_name("mpv.conf.bak").exists());
+    }
+
+    #[test]
+    fn repair_is_silent_without_a_conf_or_without_legacy_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        let conf = new_dir.join("mpv").join("mpv.conf");
+        assert!(repair_conf_at(&conf, &legacy, &new_dir).is_empty());
+
+        write(&conf, "hwdec=auto\n");
+        assert!(repair_conf_at(&conf, &legacy, &new_dir).is_empty());
+        assert_eq!(fs::read_to_string(&conf).expect("read"), "hwdec=auto\n");
+    }
+
+    #[test]
+    fn rewrite_handles_both_slash_styles_and_counts_sites() {
+        let legacy = Path::new("/base/jellium-desktop");
+        let new_dir = Path::new("/base/astrofin");
+        let text = "a=/base/jellium-desktop/x.glsl\nb=\\base\\jellium-desktop\\y.glsl\nc=keep\n";
+        let (out, sites) = rewrite_legacy_paths(text, legacy, new_dir).expect("rewritten");
+        assert!(out.contains("a=/base/astrofin/x.glsl"));
+        assert!(out.contains("b=\\base\\astrofin\\y.glsl"));
+        assert!(out.contains("c=keep"));
+        assert_eq!(sites.len(), 2);
+
+        assert!(rewrite_legacy_paths("c=keep\n", legacy, new_dir).is_none());
+    }
+
+    /// An empty mpv.conf is not a legacy-path config; the import must not
+    /// touch it, and must not claim it did.
+    #[test]
+    fn import_says_nothing_about_an_empty_mpv_conf() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let legacy = tmp.path().join("jellium-desktop");
         write(&legacy.join("mpv").join("mpv.conf"), "");
         let (_, report) = run(&legacy, &tmp.path().join("astrofin"));
-        assert!(report.info_lines().iter().any(|l| l.contains("mpv config")));
-
-        let tmp2 = tempfile::tempdir().expect("tempdir");
-        let legacy2 = tmp2.path().join("jellium-desktop");
-        write(&legacy2.join("settings.json"), "{}");
-        let (_, report2) = run(&legacy2, &tmp2.path().join("astrofin"));
         assert!(
-            !report2
+            !report
                 .info_lines()
                 .iter()
-                .any(|l| l.contains("mpv config"))
+                .any(|l| l.contains("legacy path"))
         );
     }
 }
