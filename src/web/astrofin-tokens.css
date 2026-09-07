@@ -1,0 +1,182 @@
+/* Astrofin design tokens.
+ *
+ * Source of truth: docs/design/Astrofin.dc.html, artboard 1a ("Token sheet")
+ * with the "Ion" accent pairing from artboard 1b. Dark only. Every value is
+ * a CSS custom property prefixed `--af-` so it never collides with
+ * jellyfin-web's own variables when this sheet is injected into the web UI.
+ *
+ * Contrast (against --af-bg-base #070A14): accent-primary 13.3:1,
+ * accent-secondary 5.4:1, accent-warm 11.6:1, accent-danger 6.9:1,
+ * text-primary 17.3:1, text-muted 8.2:1. Body text on glass over bright
+ * artwork measures 14.1:1 because glass carries the --af-glass-floor.
+ */
+:root {
+  /* ---- Color ---------------------------------------------------------- */
+  --af-bg-base: #070A14;
+  --af-bg-base-rgb: 7, 10, 20;
+  --af-surface: #0E1326;
+  --af-surface-raised: #161C33;
+  --af-surface-raised-rgb: 22, 28, 51;
+
+  /* Frosted glass: fill + fixed dark floor + blur radius. */
+  --af-glass: linear-gradient(135deg, rgba(22, 28, 51, .72), rgba(11, 15, 32, .55));
+  --af-glass-fill: rgba(22, 28, 51, .72);
+  --af-glass-fill-soft: rgba(22, 28, 51, .55);
+  --af-glass-floor: rgba(7, 10, 20, .62);
+  --af-glass-blur: 20px;
+  --af-glass-blur-panel: 24px;
+  --af-glass-blur-backdrop: 38px;
+
+  --af-accent-primary: #6FE3FF;
+  --af-accent-primary-rgb: 111, 227, 255;
+  --af-accent-secondary: #8B6CFF;
+  --af-accent-secondary-rgb: 139, 108, 255;
+  --af-accent-warm: #FFB86B;
+  --af-accent-warm-rgb: 255, 184, 107;
+  --af-accent-danger: #FF6B7A;
+  --af-accent-danger-rgb: 255, 107, 122;
+
+  --af-text-primary: #EAF0FF;
+  --af-text-primary-rgb: 234, 240, 255;
+  --af-text-muted: #9AA6C8;
+  --af-on-accent: #070A14;
+
+  /* Edges and hairlines. */
+  --af-edge-luminous: rgba(159, 180, 255, .18);
+  --af-edge-soft: rgba(159, 180, 255, .16);
+  --af-edge-strong: rgba(159, 180, 255, .28);
+  --af-edge-chip: rgba(159, 180, 255, .20);
+  --af-hairline: rgba(159, 180, 255, .10);
+  --af-divider: rgba(159, 180, 255, .22);
+
+  /* Glows. */
+  --af-focus-ring: 0 0 0 3px var(--af-accent-primary), 0 0 36px rgba(111, 227, 255, .45);
+  --af-focus-ring-tile: 0 0 0 3px var(--af-accent-primary), 0 0 44px rgba(111, 227, 255, .45);
+  --af-focus-ring-rest: 0 0 0 1px rgba(159, 180, 255, .16);
+  --af-primary-glow: 0 0 0 3px rgba(111, 227, 255, .28), 0 0 44px rgba(111, 227, 255, .35);
+  --af-nebula: rgba(139, 108, 255, .20);
+  --af-progress-track: rgba(234, 240, 255, .22);
+  --af-progress-track-soft: rgba(234, 240, 255, .18);
+
+  /* Backdrop scrims (PS5-style art bleed). */
+  --af-scrim-horizontal: linear-gradient(90deg, rgba(7, 10, 20, .94) 0%, rgba(7, 10, 20, .72) 42%, rgba(7, 10, 20, .42) 100%);
+  --af-scrim-vertical: linear-gradient(0deg, rgba(7, 10, 20, .96) 0%, rgba(7, 10, 20, .35) 38%, rgba(7, 10, 20, .55) 100%);
+  --af-scrim-tile: linear-gradient(0deg, rgba(7, 10, 20, .85), rgba(7, 10, 20, 0) 58%);
+
+  /* Starfield layers (two parallax layers; drift via --af-dur-drift-*). */
+  --af-stars-1:
+    radial-gradient(1.6px 1.6px at 12% 18%, #EAF0FF, transparent),
+    radial-gradient(1.4px 1.4px at 32% 62%, #CFE0FF, transparent),
+    radial-gradient(1.8px 1.8px at 58% 12%, #FFFFFF, transparent),
+    radial-gradient(1.3px 1.3px at 74% 44%, #BFD4FF, transparent),
+    radial-gradient(1.5px 1.5px at 88% 72%, #EAF0FF, transparent),
+    radial-gradient(1.2px 1.2px at 22% 84%, #AFC4FF, transparent),
+    radial-gradient(1.6px 1.6px at 46% 34%, #FFFFFF, transparent),
+    radial-gradient(1.3px 1.3px at 66% 88%, #DCE8FF, transparent);
+  --af-stars-1-opacity: .7;
+  --af-stars-2:
+    radial-gradient(1px 1px at 8% 52%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 28% 26%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 52% 76%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 71% 20%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 84% 58%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 94% 34%, #9AA6C8, transparent),
+    radial-gradient(1px 1px at 38% 8%, #9AA6C8, transparent);
+  --af-stars-2-opacity: .35;
+  --af-nebula-glow: radial-gradient(circle, rgba(139, 108, 255, .20), rgba(139, 108, 255, 0) 62%);
+
+  /* ---- Type ----------------------------------------------------------- */
+  --af-font-display: "Sora", "Outfit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --af-font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --af-font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --af-type-display: 200 64px/72px var(--af-font-display);
+  --af-type-title: 300 48px/56px var(--af-font-display);
+  --af-type-section: 400 32px/40px var(--af-font-display);
+  --af-type-wordmark: 300 20px/1 var(--af-font-display);
+  --af-type-tile: 500 20px/26px var(--af-font-body);
+  --af-type-tile-sub: 400 16px/22px var(--af-font-body);
+  --af-type-body: 400 16px/24px var(--af-font-body);
+  --af-type-body-lg: 400 16px/26px var(--af-font-body);
+  --af-type-button: 600 18px/1 var(--af-font-body);
+  --af-type-button-secondary: 500 18px/1 var(--af-font-body);
+  --af-type-meta: 500 14px/1 var(--af-font-mono);
+  --af-type-meta-sm: 500 12px/1 var(--af-font-mono);
+  --af-type-eyebrow: 600 13px/1 var(--af-font-body);
+
+  --af-tracking-display: .01em;
+  --af-tracking-meta: .06em;
+  --af-tracking-eyebrow: .14em;
+  --af-tracking-wordmark: .22em;
+  --af-tracking-badge: .10em;
+
+  /* ---- Space ---------------------------------------------------------- */
+  --af-space-1: 4px;
+  --af-space-2: 8px;
+  --af-space-3: 12px;
+  --af-space-4: 16px;
+  --af-space-6: 24px;
+  --af-space-8: 32px;
+  --af-space-12: 48px;
+  --af-space-16: 64px;
+  --af-space-24: 96px;
+  --af-space-32: 128px;
+  --af-gutter: 72px;
+  --af-rail-gap: 24px;
+  --af-header-height: 88px;
+
+  /* ---- Radius --------------------------------------------------------- */
+  --af-radius-xs: 4px;
+  --af-radius-sm: 8px;
+  --af-radius-md: 14px;
+  --af-radius-lg: 22px;
+  --af-radius-pill: 999px;
+  --af-radius-tile: var(--af-radius-md);
+  --af-radius-panel: var(--af-radius-lg);
+
+  /* ---- Motion --------------------------------------------------------- */
+  --af-ease-focus: cubic-bezier(.2, .8, .2, 1);
+  --af-ease-page: cubic-bezier(.32, .72, 0, 1);
+  --af-ease-out: ease-out;
+  --af-ease-in: ease-in;
+
+  --af-dur-tile: 180ms;
+  --af-dur-ring-in: 140ms;
+  --af-dur-ring-out: 90ms;
+  --af-dur-backdrop: 600ms;
+  --af-backdrop-hold: 40ms;
+  --af-dur-page: 420ms;
+  --af-dur-overlay-in: 200ms;
+  --af-dur-overlay-out: 320ms;
+  --af-overlay-idle: 3000ms;
+  --af-dur-drift-1: 90s;
+  --af-dur-drift-2: 150s;
+
+  --af-tile-scale: 1.06;
+  --af-backdrop-scale-from: 1.04;
+  --af-page-offset: 24px;
+  --af-page-scale: .98;
+  --af-overlay-offset: 16px;
+}
+
+/* Reduced motion: every duration collapses to a 120 ms opacity fade;
+ * scale, parallax and drift are removed. Layout never changes. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --af-dur-tile: 120ms;
+    --af-dur-ring-in: 120ms;
+    --af-dur-ring-out: 120ms;
+    --af-dur-backdrop: 120ms;
+    --af-backdrop-hold: 0ms;
+    --af-dur-page: 120ms;
+    --af-dur-overlay-in: 120ms;
+    --af-dur-overlay-out: 120ms;
+    --af-dur-drift-1: 0s;
+    --af-dur-drift-2: 0s;
+    --af-tile-scale: 1;
+    --af-backdrop-scale-from: 1;
+    --af-page-offset: 0px;
+    --af-page-scale: 1;
+    --af-overlay-offset: 0px;
+  }
+}

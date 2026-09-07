@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use crate::cef_string::userfree_to_string;
+use crate::embedded_css;
 use crate::embedded_js;
 use crate::injection::ExtraInfo;
 use crate::paint_scheduler::PaintScheduler;
@@ -15,11 +16,14 @@ use crate::state;
 use crate::v8_handler::NativeHandlerBuilder;
 
 // `app://` scheme options. Match CEF_SCHEME_OPTION_* from
-// include/internal/cef_types.h.
+// include/internal/cef_types.h (verified against CEF 151.3.24):
+// STANDARD 1<<0, LOCAL 1<<1, DISPLAY_ISOLATED 1<<2, SECURE 1<<3,
+// CORS_ENABLED 1<<4, CSP_BYPASSING 1<<5, FETCH_ENABLED 1<<6.
 const SCHEME_OPTION_STANDARD: i32 = 1 << 0;
 const SCHEME_OPTION_LOCAL: i32 = 1 << 1;
-const SCHEME_OPTION_SECURE: i32 = 1 << 4;
-const SCHEME_OPTION_CORS_ENABLED: i32 = 1 << 6;
+const SCHEME_OPTION_SECURE: i32 = 1 << 3;
+const SCHEME_OPTION_CORS_ENABLED: i32 = 1 << 4;
+const SCHEME_OPTION_FETCH_ENABLED: i32 = 1 << 6;
 
 // V8 property attribute. Equivalent to V8_PROPERTY_ATTRIBUTE_READONLY.
 fn readonly_attr() -> V8Propertyattribute {
@@ -176,7 +180,8 @@ wrap_app! {
                 SCHEME_OPTION_STANDARD
                     | SCHEME_OPTION_SECURE
                     | SCHEME_OPTION_LOCAL
-                    | SCHEME_OPTION_CORS_ENABLED,
+                    | SCHEME_OPTION_CORS_ENABLED
+                    | SCHEME_OPTION_FETCH_ENABLED,
             );
         }
 
@@ -586,9 +591,104 @@ fn inject_jmp_native(browser: &mut Browser, profile: &ExtraInfo, context: &mut V
     global.set_value_bykey(Some(&key), Some(&mut jmp_native), readonly_attr());
 }
 
+/// Builds the JS preamble that installs the profile's stylesheets as a single
+/// `<style id="af-theme">`. Runs at `OnContextCreated`, i.e. before the page
+/// has been parsed and long before its own stylesheets load, so the element is
+/// parked in `<head>` (or, if there is no root yet, on the first mutation that
+/// creates one).
+///
+/// From DOMContentLoaded on, `astrofin-theme.js` owns its position and moves it
+/// to the end of `<body>`: jellyfin-web appends a chunk stylesheet per lazily
+/// loaded route *and* serves `themes/<name>/theme.css` from a `<div>` inside
+/// `<body>`, which no position in `<head>` can outrank at equal specificity.
+///
+/// `None` when the profile declares no styles.
+fn styles_preamble(profile: &ExtraInfo) -> Option<String> {
+    let styles = profile.styles();
+    if styles.is_empty() {
+        return None;
+    }
+
+    let mut css = String::new();
+    for style in styles {
+        if let Some(src) = embedded_css::get(style.file_name()) {
+            if !css.is_empty() {
+                css.push('\n');
+            }
+            css.push_str(src);
+        }
+    }
+    if css.is_empty() {
+        return None;
+    }
+
+    // The sheet is embedded as a JS string literal, so it must be JSON-escaped
+    // (including U+2028/U+2029, which `to_js_json` handles and plain JSON does
+    // not). Bail rather than emit a broken literal.
+    let css_json = jfn_js_json::to_js_json(css.as_str())?;
+
+    Some(format!(
+        r#"(function () {{
+    'use strict';
+    // This preamble shares one execute_java_script call with every shim that
+    // follows it, so it must never throw: an uncaught exception here would
+    // abort native-shim.js and the mpv players with it.
+    try {{
+        var css = {css_json};
+        var ID = 'af-theme';
+        function install() {{
+            // OnContextCreated fires before parsing starts, so there may be
+            // no <html> yet. Report failure and let the caller retry.
+            var host = document.head || document.documentElement;
+            if (!host) {{
+                return null;
+            }}
+            var el = document.getElementById(ID);
+            if (!el) {{
+                el = document.createElement('style');
+                el.id = ID;
+                el.setAttribute('data-astrofin', 'theme');
+            }}
+            if (el.textContent !== css) {{
+                el.textContent = css;
+            }}
+            // Park it once. astrofin-theme.js owns its position from then on:
+            // jf-web loads its own theme sheet from a <div> inside <body>, so
+            // no position in <head> wins the cascade after the app has booted.
+            if (!el.parentNode || el.parentNode === document.documentElement) {{
+                host.appendChild(el);
+            }}
+            return el;
+        }}
+        window.__afInstallTheme = install;
+        if (!install() && typeof MutationObserver === 'function') {{
+            // Wait for the root element to appear, then install once.
+            var mo = new MutationObserver(function () {{
+                if (install()) {{
+                    mo.disconnect();
+                }}
+            }});
+            mo.observe(document, {{ childList: true, subtree: true }});
+        }}
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', function () {{
+                install();
+            }}, {{ once: true }});
+        }}
+    }} catch (e) {{
+        if (window.console && console.warn) {{
+            console.warn('[Astrofin theme] stylesheet install failed', e);
+        }}
+    }}
+}})();
+"#
+    ))
+}
+
 fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
     let scripts = profile.scripts();
-    if scripts.is_empty() {
+    let preamble = styles_preamble(profile);
+    if scripts.is_empty() && preamble.is_none() {
         return;
     }
 
@@ -638,6 +738,12 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         .window_decorations()
         .map_or_else(|| "null".to_string(), |wd| format!("'{wd}'"));
     replace_first(&mut code, "__WINDOW_DECORATIONS__", &window_decorations);
+
+    // Prepended only after placeholder substitution, so stylesheet bytes can
+    // never be mistaken for a `__PLACEHOLDER__` and consume a replacement.
+    if let Some(preamble) = preamble {
+        code.insert_str(0, &preamble);
+    }
 
     let url_uf = frame.url();
     let url = CefString::from(&url_uf);

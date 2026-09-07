@@ -22,3 +22,6 @@ third_party/*
 .idea/
 *.swp
 .cache/
+
+# Claude Code agent worktrees
+.claude/worktrees/

@@ -91,6 +91,18 @@ async function tryConnect(server, spinnerStartTime = Date.now()) {
 }
 
 let isConnecting = false;
+// Set by cancelConnection so the "connect failed" dialog is not raised for a
+// stop the user asked for.
+let userCancelled = false;
+
+// Single switch for the screen's three visual states; overlay.css keys every
+// show/hide off body[data-state] so the markup never carries inline styles.
+//   'boot'       – waiting on getSavedServerUrl (orbit only)
+//   'connecting' – probing a server (orbit + address + cancel)
+//   'idle'       – the form is live
+const setState = (state) => {
+    document.body.dataset.state = state;
+};
 
 const updateButtonState = () => {
     const address = document.getElementById('address');
@@ -110,7 +122,14 @@ const cancelOnEscape = (e) => {
 
 const showConnectionFailedDialog = () => {
     const dialog = document.createElement('div');
-    dialog.className = 'dialog scaleIn';
+    dialog.className = 'dialog';
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+
+    // The glass panel is a child of the scrim so the scrim can blur the
+    // starfield behind it without blurring the panel's own contents.
+    const panel = document.createElement('div');
+    panel.className = 'dialog-panel scaleIn';
 
     const header = document.createElement('h1');
     header.innerText = headerConnectionFailureText;
@@ -122,34 +141,49 @@ const showConnectionFailedDialog = () => {
     const button = document.createElement('button');
     button.innerText = buttonGotItText;
     button.type = 'button';
-    button.className = 'dialog-button';
-    button.addEventListener('click', (e) => {
-        dialog.remove();
-    });
+    button.className = 'dialog-button af-secondary';
 
-    dialog.appendChild(header);
-    dialog.appendChild(message);
-    dialog.appendChild(button);
+    const dismiss = () => {
+        document.removeEventListener('keydown', onDialogKey);
+        dialog.remove();
+        const address = document.getElementById('address');
+        if (!isConnecting && address) address.focus();
+    };
+
+    // Enter/Escape dismiss too: the app has to be usable from a remote.
+    function onDialogKey(e) {
+        if (e.key === 'Escape' || e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            dismiss();
+        }
+    }
+
+    button.addEventListener('click', dismiss);
+    document.addEventListener('keydown', onDialogKey);
+
+    panel.appendChild(header);
+    panel.appendChild(message);
+    panel.appendChild(button);
+    dialog.appendChild(panel);
     document.body.appendChild(dialog);
+    button.focus();
 };
 
 const startConnecting = async () => {
     const address = document.getElementById('address');
-    const title = document.getElementById('title');
-    const spinner = document.getElementById('spinner');
-    const button = document.getElementById('connect-button');
+    const status = document.getElementById('connect-status');
     const server = address.value;
 
     // Show connecting UI
     isConnecting = true;
-    title.textContent = '';
-    title.style.visibility = 'hidden';
-    address.classList.add('connecting');
-    address.style.visibility = 'hidden';
+    userCancelled = false;
+    // The URL under the orbit is the only feedback about *what* we are
+    // reaching for; it needs no translation.
+    status.textContent = server;
     address.disabled = true;
-    spinner.style.display = 'block';
+    setState('connecting');
     const spinnerStart = Date.now();
-    button.style.visibility = 'hidden';
     document.addEventListener('keydown', cancelOnEscape);
 
     // C++ handles retries, just wait for result
@@ -157,16 +191,16 @@ const startConnecting = async () => {
 
     if (!connected) {
         isConnecting = false;
-        title.textContent = document.getElementById('title').getAttribute('data-original-text');
-        title.style.visibility = 'visible';
-        address.classList.remove('connecting');
-        address.style.visibility = 'visible';
         address.disabled = false;
-        spinner.style.display = 'none';
-        button.style.visibility = 'visible';
+        setState('idle');
         document.removeEventListener('keydown', cancelOnEscape);
         updateButtonState();
-        showConnectionFailedDialog();
+        // An explicit cancel is not a failure; only report real ones.
+        if (userCancelled) {
+            address.focus();
+        } else {
+            showConnectionFailedDialog();
+        }
     }
 };
 
@@ -174,6 +208,7 @@ const cancelConnection = () => {
     if (!isConnecting) return;
 
     console.debug("Cancelling connection");
+    userCancelled = true;
     // Native resets main on cancelServerConnectivity.
     mainLoaded = false;
     isConnecting = false;
@@ -208,10 +243,20 @@ document.getElementById('connect-form').addEventListener('submit', (e) => {
 // Input change handler
 document.getElementById('address').addEventListener('input', updateButtonState);
 
+// Cancel affordance while connecting (Escape has always worked; the button
+// makes it reachable with a pointer and on a TV remote).
+const cancelButton = document.getElementById('cancel-button');
+cancelButton.innerText = window.cancelButtonText || 'Cancel';
+cancelButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    cancelConnection();
+});
 
 // Enter key handler
 document.addEventListener('keydown', (e) => {
     const address = document.getElementById('address');
+    // The failure dialog owns Enter while it is up.
+    if (document.querySelector('.dialog')) return;
     if (e.key === 'Enter' && !isConnecting && !address.disabled && address.value.trim()) {
         e.preventDefault();
         startConnecting();
@@ -239,14 +284,8 @@ document.addEventListener('keydown', (e) => {
 
         startConnecting();
     } else {
-        const title = document.getElementById('title');
-        const address = document.getElementById('address');
-        const button = document.getElementById('connect-button');
-
-        title.style.visibility = 'visible';
-        address.style.visibility = 'visible';
-        button.style.visibility = 'visible';
-        address.focus();
+        setState('idle');
+        document.getElementById('address').focus();
         updateButtonState();
     }
 })();
