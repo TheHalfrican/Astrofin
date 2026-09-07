@@ -1,4 +1,4 @@
-//! macOS input — NSEvent translation + JellyfinInputView NSView subclass.
+//! macOS input — NSEvent translation + AstrofinInputView NSView subclass.
 //!
 //! The NSView is created by `macos_init` via the
 //! `jfn_input_macos_create_view` extern "C" thunk;
@@ -272,7 +272,7 @@ fn flush_scroll_accumulator() {
 }
 
 // =====================================================================
-// JellyfinInputView — transparent NSView capturing input for CEF.
+// AstrofinInputView — transparent NSView capturing input for CEF.
 // =====================================================================
 
 #[derive(Default)]
@@ -282,7 +282,7 @@ struct ViewIvars {
 
 define_class!(
     #[unsafe(super(NSView))]
-    #[name = "JellyfinInputView"]
+    #[name = "AstrofinInputView"]
     #[ivars = ViewIvars]
     struct InputView;
 

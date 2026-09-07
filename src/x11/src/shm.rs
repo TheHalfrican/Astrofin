@@ -48,7 +48,7 @@ pub fn shm_free(buf: &mut ShmBuffer, conn: Option<&RustConnection>) {
 
 fn attach_memfd(conn: &RustConnection, size: usize) -> Option<(shm::Seg, MmapMut)> {
     let fd = memfd_create(
-        c"jellium-shm",
+        c"astrofin-shm",
         MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING,
     )
     .ok()?;

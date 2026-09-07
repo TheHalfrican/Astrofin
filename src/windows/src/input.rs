@@ -1,7 +1,7 @@
 //! Windows input — Win32 child window owning all keyboard/mouse for CEF.
 //!
 //! Runs on a dedicated thread (spawned by `platform.rs::win_init`);
-//! registers a `JellyfinCefInput` window class, creates a child of mpv's
+//! registers an `AstrofinCefInput` window class, creates a child of mpv's
 //! HWND covering the client area, and translates `WM_*` messages into
 //! the platform-agnostic `jfn_input_dispatch_*` entry points exposed by
 //! `src/input/src/lib.rs`.
@@ -442,7 +442,7 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
-const CLASS_NAME: PCWSTR = w!("JellyfinCefInput");
+const CLASS_NAME: PCWSTR = w!("AstrofinCefInput");
 
 pub(crate) fn jfn_input_windows_run_input_thread(mpv_hwnd: *mut std::ffi::c_void) {
     let mpv = HWND(mpv_hwnd);
@@ -494,7 +494,7 @@ pub(crate) fn jfn_input_windows_run_input_thread(mpv_hwnd: *mut std::ffi::c_void
     let input_hwnd = match input_hwnd {
         Ok(h) => h,
         Err(e) => {
-            tracing::error!("CreateWindowExW(JellyfinCefInput) failed: {e:?}");
+            tracing::error!("CreateWindowExW(AstrofinCefInput) failed: {e:?}");
             STATE.lock().thread_id = 0;
             return;
         }

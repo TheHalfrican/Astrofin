@@ -1,6 +1,6 @@
 //! macOS NSApplication lifecycle + window/display-link/menu init.
 //!
-//! JellyfinApplication NSApplication subclass conforming to CefAppProtocol,
+//! AstrofinApplication NSApplication subclass conforming to CefAppProtocol,
 //! the application menu bar (App + Edit), the CADisplayLink target that
 //! drives external BeginFrame per browser, and the NSWindow.windowShouldClose:
 //! swizzle that routes the WM close button into `jfn_shutdown_initiate`.
@@ -42,7 +42,7 @@ struct InitState {
     /// it as a raw pointer so the Mutex stays `Send`. Lifetime: from
     /// macos_init through macos_cleanup.
     window: *mut AnyObject,
-    /// `JellyfinInputView*` (NSView subclass owned by Rust input crate).
+    /// `AstrofinInputView*` (NSView subclass owned by Rust input crate).
     /// `jfn_input_macos_create_view` returns a +1-retained ref; we hold
     /// it here until cleanup releases.
     input_view: *mut AnyObject,
@@ -50,12 +50,12 @@ struct InitState {
     display_link_target: *mut AnyObject,
     /// `CADisplayLink*` retained instance.
     display_link: *mut AnyObject,
-    /// `JellyfinAppMenuTarget*` retained for process lifetime.
+    /// `AstrofinAppMenuTarget*` retained for process lifetime.
     app_menu_target: *mut AnyObject,
-    /// `JellyfinWakeTarget*` retained for process lifetime — the
+    /// `AstrofinWakeTarget*` retained for process lifetime — the
     /// NSWorkspace/screen-change observer that restarts the display link.
     wake_target: *mut AnyObject,
-    /// `JellyfinLifecycleObserver*` retained for process lifetime —
+    /// `AstrofinLifecycleObserver*` retained for process lifetime —
     /// receives NSApplication hide/unhide + NSWorkspace sleep/wake.
     lifecycle_observer: *mut AnyObject,
 }
@@ -78,7 +78,7 @@ pub fn jfn_macos_get_window() -> *mut AnyObject {
     INIT_STATE.lock().window
 }
 
-/// Returns the `JellyfinInputView*` (non-retaining) so `macos_restack`
+/// Returns the `AstrofinInputView*` (non-retaining) so `macos_restack`
 /// can re-anchor it on top of the CefLayer subviews after a reorder.
 pub fn jfn_macos_get_input_view() -> *mut AnyObject {
     INIT_STATE.lock().input_view
@@ -144,19 +144,19 @@ unsafe fn apply_theme_color_to_window(win: *mut AnyObject, rgb: u32) {
 }
 
 // =====================================================================
-// JellyfinApplication — NSApplication subclass conforming to
+// AstrofinApplication — NSApplication subclass conforming to
 // CefAppProtocol. Stores the BOOL `handlingSendEvent_` in a Cell ivar.
 // =====================================================================
 
 #[derive(Default)]
-struct JellyfinAppIvars {
+struct AstrofinAppIvars {
     handling_send_event: Cell<bool>,
 }
 
 // SAFETY: NSApplication runs on the main thread; instance state is only
 // touched from main.
-unsafe impl Send for JellyfinAppIvars {}
-unsafe impl Sync for JellyfinAppIvars {}
+unsafe impl Send for AstrofinAppIvars {}
+unsafe impl Sync for AstrofinAppIvars {}
 
 extern_class!(
     #[unsafe(super(NSObject))]
@@ -166,11 +166,11 @@ extern_class!(
 
 define_class!(
     #[unsafe(super(NSApplication))]
-    #[name = "JellyfinApplication"]
-    #[ivars = JellyfinAppIvars]
-    struct JellyfinApplication;
+    #[name = "AstrofinApplication"]
+    #[ivars = AstrofinAppIvars]
+    struct AstrofinApplication;
 
-    impl JellyfinApplication {
+    impl AstrofinApplication {
         #[unsafe(method(isHandlingSendEvent))]
         fn is_handling_send_event(&self) -> bool {
             self.ivars().handling_send_event.get()
@@ -221,7 +221,7 @@ define_class!(
     }
 );
 
-/// Attach the `CefAppProtocol` protocol to the `JellyfinApplication` class
+/// Attach the `CefAppProtocol` protocol to the `AstrofinApplication` class
 /// at runtime. The protocol is declared only in CEF's C++ headers; we look
 /// it up by name and add it to the class so
 /// `[NSApp conformsToProtocol:@protocol(CefAppProtocol)]` is true.
@@ -234,22 +234,22 @@ fn attach_cef_app_protocol(cls: &AnyClass) {
 }
 
 // =====================================================================
-// JellyfinAppMenuTarget — wires the App menu's "About" item.
+// AstrofinAppMenuTarget — wires the App menu's "About" item.
 // =====================================================================
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "JellyfinAppMenuTarget"]
-    pub struct JellyfinAppMenuTarget;
+    #[name = "AstrofinAppMenuTarget"]
+    pub struct AstrofinAppMenuTarget;
 
-    impl JellyfinAppMenuTarget {
+    impl AstrofinAppMenuTarget {
         #[unsafe(method(showAbout:))]
         unsafe fn show_about(&self, _sender: *mut AnyObject) {
             jfn_about_open();
         }
     }
 
-    unsafe impl NSObjectProtocol for JellyfinAppMenuTarget {}
+    unsafe impl NSObjectProtocol for AstrofinAppMenuTarget {}
 );
 
 // =====================================================================
@@ -266,10 +266,10 @@ define_class!(
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "JellyfinLifecycleObserver"]
-    pub struct JellyfinLifecycleObserver;
+    #[name = "AstrofinLifecycleObserver"]
+    pub struct AstrofinLifecycleObserver;
 
-    impl JellyfinLifecycleObserver {
+    impl AstrofinLifecycleObserver {
         #[unsafe(method(appDidHide:))]
         unsafe fn app_did_hide(&self, _n: *mut AnyObject) {
             jfn_playback::lifecycle::jfn_lifecycle_set_visible(false);
@@ -288,13 +288,13 @@ define_class!(
         }
     }
 
-    unsafe impl NSObjectProtocol for JellyfinLifecycleObserver {}
+    unsafe impl NSObjectProtocol for AstrofinLifecycleObserver {}
 );
 
 unsafe fn install_lifecycle_observer() {
     unsafe {
-        let observer: Retained<JellyfinLifecycleObserver> =
-            msg_send![JellyfinLifecycleObserver::class(), new];
+        let observer: Retained<AstrofinLifecycleObserver> =
+            msg_send![AstrofinLifecycleObserver::class(), new];
         let observer_obj: *mut AnyObject = Retained::into_raw(observer) as *mut AnyObject;
 
         // App-level hide / unhide arrive via the default notification center.
@@ -342,10 +342,10 @@ unsafe fn install_lifecycle_observer() {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "JellyfinDisplayLinkTarget"]
-    pub struct JellyfinDisplayLinkTarget;
+    #[name = "AstrofinDisplayLinkTarget"]
+    pub struct AstrofinDisplayLinkTarget;
 
-    impl JellyfinDisplayLinkTarget {
+    impl AstrofinDisplayLinkTarget {
         #[unsafe(method(tick:))]
         unsafe fn tick(&self, _link: *mut AnyObject) {
             if jfn_shutting_down() {
@@ -355,7 +355,7 @@ define_class!(
         }
     }
 
-    unsafe impl NSObjectProtocol for JellyfinDisplayLinkTarget {}
+    unsafe impl NSObjectProtocol for AstrofinDisplayLinkTarget {}
 );
 
 // =====================================================================
@@ -370,8 +370,8 @@ define_class!(
 /// down the old one.
 unsafe fn build_display_link(window: *mut AnyObject) -> Option<(*mut AnyObject, *mut AnyObject)> {
     unsafe {
-        let target: Retained<JellyfinDisplayLinkTarget> =
-            msg_send![JellyfinDisplayLinkTarget::class(), new];
+        let target: Retained<AstrofinDisplayLinkTarget> =
+            msg_send![AstrofinDisplayLinkTarget::class(), new];
         let target_obj: *mut AnyObject = Retained::into_raw(target) as *mut AnyObject;
 
         let screen: *mut AnyObject = msg_send![window, screen];
@@ -497,7 +497,7 @@ fn restart_display_link_locked() {
 }
 
 // =====================================================================
-// JellyfinWakeTarget — observer for NSWorkspaceDidWakeNotification and
+// AstrofinWakeTarget — observer for NSWorkspaceDidWakeNotification and
 // NSApplicationDidChangeScreenParametersNotification. Both leave the
 // screen-bound CADisplayLink stale (the display it was attached to slept
 // or was reconfigured); restarting the link against the window's current
@@ -506,10 +506,10 @@ fn restart_display_link_locked() {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "JellyfinWakeTarget"]
-    pub struct JellyfinWakeTarget;
+    #[name = "AstrofinWakeTarget"]
+    pub struct AstrofinWakeTarget;
 
-    impl JellyfinWakeTarget {
+    impl AstrofinWakeTarget {
         #[unsafe(method(displayLinkNeedsRestart:))]
         unsafe fn display_link_needs_restart(&self, _note: *mut AnyObject) {
             tracing::info!(
@@ -520,7 +520,7 @@ define_class!(
         }
     }
 
-    unsafe impl NSObjectProtocol for JellyfinWakeTarget {}
+    unsafe impl NSObjectProtocol for AstrofinWakeTarget {}
 );
 
 /// Subscribe to the system wake and screen-reconfiguration notifications
@@ -528,7 +528,7 @@ define_class!(
 /// `macos_init`; the target is retained for the process lifetime.
 unsafe fn start_wake_observer(state: &mut InitState) {
     unsafe {
-        let target: Retained<JellyfinWakeTarget> = msg_send![JellyfinWakeTarget::class(), new];
+        let target: Retained<AstrofinWakeTarget> = msg_send![AstrofinWakeTarget::class(), new];
         let target_obj: *mut AnyObject = Retained::into_raw(target) as *mut AnyObject;
         state.wake_target = target_obj;
 
@@ -818,7 +818,7 @@ pub fn macos_cleanup() {
 }
 
 // =====================================================================
-// macos_early_init — install JellyfinApplication as the NSApp instance,
+// macos_early_init — install AstrofinApplication as the NSApp instance,
 // set the activation policy, build the App + Edit menu bar.
 // =====================================================================
 
@@ -826,9 +826,9 @@ pub fn macos_early_init() {
     unsafe {
         // Attach CefAppProtocol to our subclass before -sharedApplication
         // is called so CEF's runtime conforms-to check passes.
-        attach_cef_app_protocol(JellyfinApplication::class());
+        attach_cef_app_protocol(AstrofinApplication::class());
 
-        let app_obj: *mut AnyObject = msg_send![JellyfinApplication::class(), sharedApplication];
+        let app_obj: *mut AnyObject = msg_send![AstrofinApplication::class(), sharedApplication];
 
         // Install Apple-event reopen handler (Dock click etc.).
         let ae_mgr: *mut AnyObject =
@@ -869,7 +869,7 @@ pub fn macos_early_init() {
 
         // Allocate the App menu target (kept alive for process lifetime
         // via INIT_STATE).
-        let mt: Retained<JellyfinAppMenuTarget> = msg_send![JellyfinAppMenuTarget::class(), new];
+        let mt: Retained<AstrofinAppMenuTarget> = msg_send![AstrofinAppMenuTarget::class(), new];
         let mt_obj: *mut AnyObject = Retained::into_raw(mt) as *mut AnyObject;
         INIT_STATE.lock().app_menu_target = mt_obj;
 
