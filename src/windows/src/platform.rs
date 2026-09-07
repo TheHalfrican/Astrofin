@@ -14,12 +14,14 @@ use std::thread::JoinHandle;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
     IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE,
     WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
 };
+use windows::core::{PCWSTR, w};
 
 use jfn_mpv::api::{
     jfn_mpv_set_fullscreen, jfn_mpv_set_window_maximized, jfn_mpv_set_window_minimized,
@@ -198,7 +200,25 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
     unsafe { CallNextHookEx(Some(hook), n_code, wp, lp) }
 }
 
-pub(crate) fn win_early_init() {}
+/// Explicit AppUserModelID for this process.
+///
+/// Must match the canonical app id used elsewhere in the tree (see
+/// `src/wayland/src/root_window.rs`'s `APP_ID` and the packaging
+/// `io.github.thehalfrican.Astrofin.*` files). Duplicated as a literal
+/// because `jfn-windows` has no dependency edge to those crates.
+const APP_USER_MODEL_ID: PCWSTR = w!("io.github.thehalfrican.Astrofin");
+
+/// Runs before any window exists (see `platform_install::install_early`).
+///
+/// Pins the process AppUserModelID so the taskbar, jump lists and SMTC
+/// key off Astrofin's own identity instead of inheriting one from the
+/// launching shell — which would otherwise let a side-by-side
+/// `jellium-desktop` install share our taskbar button and media session.
+pub(crate) fn win_early_init() {
+    if let Err(e) = unsafe { SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID) } {
+        tracing::warn!("SetCurrentProcessExplicitAppUserModelID failed: {e:?}");
+    }
+}
 
 pub(crate) fn win_init(_mpv: *mut c_void) -> bool {
     let Some(hwnd) = win_ensure_hwnd() else {
