@@ -458,9 +458,9 @@ dependencies = [
 
 [[package]]
 name = "cef"
-version = "151.3.0+151.3.16"
+version = "151.8.1+151.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56405681605700c0f7df06525f0408da36152b410ec15b8b9b02427b33b87ca0"
+checksum = "3d4fbc354286b45619122580b769f6cff53ed19565fe10359253ae4c235495db"
 dependencies = [
  "cef-dll-sys",
  "libloading 0.9.0",
@@ -470,9 +470,9 @@ dependencies = [
 
 [[package]]
 name = "cef-dll-sys"
-version = "151.3.0+151.3.16"
+version = "151.8.1+151.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b326bbd82c2b02d5eb001bbbb58e343d9b4f36faf3bb919d97f95c89106a46e"
+checksum = "d073a3cd9fb40877a1ae38560cf5df2bb4601e02198880b61ef5476a8e28c35e"
 dependencies = [
  "anyhow",
  "cmake",
@@ -810,7 +810,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -971,7 +971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1565,7 +1565,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a791e6620676a875f362f3156ed213e73ca099a09bf992c18812abe65cc37b1"
 dependencies = [
  "bstr",
- "hashbrown 0.17.1",
+ "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -3110,7 +3110,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3385,7 +3385,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3851,7 +3851,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4295,7 +4295,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5226,7 +5226,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
