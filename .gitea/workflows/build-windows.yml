@@ -1,0 +1,91 @@
+# Gitea Actions workflow (Gitea ignores .github/workflows when this folder exists).
+#
+# Runs on the self-hosted act_runner "noahm-pc" (label windows-latest, host mode),
+# which already has Visual Studio Build Tools, MSYS2 (C:\msys64) and Rust installed.
+# Instead of re-downloading CEF and rebuilding libmpv on every run, the job links
+# .cache/, third_party/mpv-install and build/ to a persistent cache directory on
+# the runner, so a typical run is an incremental cargo build.
+#
+# Windows arm64 and macOS builds are GitHub-only (see .github/workflows); there is
+# no runner for them here.
+name: build-windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ gitea.workflow }}-${{ gitea.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      RUNNER_CACHE_ROOT: C:\Users\NoahM\act_runner\cache\astrofin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Link persistent caches into the workspace
+        shell: pwsh
+        run: |
+          $root = $env:RUNNER_CACHE_ROOT
+          $mpvSha = (git -C third_party/mpv rev-parse HEAD).Trim()
+          $links = @(
+            @{ link = '.cache';                   target = "$root\cache" },
+            @{ link = 'build';                    target = "$root\build" },
+            @{ link = 'third_party\mpv-install';  target = "$root\mpv-install-$mpvSha" }
+          )
+          foreach ($l in $links) {
+            New-Item -ItemType Directory -Force $l.target | Out-Null
+            if (Test-Path $l.link) { Remove-Item -Recurse -Force $l.link }
+            New-Item -ItemType Junction -Path $l.link -Target $l.target | Out-Null
+            "linked $($l.link) -> $($l.target)"
+          }
+
+      - name: Build libmpv (skipped when the cache for this submodule commit exists)
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          pwsh -ExecutionPolicy Bypass -File dev\windows\build_mpv_source.ps1 -Arch x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Fetch CEF (cached)
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          cargo xtask fetch-cef
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Lint (fmt + clippy) and test
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          . dev\windows\env.ps1
+          cargo fmt --manifest-path src/Cargo.toml --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src/Cargo.toml --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          . dev\windows\env.ps1
+          cargo xtask package --external-mpv "$PWD\third_party\mpv-install" --prefix build/install --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*.zip
