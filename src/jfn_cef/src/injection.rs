@@ -283,10 +283,6 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::MpvAudioPlayer,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
-    // After native-shim.js: the theme reads `window.jmpInfo` for the Home
-    // server panel and expects the shim's `<meta name="theme-color">` observer
-    // to already be armed.
-    InjectedScript::AstrofinTheme,
 ];
 
 const WEB_STYLES: &[InjectedStyle] = &[
@@ -557,6 +553,12 @@ pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Optio
                     .copied()
                     .map(InjectedScript::from_menu),
             );
+            // Appended after csd.js and the platform menu scripts so it really
+            // is last in the single execute_java_script bundle. It also has to
+            // come after native-shim.js: it reads `window.jmpInfo` for the Home
+            // server panel and expects the shim's `<meta name="theme-color">`
+            // observer to already be armed.
+            extra_info.scripts.push(InjectedScript::AstrofinTheme);
             Some(extra_info)
         }
         "overlay" => Some(build_extra_info(

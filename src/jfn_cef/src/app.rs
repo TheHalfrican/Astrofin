@@ -592,12 +592,15 @@ fn inject_jmp_native(browser: &mut Browser, profile: &ExtraInfo, context: &mut V
 }
 
 /// Builds the JS preamble that installs the profile's stylesheets as a single
-/// `<style id="af-theme">`. Runs at `OnContextCreated`, i.e. before the page's
-/// own `<head>` is finished and long before its stylesheets load, so the
-/// element is parked on `documentElement` first and moved to the end of
-/// `<head>` at DOMContentLoaded. `astrofin-theme.js` keeps it last in `<head>`
-/// afterwards, because jellyfin-web appends chunk stylesheets lazily and would
-/// otherwise win the cascade on equal specificity.
+/// `<style id="af-theme">`. Runs at `OnContextCreated`, i.e. before the page
+/// has been parsed and long before its own stylesheets load, so the element is
+/// parked in `<head>` (or, if there is no root yet, on the first mutation that
+/// creates one).
+///
+/// From DOMContentLoaded on, `astrofin-theme.js` owns its position and moves it
+/// to the end of `<body>`: jellyfin-web appends a chunk stylesheet per lazily
+/// loaded route *and* serves `themes/<name>/theme.css` from a `<div>` inside
+/// `<body>`, which no position in `<head>` can outrank at equal specificity.
 ///
 /// `None` when the profile declares no styles.
 fn styles_preamble(profile: &ExtraInfo) -> Option<String> {

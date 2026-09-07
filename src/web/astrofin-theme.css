@@ -196,6 +196,30 @@ html.af-video #af-hint {
   display: none !important;
 }
 
+/* The .withBackdrop scrim below is (0,2,0) and would outrank jellyfin-web's
+ * own `.backgroundContainer-transparent { background-color: transparent }`
+ * (0,1,0). Today only clearBackdrop() dropping .withBackdrop keeps the video
+ * visible, and there is a window on the fullscreen path between
+ * .videoPlayerContainer being inserted and setTransparency(2) landing where
+ * that has not happened yet. Force it transparent from the video gates so the
+ * scrim can never paint over mpv. */
+html.transparentDocument .backgroundContainer,
+html.af-video .backgroundContainer,
+html.transparentDocument .backgroundContainer.withBackdrop,
+html.af-video .backgroundContainer.withBackdrop {
+  background-color: transparent !important;
+}
+
+/* Same hole, one layer up. `html` is painted --af-bg-base above and is lifted
+ * by jellyfin-web's own `.transparentDocument`, which on the fullscreen path
+ * only lands once setTransparency(2) runs - the root canvas would be opaque
+ * over mpv until then. Measured in the real app: with .videoPlayerContainer
+ * present but transparentDocument not yet set, computed html background was
+ * rgb(7, 10, 20). Gate it on af-video as well. */
+html.af-video {
+  background-color: transparent !important;
+}
+
 #af-space > * {
   position: absolute;
   pointer-events: none;
@@ -240,7 +264,13 @@ html.af-video #af-hint {
   inset: 0;
 }
 
-/* Two stacked art layers, crossfaded by astrofin-theme.js. */
+/* Two stacked art layers, crossfaded by astrofin-theme.js.
+ *
+ * The art is heavily desaturated and dimmed before it ever reaches the scrim:
+ * jellyfin-web's Home is full of high-chroma poster art, and at full
+ * saturation a 38px blur turns it into large yellow/green blobs that have
+ * nothing to do with the Astrofin palette. What survives is luminance and a
+ * trace of hue, which the tint below then pulls back towards the scheme. */
 .af-backdrop-layer {
   position: absolute;
   inset: -6%;
@@ -248,13 +278,14 @@ html.af-video #af-hint {
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
+  filter: saturate(.32) brightness(.5) contrast(.92);
   transform: scale(var(--af-backdrop-scale-from));
   transition:
     opacity var(--af-dur-backdrop) var(--af-ease-out) var(--af-backdrop-hold),
     transform var(--af-dur-backdrop) var(--af-ease-focus) var(--af-backdrop-hold);
 }
 .af-backdrop-layer.af-on {
-  opacity: .9;
+  opacity: .5;
   transform: scale(1);
 }
 
@@ -270,7 +301,19 @@ html.af-video #af-hint {
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--af-scrim-vertical);
+  background:
+    radial-gradient(
+      72% 62% at 74% 8%,
+      rgba(var(--af-accent-secondary-rgb), .13),
+      rgba(var(--af-accent-secondary-rgb), 0) 70%
+    ),
+    radial-gradient(
+      60% 55% at 12% 96%,
+      rgba(var(--af-accent-primary-rgb), .07),
+      rgba(var(--af-accent-primary-rgb), 0) 72%
+    ),
+    var(--af-scrim-vertical),
+    rgba(var(--af-bg-base-rgb), .58);
 }
 
 /* ===================================================================== */
@@ -785,11 +828,17 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
 /* below .videoPlayerContainer (1000).                                     */
 /* ===================================================================== */
 
-#af-spotlight,
 #af-server-panel,
 #af-hint {
   position: fixed;
   z-index: 900;
+  /* Chrome that must never intercept a click meant for a card. */
+  pointer-events: none;
+}
+
+#af-spotlight,
+#af-server-panel,
+#af-hint {
   box-sizing: border-box;
   opacity: 0;
   transition: opacity var(--af-dur-overlay-out) var(--af-ease-in);
@@ -807,33 +856,40 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   transition-timing-function: var(--af-ease-out);
 }
 
+/* In flow, inserted by astrofin-theme.js immediately after the section that
+ * holds the focused card. jellyfin-web stacks several rails where the design
+ * has one, so a viewport-fixed panel would always cover a rail; a block in the
+ * rail stream covers nothing and needs no scrim.
+ *
+ * The min-height is what keeps moving the panel between sections from
+ * jittering: the content is clamped (1-line title, 2-line overview) so it
+ * always fits inside the band, and the band is the same height wherever the
+ * panel lands. 3.3% matches jellyfin-web's own .emby-scroller gutter, so the
+ * panel lines up with the rails rather than the design's nominal 72px. */
 #af-spotlight {
-  left: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
-  bottom: clamp(24px, 6vh, var(--af-gutter));
-  width: min(760px, 56vw);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* Comfortably above the tallest content the clamps below allow, so the
+   * band is the same height for a movie with an overview and a library
+   * without one - that is what stops the rails jumping as the panel moves. */
+  min-height: clamp(220px, 33vh, 360px);
+  padding: clamp(12px, 2.5vh, 32px) 3.3%;
   outline: none;
 }
 
-/* jellyfin-web stacks rails down the whole page, so on anything shorter than
- * the design's 1080 the spotlight sits over the lower rails. Its own scrim
- * keeps the panel legible instead of fighting the tiles behind it. */
-#af-spotlight::before {
-  content: "";
-  /* Fixed, so it is measured against the viewport rather than the panel box:
-   * the scrim has to reach well past the panel to swallow the tiles behind it.
-   * #af-spotlight already carries z-index 900, so -1 keeps this behind the
-   * panel's own content but above the page. */
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background: radial-gradient(
-    88% 88% at 0% 100%,
-    rgba(var(--af-bg-base-rgb), .97) 0%,
-    rgba(var(--af-bg-base-rgb), .88) 34%,
-    rgba(var(--af-bg-base-rgb), .52) 60%,
-    rgba(var(--af-bg-base-rgb), 0) 84%
-  );
-  pointer-events: none;
+/* Item swap: opacity only, so the panel never changes height mid-fade. */
+.af-sp-body {
+  transition: opacity var(--af-dur-tile) var(--af-ease-out);
+}
+.af-sp-body.af-sp-swap {
+  opacity: 0;
+}
+
+/* .af-btn is inline-flex and .af-sp-overview is -webkit-box, both of which
+ * beat the UA `[hidden] { display: none }`, so restate it. */
+#af-spotlight [hidden] {
+  display: none !important;
 }
 
 .af-sp-title {
@@ -843,7 +899,9 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   color: var(--af-text-primary);
   text-wrap: pretty;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  /* One line: the band has a fixed height, so a title that could wrap to two
+   * would change it and make the panel jump as it moves between sections. */
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -853,6 +911,10 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 22px;
+  /* One row. Chips are ordered most-useful-first, so clipping the tail on a
+   * narrow window costs little and keeps the band height constant. */
+  max-height: 34px;
+  overflow: hidden;
 }
 .af-sp-chips:empty {
   display: none;
@@ -864,7 +926,7 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   font: var(--af-type-body-lg);
   color: var(--af-text-muted);
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -876,6 +938,7 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
 }
 
 .af-btn {
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
   gap: 12px;
@@ -913,6 +976,7 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
 }
 
 #af-server-panel {
+  position: fixed;
   right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
   bottom: clamp(24px, 6vh, var(--af-gutter));
   width: 300px;
@@ -968,8 +1032,9 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   color: var(--af-text-muted);
 }
 
-/* Short viewports (720p and the like): the spotlight has to share the screen
- * with the first rail, so it sheds the overview and drops a type step. */
+/* Short viewports (720p and the like): keep the in-flow band shallow so it
+ * costs less of the rail stream, and keep the fixed server panel off the
+ * cards entirely. */
 @media (max-height: 900px) {
   .af-sp-title {
     font: var(--af-type-title);
@@ -981,11 +1046,9 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
   .af-sp-overview { display: none; }
   #af-server-panel { display: none; }
 }
-/* Below the height the panel needs to read at all, drop it and leave the
- * plain themed rails. Above this the spotlight stays, overlapping the lower
- * rails the way the PS5 layout does — its own scrim keeps it legible. */
+/* The hint footer is fixed, so on a very short window it is the one thing
+ * that can still sit on a card. The in-flow spotlight never needs hiding. */
 @media (max-height: 560px) {
-  #af-spotlight,
   #af-hint { display: none !important; }
 }
 

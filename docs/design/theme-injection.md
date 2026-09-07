@@ -40,8 +40,12 @@ WEB_SCRIPTS: &[InjectedScript] run_user_scripts(..)     ─┘
   `run_user_scripts()` prepends it to the script bundle. The prepend happens
   *after* placeholder substitution (`__SERVER_URL__` and friends) so stylesheet
   bytes can never swallow a replacement.
-* **`src/web/astrofin-theme.js`** — runs last in `WEB_SCRIPTS` and owns the
-  element's position from then on, plus everything dynamic.
+* **`src/web/astrofin-theme.js`** — owns the element's position from
+  DOMContentLoaded on, plus everything dynamic. `build_for_kind` pushes it
+  after `csd.js` and the platform menu scripts so it is genuinely the last
+  entry in the bundle; it is also wrapped in a top-level try/catch, because
+  the whole bundle is one `execute_java_script` call and a throw at that
+  level would abort whatever follows.
 
 The whole thing runs before jellyfin-web's own bundles and before
 `DOMContentLoaded`, and again on every navigation that creates a new V8 context.
@@ -95,7 +99,7 @@ Two independent gates, both keyed in CSS:
 
 | Gate | Set by | When |
 | --- | --- | --- |
-| `html.transparentDocument` | jellyfin-web's `setBackdropTransparency(1\|2)` (`Dashboard.setBackdropTransparency`) | `mpv-video-player.js` calls it on playback start (`setTransparency(2)`) and clears it on stop |
+| `html.transparentDocument` | jellyfin-web's `setBackdropTransparency` (`Dashboard.setBackdropTransparency`) | `mpv-video-player.js` calls it on playback start (`setTransparency(2)`) and clears it on stop. Re-checked in the 10.11.11 bundle: **both** the `Full`/`2` and the `Backdrop`/`1` branches add the class; only level `0` removes it |
 | `html.af-video` | `astrofin-theme.js`, from a `MutationObserver` on `body` childList | while a `.videoPlayerContainer` exists |
 
 Either one sets `display: none !important` on `#af-space`, `#af-spotlight`,
@@ -107,10 +111,17 @@ Rules that make this safe:
   jellyfin-web's own inline `.transparentDocument { background: 0 0 !important }`
   (in `index.html`'s `<head>`) outranks it during playback.
 * `body` is never given a background.
-* `.backgroundContainer` is forced transparent; `.backgroundContainer.withBackdrop`
-  keeps a scrim, but in `rgba(var(--af-bg-base-rgb), .86)` instead of jellyfin's
-  black — it is already neutralised during playback by
-  `.backgroundContainer-transparent`.
+* `.backgroundContainer` is forced transparent. `.backgroundContainer.withBackdrop`
+  keeps a scrim, in `rgba(var(--af-bg-base-rgb), .86)` instead of jellyfin's
+  black, so details and live-TV pages stay legible over item art. That rule is
+  (0,2,0) and would outrank jellyfin-web's own
+  `.backgroundContainer-transparent { background-color: transparent }` (0,1,0),
+  so it is **not** safe to rely on `.backgroundContainer-transparent` alone:
+  on the fullscreen path there is a window between `.videoPlayerContainer`
+  being inserted and `setTransparency(2)` landing where `withBackdrop` may
+  still be set. Both video gates therefore force
+  `.backgroundContainer` **and** `.backgroundContainer.withBackdrop` to
+  `transparent !important`.
 * `.backdropContainer` is only faded (`opacity: 0` under `html.af-backdrop`),
   never hidden, so removing the class restores it.
 * `.mpvPoster` is never touched and stays opaque `#000` from its inline style.
@@ -128,7 +139,8 @@ layers are `display: none`, and `.mpvPoster` is `rgb(0,0,0)`.
 | `.backdropContainer` (jellyfin-web) | `-1` | its own value; faded under `html.af-backdrop` |
 | `.backgroundContainer` (jellyfin-web) | auto | forced transparent |
 | page content, `.mainAnimatedPage` | 0 | |
-| `#af-spotlight`, `#af-server-panel`, `#af-hint` | `900` | `#af-spotlight::before` is the scrim at `-1` inside that context |
+| `#af-server-panel`, `#af-hint` | `900` | fixed, `pointer-events: none` |
+| `#af-spotlight` | — | in flow inside `#homeTab .homeSectionsContainer`, not positioned |
 | `.skinHeader` | `999` | jellyfin-web's own value |
 | `.videoPlayerContainer` | `1000` | inline style from `mpv-video-player.js` when fullscreen |
 
@@ -224,25 +236,71 @@ On Home only (`html.af-home`):
 
 * `focusin` (capture) and a 120 ms-debounced `mouseover` pick the active
   `.card[data-id]` inside `#homeTab`; it gets `.af-focused`.
-* The item is fetched once and cached, then:
+* The item is fetched once (cache capped at 64 entries, oldest dropped), then:
   * `#af-backdrop`'s two layers crossfade over `--af-dur-backdrop` with the
     `--af-backdrop-scale-from` → 1 scale and a `--af-backdrop-hold` delay. Art
     preference: `BackdropImageTags` → `ParentBackdropItemId` +
     `ParentBackdropImageTags` → `ImageTags.Primary`. The image is preloaded
     before the swap; a load error clears the backdrop rather than flashing.
-  * `#af-spotlight` renders title (series name for episodes), chips (episode
-    name, `S… · E…`, year, runtime, resolution, HDR, `★ rating`,
-    `left N m` / `New`), a 3-line overview and Play/Resume + Details.
-* `#af-server-panel` shows `ApiClient.serverName()` plus Mode/Decode rows sourced
+    The art is desaturated and dimmed (`saturate(.32) brightness(.5)`, layer
+    opacity `.5`) and the scrim adds a base wash plus accent blooms — at full
+    strength jellyfin-web's high-chroma poster art blurs into large yellow and
+    green blobs that belong to no part of the Astrofin palette.
+  * `#af-spotlight` renders title (series name for episodes), chips, a 2-line
+    overview and the actions.
+* **The spotlight is an in-flow block, not a fixed overlay.** jellyfin-web
+  stacks several rails where the design has one, so a viewport-fixed panel
+  always covers a rail. `placeSpotlight()` inserts it into
+  `#homeTab .homeSectionsContainer` immediately after the `.verticalSection`
+  holding the focused card (defaulting to the first section that is not `.hide`
+  and has cards). Two things make that stable:
+  * a `min-height` of `clamp(220px, 33vh, 360px)` with the content clamped
+    (1-line title, one row of chips, 2-line overview) so the band is the same
+    height for every item and moving it does not change the page height; and
+  * a pointer guard — relocating reflows the rails under a stationary cursor,
+    which fires a fresh `mouseover` on whatever slides underneath, so hover is
+    ignored until a real `mousemove` arrives. Without it one hover cascades
+    down the page.
+* Item changes fade `.af-sp-body` on opacity only, over `--af-dur-tile` read
+  from the token (so `prefers-reduced-motion` applies). `writeSpotlight()`
+  clears the fade class itself, not only the timer that queued it.
+* **Actions target the item the panel is showing** (`shownCard`/`shownItem`),
+  never the synchronously-set `focusedCard`: the panel only repaints once
+  `fetchItem()` resolves, so on a slow server the two differ and Play would
+  otherwise start the wrong item.
+  * Folder-like types (`CollectionFolder`, `UserView`, `Folder`, `BoxSet`,
+    `Season`, `Playlist`) get a single **Browse** action that clicks the card's
+    own `[data-action="link"]` element, a `ChildCount` chip if present, no
+    overview, no Details, and none of the NEW / remaining-time chips — a
+    library is browsed, not played.
+  * Playable types get **Resume**/**Play**, which clicks the card's own
+    `.cardOverlayButton[data-action="resume"|"play"]` / `.cardOverlayFab-primary`
+    so jellyfin-web owns resume offsets and media-source selection. Measured on
+    the reference server: 21 of 21 playable Home cards carry one. The fallback
+    for a rail that does not is a throwaway `.itemAction[data-action=…]`
+    appended to the card and clicked, borrowing the same delegation contract;
+    it is unexercised there.
+* The panel is kept out of controller and keyboard navigation: jf-web 10.11.11's
+  `focusManager` builds its focusable set from
+  `INPUT/TEXTAREA/SELECT/BUTTON/A` + `:not([tabindex="-1"]):not(:disabled)`
+  plus `.focusable`, and `autoFocus()` additionally skips `.noautofocus`. The
+  two buttons carry both `tabindex="-1"` and `noautofocus`; verified live that
+  0 of 2 are visible to that selector. They stay fully usable with the mouse.
+* `#af-server-panel` and `#af-hint` stay fixed (bottom-right and bottom) and are
+  `pointer-events: none` so they can never swallow a click meant for a card.
+  The server panel shows `ApiClient.serverName()` plus Mode/Decode rows sourced
   from `window.jmpInfo`; rows that cannot be sourced honestly are omitted (in a
-  plain browser, where `jmpInfo` does not exist, only the name shows).
-* Panels hide when the user scrolls more than 35 % of a viewport down, when the
-  route leaves Home, or in video mode.
-* Below `560px` viewport height the spotlight and hint are dropped entirely;
-  below `900px` the overview and the server panel are dropped and the title steps
-  down to `--af-type-title`. `#af-spotlight::before` is a viewport-anchored
-  radial scrim so the panel stays legible where it overlaps the lower rails —
-  which it does by design, the way the PS5 layout does.
+  plain browser, where `jmpInfo` does not exist, only the name shows). It is
+  dropped below `900px` viewport height so it never overlaps rail cards at 720p;
+  `#af-hint` is dropped below `560px`.
+* Panels hide when the route leaves Home or in video mode. There is no scroll
+  rule: in flow, the spotlight covers nothing.
+* The `.mainAnimatedPages` subtree observer **ignores mutations originating
+  inside `#af-spotlight`**. The panel now lives in that subtree, so without the
+  filter its own repaint schedules a refresh, which repaints, which schedules a
+  refresh — an unbounded loop that also left the fade class permanently on.
+  `refresh()` never starts a fade for the same reason; only a genuine item
+  change animates.
 
 Everything is wrapped so it cannot throw, uses passive listeners where the event
 allows, never calls `preventDefault`, and never moves focus.
