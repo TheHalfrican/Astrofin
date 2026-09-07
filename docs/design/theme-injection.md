@@ -181,6 +181,41 @@ clicks this so jellyfin-web owns resume offsets and media-source selection),
 `.innerCardFooter`, `.itemProgressBar`, `.itemProgressBarForeground`,
 `.defaultCardBackground1…5`.
 
+### Card focus ring: what clips it
+
+Four jf-web rules decide whether the ring survives, and all four had to be
+answered. Measured in the running app at 1920×1080.
+
+* `.card:not(.show-animation) { contain: layout style paint }` — **paint
+  containment clips the ring**. Combined with
+  `[dir=ltr] .itemsContainer > .card > .cardBox { margin-left: 0; margin-right: 1.2em }`,
+  the tile is flush with the card's left edge (card and `.cardScalable` both at
+  x=63) with 19px of slack only on the right, so the scaled tile, its 3px ring
+  and its 44px glow are cut on the **left** first. The theme restates the same
+  selector with `contain: layout style`, dropping paint only.
+* `contain: layout` makes `.card` a stacking context, so a `z-index` on
+  `.cardScalable` can never beat the next sibling card. The focused card itself
+  takes `position: relative; z-index: 3`.
+* `.cardBox:not(.visualCardBox) .cardPadder { border-radius: .2em }` (0,3,0) and
+  `.card.show-focus:not(.show-animation) … .cardScalable { border-radius: .7em;
+  border: .5em solid transparent }` (0,4,0) both outrank a plain `.card X`
+  (0,2,0), which is why the tile radius is `!important` — verified by removing
+  it and watching `.cardPadder` come back at 3.2px. The `.show-focus` border is
+  separately zeroed, or the tile would shrink 8px a side the moment keyboard
+  focus mode engages.
+* **Nothing above the card clips.** `.itemsContainer`, `.emby-scroller`,
+  `.verticalSection`, `.homeSectionsContainer` and `#homeTab` are all
+  `overflow: visible` with `contain: none`; on a library page `#moviesPage` is
+  `contain: size style` (no paint) and only `body` clips, at the viewport. So no
+  scroller padding or negative-margin trick is needed — jf-web's own
+  `.padded-top-focusscale` / `.padded-bottom-focusscale` on `.emby-scroller`
+  only do anything under `.layout-tv`.
+
+Verified on Home backdrop rails (`overflowBackdropCard`) and on a library grid
+(`.itemsContainer.vertical-wrap`, `portraitCard`), where the scaled tile
+measures 5px outside the card box on the left — the overhang that used to be
+clipped away.
+
 **Buttons / inputs**
 `.emby-button`, `.raised`, `.button-submit`, `.button-delete`, `.fab`,
 `.paper-icon-button-light`, `.emby-button.show-focus:focus`, `.button-link` and

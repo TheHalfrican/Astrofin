@@ -417,19 +417,84 @@ html.af-video {
 /* never on .card itself — hence :focus-within.                            */
 /* ===================================================================== */
 
+/* Paint containment is what clips the focus ring.
+ *
+ * jf-web 10.11.11 ships `.card:not(.show-animation) { contain: layout style
+ * paint }`. Paint containment clips everything that escapes the card's own
+ * box, and `[dir=ltr] .itemsContainer > .card > .cardBox` has `margin-left: 0`
+ * with `margin-right: 1.2em` — so the tile is flush with the card's left edge
+ * and the scaled tile, its ring and its glow are cut off on the LEFT first
+ * (measured: card and .cardScalable both at x=63, 19px of slack on the right).
+ *
+ * Keep layout and style containment, drop paint. The selector matches
+ * jf-web's exactly so it wins on order rather than needing !important; this
+ * sheet is kept last in the document by astrofin-theme.js. */
+.card:not(.show-animation) {
+  contain: layout style;
+}
+
+/* Nothing above the card clips: measured in the real app, .itemsContainer,
+ * .emby-scroller, .verticalSection, .homeSectionsContainer and #homeTab are
+ * all `overflow: visible` with no containment, so the ring and the 44px glow
+ * have room at the rail's edges once the card stops clipping them. (jf-web's
+ * own .padded-top-focusscale / .padded-bottom-focusscale on .emby-scroller
+ * only do anything under .layout-tv, and are not needed here.)
+ *
+ * The focused card does have to paint above its siblings, though, or the next
+ * card in the rail covers the right of the ring. Raising .cardScalable alone
+ * cannot work: `contain: layout` makes .card itself a stacking context, so the
+ * z-index has to go on the card. */
+.card:hover,
+.card:focus-within,
+.card.af-focused {
+  position: relative;
+  z-index: 3;
+}
+
 .card .cardBox {
   background: transparent;
   border: 0;
 }
 
+/* Every layer inside the tile shares the tile radius. jf-web gives .cardContent
+ * (which .cardImageContainer also carries), the .cardPadder placeholder and the
+ * blurhash canvas a .2em radius, and those near-square corners poke out through
+ * the corners of the 14px ring.
+ *
+ * !important rather than mirrored selectors: two of jf-web's rules outrank a
+ * plain `.card X` (0,2,0) and they disagree with each other, so matching them
+ * one by one would mean carrying its selector shapes forever —
+ *   .cardBox:not(.visualCardBox) .cardPadder { border-radius: .2em }   (0,3,0)
+ *   .card.show-focus:not(.show-animation) .cardBox:not(.visualCardBox)
+ *     .cardScalable { border-radius: .7em }                            (0,4,0)
+ * Measured: without !important the padder came back at 3.2px.
+ *
+ * `.cardPadder` matches every aspect variant — .cardPadder-overflowBackdrop,
+ * -portrait, -square, -banner and friends all carry the base class — so this
+ * covers portrait, backdrop, square and banner cards alike. */
 .card .cardScalable,
 .card .cardImageContainer,
-.card .cardPadder {
-  border-radius: var(--af-radius-tile);
+.card .cardContent,
+.card .cardPadder,
+.card .blurhash-canvas,
+.card .cardOverlayContainer {
+  border-radius: var(--af-radius-tile) !important;
+}
+
+/* The same .show-focus rule also hangs a .5em transparent border on the tile as
+ * jf-web's own focus affordance. Ours is the box-shadow ring, and that border
+ * would shrink the tile by 8px a side the moment keyboard focus mode engages. */
+.card.show-focus .cardBox.visualCardBox,
+.card.show-focus .cardBox:not(.visualCardBox) .cardScalable {
+  border: 0;
 }
 
 .card .cardScalable {
   position: relative;
+  /* Clips whatever else jf-web paints inside the tile to the rounded box.
+   * It does not clip the ring: overflow never clips an element's own
+   * box-shadow, only its descendants. */
+  overflow: hidden;
   border-radius: var(--af-radius-tile);
   box-shadow: var(--af-focus-ring-rest);
   transform: translateZ(0);
@@ -444,7 +509,6 @@ html.af-video {
   transform: scale(var(--af-tile-scale));
   box-shadow: var(--af-focus-ring-tile);
   transition-duration: var(--af-dur-tile), var(--af-dur-ring-in);
-  z-index: 2;
 }
 
 /* jf-web 10.11.11 theme-dark paints a blue border on .card:focus — drop it,
