@@ -1,186 +1,502 @@
+/* Astrofin server-connect screen.
+ *
+ * Visual language: docs/design/Astrofin.dc.html artboard 1c (starfield +
+ * nebula glow, frosted glass, Sora display type, cyan pill primary).
+ * Every value comes from src/web/astrofin-tokens.css (--af-*); nothing
+ * here hard-codes a color, a duration or a motion offset, so the
+ * reduced-motion token overrides in that sheet apply automatically.
+ */
+
 * {
     box-sizing: border-box;
 }
+
+html,
 body {
-    background: var(--bg-color);
-    color: #ddd;
-    color: rgba(255, 255, 255, 0.8);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    font-size: 1em;
-    padding: 1em;
-    animation: fadeIn 0.20s ease-in;
+    height: 100%;
 }
-.logo {
-    max-width: 500px;
-    margin-bottom: 2em;
-    margin-left: auto;
-    margin-right: auto;
+
+body {
+    margin: 0;
+    /* Opaque: the CEF browser is transparent over the native root window. */
+    background: var(--af-bg-base);
+    color: var(--af-text-primary);
+    font: var(--af-type-body);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: fadeIn var(--af-dur-page) var(--af-ease-page) both;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Starfield + nebula --------------------------------------------- */
+
+.af-sky {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.af-stars {
+    position: absolute;
+    /* Bleed wider than the largest drift offset (-140px) so the drifted
+       layer never exposes a starless edge. */
+    inset: -160px;
+    background-repeat: no-repeat;
+    will-change: transform;
+}
+
+.af-stars--near {
+    opacity: var(--af-stars-1-opacity);
+    background-image: var(--af-stars-1);
+    animation: af-drift-1 var(--af-dur-drift-1) linear infinite alternate;
+}
+
+.af-stars--far {
+    opacity: var(--af-stars-2-opacity);
+    background-image: var(--af-stars-2);
+    animation: af-drift-2 var(--af-dur-drift-2) linear infinite alternate;
+}
+
+.af-nebula {
+    position: absolute;
+    left: 58%;
+    top: -24%;
+    width: 900px;
+    height: 900px;
+    max-width: 130vw;
+    max-height: 130vw;
+    border-radius: 50%;
+    background: var(--af-nebula-glow);
+    filter: blur(20px);
+}
+
+@keyframes af-drift-1 {
+    from { transform: translate3d(0, 0, 0); }
+    to   { transform: translate3d(-60px, -24px, 0); }
+}
+
+@keyframes af-drift-2 {
+    from { transform: translate3d(0, 0, 0); }
+    to   { transform: translate3d(-140px, 18px, 0); }
+}
+
+/* ---- Header ---------------------------------------------------------- */
+
+.af-header {
+    position: relative;
+    z-index: 1;
+    flex: none;
+    height: var(--af-header-height);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 clamp(var(--af-space-6), 5vw, var(--af-gutter));
+    animation: af-page-in var(--af-dur-page) var(--af-ease-page) both;
+}
+
+.af-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.af-brand-mark {
     display: block;
+    width: 28px;
+    height: 28px;
+    flex: none;
 }
-input[type=text] {
+
+.af-wordmark {
+    font: var(--af-type-wordmark);
+    letter-spacing: var(--af-tracking-wordmark);
+    text-transform: uppercase;
+    color: var(--af-text-primary);
+}
+
+/* ---- Stage + glass card ---------------------------------------------- */
+
+.af-stage {
+    position: relative;
+    z-index: 1;
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--af-space-6) clamp(var(--af-space-6), 5vw, var(--af-gutter));
+    overflow: auto;
+    animation: af-page-in var(--af-dur-page) var(--af-ease-page) both;
+}
+
+.af-card {
+    width: 100%;
+    max-width: 560px;
+    padding: clamp(var(--af-space-8), 4vw, var(--af-space-12));
+    border: 1px solid var(--af-edge-luminous);
+    border-radius: var(--af-radius-panel);
+    background: var(--af-glass);
+    backdrop-filter: blur(var(--af-glass-blur));
+    -webkit-backdrop-filter: blur(var(--af-glass-blur));
+    box-shadow: 0 24px 80px rgba(var(--af-bg-base-rgb), .55);
+}
+
+.af-eyebrow {
+    margin: 0 0 var(--af-space-3);
+    font: var(--af-type-eyebrow);
+    letter-spacing: var(--af-tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--af-accent-primary);
+}
+
+#title {
+    margin: 0;
+    font: var(--af-type-title);
+    /* Shrink gracefully in narrow windows; wraps to two lines. */
+    font-size: clamp(32px, 4vw, 48px);
+    line-height: 1.16;
+    letter-spacing: var(--af-tracking-display);
+    color: var(--af-text-primary);
+    text-wrap: pretty;
+}
+
+/* ---- Form ------------------------------------------------------------ */
+
+.af-form {
+    margin-top: var(--af-space-8);
+}
+
+#address {
     display: block;
     width: 100%;
-    font-size: 1em;
-    color: inherit;
-    background: #292929;
-    border: 0.16em solid #292929;
-    border-radius: 0.2em;
-    padding: 0.6em 0.8em;
-    font-family: inherit;
-}
-input[type=text]:focus {
-    border-color: #00a4dc;
+    height: 56px;
+    padding: 0 var(--af-space-4);
+    font: var(--af-type-body);
+    font-size: 18px;
+    color: var(--af-text-primary);
+    background: var(--af-surface);
+    border: 1px solid var(--af-edge-strong);
+    border-radius: var(--af-radius-md);
     outline: none;
+    transition:
+        border-color var(--af-dur-ring-out) var(--af-ease-focus),
+        box-shadow var(--af-dur-ring-out) var(--af-ease-focus);
 }
-input[type=text]::placeholder {
-    color: #666;
-    color: rgba(255, 255, 255, 0.3);
+
+#address::placeholder {
+    color: var(--af-text-muted);
     opacity: 1;
 }
 
-button {
-    width: 100%;
-    color: #fff;
-    background: #00a4dc;
-    border: none;
-    border-radius: 0.2em;
-    font-size: 1em;
-    padding: 0.75em 1.5em;
-    cursor: pointer;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.025em;
-    outline: none;
-    font-family: inherit;
+#address:focus {
+    border-color: var(--af-accent-primary);
+    box-shadow: var(--af-focus-ring);
+    transition:
+        border-color var(--af-dur-ring-in) var(--af-ease-focus),
+        box-shadow var(--af-dur-ring-in) var(--af-ease-focus);
 }
-button:hover:not(:disabled) {
-    background: #0cb0e8;
-}
-button:disabled {
-    background-color: #292929;
-    cursor: default;
-    opacity: 0.6;
-}
-#container {
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    right: 0;
+
+.af-actions {
+    margin-top: var(--af-space-6);
     display: flex;
-    flex-direction: column;
-    justify-content: center;
     align-items: center;
+    gap: var(--af-space-3);
 }
-.logo {
-    max-width: 500px;
-    margin-bottom: 2em;
-    margin-left: auto;
-    margin-right: auto;
-    display: block;
-}
-#title {
-    margin-top: 1em;
-    margin-bottom: 0;
-    font-size: 1.5em;
-    font-weight: 400;
-    color: #ddd;
-    color: rgba(255, 255, 255, 0.8);
-    min-height: 1.5em;
-    height: 1.5em;
-    max-width: 450px;
-    width: 100%;
-    text-align: left;
-    visibility: hidden;
-}
-#connect-form {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    position: relative;
-}
-#address {
-    margin-bottom: 1em;
-    max-width: 450px;
-    height: 2.5em;
-    visibility: hidden;
-}
-#address.connecting {
-    visibility: hidden;
-}
-#spinner {
-    border: 6px solid #292929;
-    border-top: 6px solid #00a4dc;
-    border-radius: 50%;
-    width: 80px;
-    height: 80px;
-    animation: spin 1s linear infinite;
-    display: none;
-    position: absolute;
-    top: calc(1em + 1.5em + 1.25em);
-    left: 50%;
-    margin-left: -40px;
-}
+
+/* ---- Buttons --------------------------------------------------------- */
+
 #connect-button {
-    max-width: 450px;
-    min-height: 2.5em;
-    visibility: hidden;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--af-space-3);
+    padding: 17px 34px;
+    font: var(--af-type-button);
+    color: var(--af-on-accent);
+    background: var(--af-accent-primary);
+    border: none;
+    border-radius: var(--af-radius-pill);
+    box-shadow: var(--af-primary-glow);
+    cursor: pointer;
+    outline: none;
+    transition:
+        filter var(--af-dur-ring-out) var(--af-ease-out),
+        box-shadow var(--af-dur-ring-out) var(--af-ease-focus),
+        opacity var(--af-dur-ring-out) var(--af-ease-out);
 }
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+
+/* Right-arrow glyph. Drawn with borders rather than a child element because
+   overlay.lang.js assigns innerText to this button and would drop any
+   markup inside it. */
+#connect-button::after {
+    content: "";
+    width: .5em;
+    height: .5em;
+    margin-left: -.1em;
+    border-top: 2px solid currentColor;
+    border-right: 2px solid currentColor;
+    transform: rotate(45deg);
 }
-@keyframes fadeIn {
-    0% { opacity: 0; }
-    100% { opacity: 1; }
+
+#connect-button:hover:not(:disabled) {
+    filter: brightness(1.06);
 }
-@keyframes fadeOut {
-    0% { opacity: 1; background-color: var(--bg-color); }
-    100% { opacity: 0; background-color: transparent; }
+
+#connect-button:focus-visible {
+    box-shadow: var(--af-focus-ring);
 }
-.fade-out {
-    animation: fadeOut 0.5s ease-out forwards;
+
+#connect-button:disabled {
+    opacity: .45;
+    box-shadow: none;
+    cursor: default;
 }
-#connect-button.cancel {
-    background: #cb272a;
+
+.af-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 15px 28px;
+    font: var(--af-type-button-secondary);
+    color: var(--af-text-primary);
+    background: var(--af-glass-fill-soft);
+    border: 1px solid var(--af-edge-strong);
+    border-radius: var(--af-radius-pill);
+    cursor: pointer;
+    outline: none;
+    transition:
+        background-color var(--af-dur-ring-out) var(--af-ease-out),
+        box-shadow var(--af-dur-ring-out) var(--af-ease-focus);
 }
-#connect-button.cancel:hover:not(:disabled) {
-    background: #d93134;
+
+.af-secondary:hover {
+    background: var(--af-surface-raised);
 }
-.dialog {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: #101010;
+
+.af-secondary:focus-visible {
+    box-shadow: var(--af-focus-ring);
+    border-color: var(--af-accent-primary);
+}
+
+/* ---- Connecting state ------------------------------------------------ */
+
+.af-progress {
+    margin-top: var(--af-space-8);
     display: flex;
     flex-direction: column;
-    justify-content: center;
     align-items: center;
-    z-index: 10;
+    gap: var(--af-space-6);
 }
-.dialog-message {
+
+.af-orbit {
+    position: relative;
+    width: 76px;
+    height: 76px;
+    flex: none;
+}
+
+.af-orbit-ring {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--af-edge-strong);
+    border-radius: 50%;
+}
+
+.af-orbit-ring--inner {
+    inset: 16px;
+    border-color: rgba(var(--af-accent-primary-rgb), .8);
+}
+
+.af-orbit-track {
+    position: absolute;
+    inset: 0;
+    animation: af-orbit var(--af-dur-orbit) linear infinite;
+}
+
+.af-orbit-dot {
+    position: absolute;
+    top: -3px;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    margin-left: -3px;
+    border-radius: 50%;
+    background: var(--af-accent-primary);
+    box-shadow: 0 0 16px rgba(var(--af-accent-primary-rgb), .8);
+}
+
+@keyframes af-orbit {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.af-status {
+    margin: 0;
+    max-width: 100%;
+    font: var(--af-type-meta);
+    font-size: 16px;
+    letter-spacing: var(--af-tracking-meta);
+    color: var(--af-text-muted);
     text-align: center;
-    max-width: 350px;
-    padding-left: 1.5em;
-    padding-right: 1.5em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
+
+/* ---- State machine ---------------------------------------------------
+ * body[data-state] is the single switch driven by overlay.js:
+ *   boot        – waiting on getSavedServerUrl; orbit only
+ *   connecting  – probing a server; orbit + address + cancel
+ *   idle        – the form is live
+ */
+
+body[data-state="idle"] .af-progress,
+body[data-state="boot"] .af-form,
+body[data-state="connecting"] .af-form,
+body[data-state="boot"] .af-status,
+body[data-state="boot"] #cancel-button {
+    display: none;
+}
+
+/* ---- Footer ---------------------------------------------------------- */
+
+.af-footer {
+    position: relative;
+    z-index: 1;
+    flex: none;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--af-space-6);
+    padding: 0 clamp(var(--af-space-6), 5vw, var(--af-gutter));
+    font: var(--af-type-meta);
+    font-size: 14px;
+    letter-spacing: var(--af-tracking-meta);
+    text-transform: uppercase;
+    color: var(--af-text-muted);
+    animation: af-page-in var(--af-dur-page) var(--af-ease-page) both;
+}
+
+.af-footer span + span::before {
+    content: "·";
+    margin-right: var(--af-space-6);
+    color: var(--af-divider);
+}
+
+/* ---- Failure dialog --------------------------------------------------- */
+
+.dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--af-space-6);
+    background: rgba(var(--af-bg-base-rgb), .72);
+    backdrop-filter: blur(var(--af-glass-blur-backdrop));
+    -webkit-backdrop-filter: blur(var(--af-glass-blur-backdrop));
+}
+
+.dialog-panel {
+    width: 100%;
+    max-width: 520px;
+    padding: clamp(var(--af-space-8), 3.5vw, 44px);
+    text-align: center;
+    border: 1px solid var(--af-edge-luminous);
+    border-top: 2px solid var(--af-accent-danger);
+    border-radius: var(--af-radius-panel);
+    background: var(--af-glass);
+    backdrop-filter: blur(var(--af-glass-blur-panel));
+    -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+    box-shadow: 0 24px 80px rgba(var(--af-bg-base-rgb), .6);
+}
+
+.dialog h1 {
+    margin: 0;
+    font: var(--af-type-section);
+    font-size: clamp(24px, 2.6vw, 32px);
+    line-height: 1.25;
+    letter-spacing: var(--af-tracking-display);
+    color: var(--af-text-primary);
+}
+
+.dialog-message {
+    margin: var(--af-space-4) auto 0;
+    max-width: 38ch;
+    font: var(--af-type-body-lg);
+    color: var(--af-text-muted);
+}
+
 .dialog-button {
-    margin-top: 2em;
-    width: auto;
+    margin-top: var(--af-space-8);
 }
-.scaleIn {
-    animation: scaleIn 0.3s linear both;
+
+/* The dialog auto-focuses its only control, so the ring has to show for a
+   programmatic focus too — :focus-visible would not match a pointer-driven
+   dismissal path. */
+.dialog-button:focus {
+    box-shadow: var(--af-focus-ring);
+    border-color: var(--af-accent-primary);
 }
+
+/* ---- Motion ---------------------------------------------------------- */
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+}
+
+@keyframes af-page-in {
+    from {
+        opacity: 0;
+        transform: translate3d(0, var(--af-page-offset), 0);
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
 @keyframes scaleIn {
-  0% {
-    transform: scale(0);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
+    from {
+        opacity: 0;
+        transform: scale(var(--af-page-scale));
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.fade-out {
+    animation: fadeOut var(--af-dur-overlay-out) var(--af-ease-page) forwards;
+}
+
+.scaleIn {
+    animation: scaleIn var(--af-dur-page) var(--af-ease-page) both;
+}
+
+/* Orbit duration is local to this screen (no token covers it); the
+ * reduced-motion override slows it rather than freezing it, so the
+ * spinner still reads as "working". */
+:root {
+    --af-dur-orbit: 1.4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --af-dur-orbit: 2.8s;
+    }
+
+    .af-stars {
+        animation: none;
+    }
 }
