@@ -119,6 +119,60 @@ pub fn mpv_home() -> PathBuf {
     ensure(config_dir().join("mpv"))
 }
 
+/// Directory of the running executable, or `.` when it cannot be determined
+/// (a process whose image was unlinked, mostly).
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where the read-only files `cargo xtask build` stages next to the binary
+/// live (`shaders/`, …).
+///
+/// Linux/Windows: the executable's own directory, which is also where CEF's
+/// `resources.pak` and the runtime libraries land. macOS: `Contents/Resources`
+/// when running from an app bundle — but the staged `build/` tree is flat, so
+/// a binary that is not inside `Contents/MacOS` keeps looking beside itself.
+pub fn resource_dir() -> PathBuf {
+    let dir = exe_dir();
+    #[cfg(target_os = "macos")]
+    if dir.file_name() == Some(std::ffi::OsStr::new("MacOS")) {
+        if let Some(contents) = dir.parent() {
+            return contents.join("Resources");
+        }
+    }
+    dir
+}
+
+/// The shader tree shipped with the app. Subdirectories (`anime4k`,
+/// `fsrcnnx`, …) group one upstream project each.
+pub fn bundled_shader_dir() -> PathBuf {
+    resource_dir().join("shaders")
+}
+
+/// The user's own flat shader folder, `<config dir>/mpv/shaders`. Not
+/// created: its absence is the signal that there is no override.
+pub fn user_shader_dir() -> PathBuf {
+    config_dir_raw().join("mpv").join("shaders")
+}
+
+/// Pick the directory a shader chain loads from: the user's own
+/// `<config dir>/mpv/shaders` when it holds *every* file in `files`, else the
+/// bundled `<resource dir>/shaders/<subdir>`.
+///
+/// All-or-nothing per chain, deliberately: mixing a user's updated shader with
+/// bundled ones from a different release is how a chain ends up compiling
+/// against hooks that moved.
+pub fn shader_dir(subdir: &str, files: &[&str]) -> PathBuf {
+    let user = user_shader_dir();
+    if !files.is_empty() && files.iter().all(|f| user.join(f).is_file()) {
+        return user;
+    }
+    bundled_shader_dir().join(subdir)
+}
+
 #[cfg(unix)]
 pub fn runtime_dir() -> io::Result<PathBuf> {
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
@@ -178,7 +232,7 @@ pub fn default_log_file() -> Option<PathBuf> {
 }
 
 mod migrate;
-pub use migrate::{MigrationReport, migrate_legacy};
+pub use migrate::{MigrationReport, migrate_legacy, repair_mpv_conf};
 
 #[cfg_attr(target_os = "linux", path = "imp_linux.rs")]
 #[cfg_attr(target_os = "macos", path = "imp_macos.rs")]
