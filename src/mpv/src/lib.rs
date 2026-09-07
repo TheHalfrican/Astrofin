@@ -25,6 +25,7 @@ pub mod boot;
 pub mod capabilities;
 pub mod color;
 pub mod probe;
+pub mod video_mode;
 
 pub use command::Command;
 pub use error::{Error, Result};
@@ -35,3 +36,4 @@ pub use log::{LogLevel, forward_to_tracing as forward_log_to_tracing};
 pub use node::{Node, NodeArray, NodeMap};
 pub use options::{HWDEC_DEFAULT, hwdec_options, is_valid_hwdec};
 pub use property::Format;
+pub use video_mode::VideoMode;
