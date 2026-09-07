@@ -14,8 +14,12 @@ use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const APP_DIR_NAME: &str = "jellium-desktop";
-const LOG_FILE_NAME: &str = "jellium-desktop.log";
+const APP_DIR_NAME: &str = "astrofin";
+const LOG_FILE_NAME: &str = "astrofin.log";
+
+/// The pre-rebrand directory name, kept only so [`migrate::migrate_legacy`]
+/// can find a Jellium Desktop profile to import on first run.
+pub(crate) const LEGACY_APP_DIR_NAME: &str = "jellium-desktop";
 
 struct Overrides {
     config_dir: Option<PathBuf>,
@@ -87,18 +91,24 @@ pub fn write_atomic_noclobber(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     }
 }
 
+/// The config directory *without* creating it. The migration has to ask
+/// "does the new directory exist yet?", which the creating getters below can
+/// never answer truthfully.
+pub(crate) fn config_dir_raw() -> PathBuf {
+    config_override().unwrap_or_else(|| imp::config_base().join(APP_DIR_NAME))
+}
+
+/// See [`config_dir_raw`].
+pub(crate) fn cache_dir_raw() -> PathBuf {
+    cache_override().unwrap_or_else(|| imp::cache_base().join(APP_DIR_NAME))
+}
+
 pub fn config_dir() -> PathBuf {
-    if let Some(path) = config_override() {
-        return ensure(path);
-    }
-    ensure(imp::config_base().join(APP_DIR_NAME))
+    ensure(config_dir_raw())
 }
 
 pub fn cache_dir() -> PathBuf {
-    if let Some(path) = cache_override() {
-        return ensure(path);
-    }
-    ensure(imp::cache_base().join(APP_DIR_NAME))
+    ensure(cache_dir_raw())
 }
 
 pub fn log_dir() -> PathBuf {
@@ -166,6 +176,9 @@ pub fn log_path() -> PathBuf {
 pub fn default_log_file() -> Option<PathBuf> {
     imp::DEFAULT_LOG_TO_FILE.then(log_path)
 }
+
+mod migrate;
+pub use migrate::{MigrationReport, migrate_legacy};
 
 #[cfg_attr(target_os = "linux", path = "imp_linux.rs")]
 #[cfg_attr(target_os = "macos", path = "imp_macos.rs")]

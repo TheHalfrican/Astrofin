@@ -556,6 +556,14 @@ pub fn jfn_app_main() -> c_int {
         jfn_paths::set_cache_dir_override(path.into());
     }
 
+    // Only the browser process reaches this point (helper processes returned
+    // above), so no two processes race the import. It has to run before the
+    // first `config_dir()`/`cache_dir()` call, which create what they return,
+    // and before `settings_init` and `Instance::for_config_dir` so the
+    // imported settings.json and instance.json are the ones that load.
+    // Logging is not up yet; the report is emitted right after init_logging.
+    let migration = jfn_paths::migrate_legacy();
+
     let settings_path = jfn_paths::config_dir().join("settings.json");
     jfn_config::settings_init(&settings_path);
     jfn_config::settings_load();
@@ -563,6 +571,13 @@ pub fn jfn_app_main() -> c_int {
     let opts = resolve_startup_options(&cli);
 
     init_logging(opts.log_file.clone(), &opts.log_level);
+
+    for line in migration.info_lines() {
+        tracing::info!(target: "Main", "{line}");
+    }
+    for line in migration.warnings() {
+        tracing::warn!(target: "Main", "{line}");
+    }
 
     crate::platform_install::install_from_cli(&cli);
 
