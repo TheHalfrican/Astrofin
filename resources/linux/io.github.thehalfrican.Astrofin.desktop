@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=Jellium Desktop
+Name=Astrofin
 Comment=Desktop client for Jellyfin
-Exec=jellium-desktop
-Icon=net.nullsum.JelliumDesktop
+Exec=astrofin
+Icon=io.github.thehalfrican.Astrofin
 Terminal=false
 Type=Application
 Categories=AudioVideo;Video;Player;TV;
-StartupWMClass=net.nullsum.JelliumDesktop
+StartupWMClass=io.github.thehalfrican.Astrofin

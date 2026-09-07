@@ -71,11 +71,11 @@ cp /usr/share/crypto-policies/DEFAULT/gnutls.txt \
 mkdir -p "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/icons/hicolor/scalable/apps" \
          "$APPDIR/usr/share/metainfo"
-cp /src/resources/linux/net.nullsum.JelliumDesktop.desktop \
+cp /src/resources/linux/io.github.thehalfrican.Astrofin.desktop \
    "$APPDIR/usr/share/applications/"
-cp /src/resources/linux/net.nullsum.JelliumDesktop.svg \
+cp /src/resources/linux/io.github.thehalfrican.Astrofin.svg \
    "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
-cp /src/resources/linux/net.nullsum.JelliumDesktop.metainfo.xml \
+cp /src/resources/linux/io.github.thehalfrican.Astrofin.metainfo.xml \
    "$APPDIR/usr/share/metainfo/"
 
 # Strip non-runtime cruft to reduce size
@@ -156,13 +156,13 @@ patchelf --set-interpreter "/tmp/.astrofin-cef-interp/${LD_SONAME}" \
     "$APPDIR/usr/bin/astrofin"
 
 # AppDir root files (per AppImage spec)
-cp "$APPDIR/usr/share/applications/net.nullsum.JelliumDesktop.desktop" "$APPDIR/"
-cp "$APPDIR/usr/share/icons/hicolor/scalable/apps/net.nullsum.JelliumDesktop.svg" "$APPDIR/"
-ln -sf net.nullsum.JelliumDesktop.svg "$APPDIR/.DirIcon"
+cp "$APPDIR/usr/share/applications/io.github.thehalfrican.Astrofin.desktop" "$APPDIR/"
+cp "$APPDIR/usr/share/icons/hicolor/scalable/apps/io.github.thehalfrican.Astrofin.svg" "$APPDIR/"
+ln -sf io.github.thehalfrican.Astrofin.svg "$APPDIR/.DirIcon"
 cp /src/dev/linux/appimage/AppRun "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
 
 # Package
 ARCH="$ARCH" /opt/tools/appimagetool/AppRun --no-appstream \
     --runtime-file "/opt/tools/runtime-${ARCH}" \
-    "$APPDIR" "/host-output/JelliumDesktop-${VERSION}-${ARCH}.AppImage"
+    "$APPDIR" "/host-output/Astrofin-${VERSION}-${ARCH}.AppImage"

@@ -1,4 +1,4 @@
-app-id: net.nullsum.JelliumDesktop
+app-id: io.github.thehalfrican.Astrofin
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
@@ -16,7 +16,7 @@ finish-args:
   - --share=network
   - --device=dri
   - --talk-name=org.freedesktop.ScreenSaver
-  - --own-name=org.mpris.MediaPlayer2.JelliumDesktop
+  - --own-name=org.mpris.MediaPlayer2.Astrofin.*
 # The base org.freedesktop.Platform//25.08 libavcodec ships WITHOUT the
 # patent-encumbered h264/hevc decoders (freedesktop moved them out of the base
 # runtime in 25.08 — 24.08 still had h264). Those decoders live only in the
@@ -182,9 +182,9 @@ modules:
       # Mount point for the codecs-extra extension (add-extensions above);
       # flatpak refuses to mount an extension whose directory is absent.
       - mkdir -p /app/lib/x86_64-linux-gnu/codecs-extra
-      - install -Dm644 resources/linux/net.nullsum.JelliumDesktop.desktop /app/share/applications/net.nullsum.JelliumDesktop.desktop
-      - install -Dm644 resources/linux/net.nullsum.JelliumDesktop.svg /app/share/icons/hicolor/scalable/apps/net.nullsum.JelliumDesktop.svg
-      - install -Dm644 build/flatpak/generated.metainfo.xml /app/share/metainfo/net.nullsum.JelliumDesktop.metainfo.xml
+      - install -Dm644 resources/linux/io.github.thehalfrican.Astrofin.desktop /app/share/applications/io.github.thehalfrican.Astrofin.desktop
+      - install -Dm644 resources/linux/io.github.thehalfrican.Astrofin.svg /app/share/icons/hicolor/scalable/apps/io.github.thehalfrican.Astrofin.svg
+      - install -Dm644 build/flatpak/generated.metainfo.xml /app/share/metainfo/io.github.thehalfrican.Astrofin.metainfo.xml
     sources:
       - type: dir
         path: ../../..

@@ -18,11 +18,11 @@ VERSION="$(cargo run --quiet --manifest-path "${PROJECT_ROOT}/src/xtask/Cargo.to
 ARCH="$(uname -m)"
 mkdir -p "${DIST_DIR}"
 
-DMG_NAME="JelliumDesktop-${VERSION}-macos-${ARCH}.dmg"
+DMG_NAME="Astrofin-${VERSION}-macos-${ARCH}.dmg"
 rm -f "${DIST_DIR}/${DMG_NAME}"
 
 create-dmg \
-    --volname "Jellium Desktop v${VERSION}" \
+    --volname "Astrofin v${VERSION}" \
     --no-internet-enable \
     --window-size 500 300 \
     --icon-size 100 \

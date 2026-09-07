@@ -33,7 +33,7 @@ mkdir -p "${PROJECT_ROOT}/build/appimage/build" "${PROJECT_ROOT}/dist"
     "$IMG" /src/dev/linux/appimage/container-build.sh
 
 ARCH="$(uname -m)"
-BUNDLE="dist/JelliumDesktop-${VERSION}-${ARCH}.AppImage"
-LINK="${PROJECT_ROOT}/build/appimage/JelliumDesktop.AppImage"
+BUNDLE="dist/Astrofin-${VERSION}-${ARCH}.AppImage"
+LINK="${PROJECT_ROOT}/build/appimage/Astrofin.AppImage"
 ln -sf "../../${BUNDLE}" "$LINK"
 echo "AppImage: ${BUNDLE} (-> ${LINK})"
