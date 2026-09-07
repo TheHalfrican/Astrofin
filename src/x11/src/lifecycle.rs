@@ -20,10 +20,10 @@ use crate::x11_state::{
     set_paint_services,
 };
 
-/// Must match `StartupWMClass` in `net.nullsum.JelliumDesktop.desktop` so the
+/// Must match `StartupWMClass` in `io.github.thehalfrican.Astrofin.desktop` so the
 /// DE resolves the window to that desktop file for the taskbar icon.
-const WM_CLASS_VALUE: &[u8] = b"net.nullsum.JelliumDesktop\0net.nullsum.JelliumDesktop\0";
-const APP_TITLE: &[u8] = b"Jellium Desktop";
+const WM_CLASS_VALUE: &[u8] = b"io.github.thehalfrican.Astrofin\0io.github.thehalfrican.Astrofin\0";
+const APP_TITLE: &[u8] = b"Astrofin";
 
 /// Advertise the app top-level's identity and, when the full XSync handshake can
 /// be established, the `_NET_WM_SYNC_REQUEST` protocol. Returns the created sync

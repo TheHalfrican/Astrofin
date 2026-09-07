@@ -56,8 +56,8 @@ use crate::input::SeatShared;
 use crate::runtime::WlRuntime;
 use crate::wl_state::{InitError, ShmGlobal, bind_error, new_slot_pool};
 
-const APP_ID: &str = "net.nullsum.JelliumDesktop";
-const TITLE: &str = "Jellium Desktop";
+const APP_ID: &str = "io.github.thehalfrican.Astrofin";
+const TITLE: &str = "Astrofin";
 
 // Background behind the video/overlay, matching kBgColor (0x101010).
 const BG: [u8; 3] = [0x10, 0x10, 0x10];

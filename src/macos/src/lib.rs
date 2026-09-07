@@ -72,7 +72,7 @@ pub fn macos_set_idle_inhibit(level: c_int) {
         1 => CFString::from_str("PreventUserIdleSystemSleep"),
         _ => return,
     };
-    let name = CFString::from_str("Jellium Desktop media playback");
+    let name = CFString::from_str("Astrofin media playback");
 
     let mut id: IOPMAssertionID = K_IOPM_NULL_ASSERTION_ID;
     // SAFETY: both strings are live for the call and `id` is a valid slot.

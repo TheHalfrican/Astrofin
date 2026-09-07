@@ -1,6 +1,6 @@
 //! `CefDialogHandler` — file choosers for a windowless browser.
 //!
-//! Jellium runs CEF windowless (OSR), so CEF's default file chooser has no
+//! Astrofin runs CEF windowless (OSR), so CEF's default file chooser has no
 //! aura window to parent onto: `FileSelectHelper::RunFileChooserOnUIThread`
 //! walks `aura::Window::GetToplevelWindow()` and faults (0xc0000005 inside
 //! `libcef.dll`), and newer builds instead log "Default dialog implementation

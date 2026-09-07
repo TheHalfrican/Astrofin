@@ -50,7 +50,7 @@ fn make_colors_dir() -> Option<PathBuf> {
         _ => return None,
     };
     let mut dir = PathBuf::from(runtime);
-    dir.push("jellium-desktop");
+    dir.push("astrofin");
     if let Err(e) = fs::create_dir_all(&dir) {
         tracing::warn!("kde_palette: mkdir {} failed: {}", dir.display(), e);
         return None;
@@ -92,7 +92,7 @@ pub(crate) fn set_color(
     };
 
     let mut new_path = state.colors_dir.clone();
-    new_path.push(format!("JelliumDesktop-{}.colors", hex_str));
+    new_path.push(format!("Astrofin-{}.colors", hex_str));
 
     let new_path_c = match CString::new(new_path.as_os_str().as_encoded_bytes()) {
         Ok(c) => c,

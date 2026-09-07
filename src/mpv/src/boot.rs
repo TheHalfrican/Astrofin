@@ -153,8 +153,8 @@ fn apply_defaults(
     // (e.g. KDE) would stack on top of ours.
     let suppress_ssd = display == DisplayBackend::Wayland && client_side_decorations;
     set("border", if suppress_ssd { "no" } else { "yes" })?;
-    set("title", "Jellium Desktop")?;
-    set("wayland-app-id", "net.nullsum.JelliumDesktop")?;
+    set("title", "Astrofin")?;
+    set("wayland-app-id", "io.github.thehalfrican.Astrofin")?;
 
     // Keep window open when idle. `force-window=yes` (not "immediate")
     // avoids a macOS deadlock: "immediate" calls handle_force_window

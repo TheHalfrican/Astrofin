@@ -952,7 +952,7 @@ fn send_with_fds(fd: RawFd, buf: &[u8], fds: Vec<OwnedFd>) -> io::Result<()> {
 
 /// Provision an auth cookie for the proxy's display number so mpv's connection
 /// is accepted. Reads the real display's cookie via x11rb and writes a single
-/// re-keyed entry into a private, jellium-owned runtime dir. Returns `None` when
+/// re-keyed entry into a private, astrofin-owned runtime dir. Returns `None` when
 /// the server has no cookie (e.g. an unauthenticated `xhost +local:` session).
 fn provision_auth(display: u16, proxy_number: u32) -> io::Result<Option<PathBuf>> {
     let host = gethostname::gethostname().into_encoded_bytes();
