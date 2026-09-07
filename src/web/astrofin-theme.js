@@ -882,7 +882,14 @@
         }
 
         /* jf-web 10.11.11: .card carries the item type in data-type. Mirror the
-         * three that read well into data-af-kind for the CSS badge. */
+         * three that read well into data-af-kind for the CSS badge.
+         *
+         * The attribute has to land on .cardScalable as well as on .card: the
+         * badge is drawn by `.cardScalable::before { content: attr(...) }`, and
+         * attr() resolves against the pseudo-element's own originating element,
+         * not against an ancestor. With it only on .card the rule matched and
+         * every declaration applied, but content resolved to "" and the badge
+         * measured 0x0 — which is why it never appeared. */
         var KIND_LABELS = { Movie: 'Movie', Series: 'Series', Episode: 'Episode' };
 
         function decorateCards() {
@@ -891,7 +898,10 @@
                 var card = cards[i];
                 card.setAttribute('data-af-scanned', '1');
                 var label = KIND_LABELS[card.getAttribute('data-type')];
-                if (label) { card.setAttribute('data-af-kind', label); }
+                if (!label) { continue; }
+                card.setAttribute('data-af-kind', label);
+                var tile = card.querySelector('.cardScalable');
+                if (tile) { tile.setAttribute('data-af-kind', label); }
             }
         }
 
