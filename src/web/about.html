@@ -2,7 +2,15 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>About</title>
+    <title>About Astrofin</title>
+    <!-- about.js renders into a *closed* shadow root. Custom properties set on
+         :root still inherit into the shadow tree, and @font-face rules declared
+         in the document apply inside it, so both sheets belong out here. -->
+    <link rel="stylesheet" href="astrofin-tokens.css">
+    <link rel="stylesheet" href="astrofin-fonts.css">
+    <style>
+        html, body { margin: 0; padding: 0; background: var(--af-bg-base, #070A14); }
+    </style>
 </head>
 <body>
     <script src="about.js"></script>

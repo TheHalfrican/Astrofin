@@ -1,0 +1,14 @@
+{
+  "name": "astrofin-brand-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Rasterizes the Astrofin icon master SVG into the per-platform icon containers and bundles the branded web fonts as data-URI CSS.",
+  "scripts": {
+    "icons": "node build-icons.mjs",
+    "fonts": "node build-fonts.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Astrofin logo mark: an orbital ring with a fin sweeping out of it.
+     Source of truth: docs/design/Astrofin.dc.html, artboard 1c header.
+     Self-contained (no external refs, no fonts); scales to any size. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28"
+     role="img" aria-label="Astrofin">
+  <circle cx="14" cy="14" r="13.25" fill="none" stroke="#6FE3FF" stroke-width="1.5" opacity=".45"/>
+  <path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"/>
+</svg>
