@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use crate::cef_string::userfree_to_string;
+use crate::embedded_css;
 use crate::embedded_js;
 use crate::injection::ExtraInfo;
 use crate::paint_scheduler::PaintScheduler;
@@ -590,9 +591,76 @@ fn inject_jmp_native(browser: &mut Browser, profile: &ExtraInfo, context: &mut V
     global.set_value_bykey(Some(&key), Some(&mut jmp_native), readonly_attr());
 }
 
+/// Builds the JS preamble that installs the profile's stylesheets as a single
+/// `<style id="af-theme">`. Runs at `OnContextCreated`, i.e. before the page's
+/// own `<head>` is finished and long before its stylesheets load, so the
+/// element is parked on `documentElement` first and moved to the end of
+/// `<head>` at DOMContentLoaded. `astrofin-theme.js` keeps it last in `<head>`
+/// afterwards, because jellyfin-web appends chunk stylesheets lazily and would
+/// otherwise win the cascade on equal specificity.
+///
+/// `None` when the profile declares no styles.
+fn styles_preamble(profile: &ExtraInfo) -> Option<String> {
+    let styles = profile.styles();
+    if styles.is_empty() {
+        return None;
+    }
+
+    let mut css = String::new();
+    for style in styles {
+        if let Some(src) = embedded_css::get(style.file_name()) {
+            if !css.is_empty() {
+                css.push('\n');
+            }
+            css.push_str(src);
+        }
+    }
+    if css.is_empty() {
+        return None;
+    }
+
+    // The sheet is embedded as a JS string literal, so it must be JSON-escaped
+    // (including U+2028/U+2029, which `to_js_json` handles and plain JSON does
+    // not). Bail rather than emit a broken literal.
+    let css_json = jfn_js_json::to_js_json(css.as_str())?;
+
+    Some(format!(
+        r#"(function () {{
+    'use strict';
+    var css = {css_json};
+    var ID = 'af-theme';
+    function install() {{
+        var el = document.getElementById(ID);
+        if (!el) {{
+            el = document.createElement('style');
+            el.id = ID;
+            el.setAttribute('data-astrofin', 'theme');
+        }}
+        if (el.textContent !== css) {{
+            el.textContent = css;
+        }}
+        // Park it once. astrofin-theme.js owns its position from then on:
+        // jf-web loads its own theme sheet from a <div> inside <body>, so no
+        // position in <head> wins the cascade after the app has booted.
+        if (!el.parentNode || el.parentNode === document.documentElement) {{
+            (document.head || document.documentElement).appendChild(el);
+        }}
+        return el;
+    }}
+    window.__afInstallTheme = install;
+    install();
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', install, {{ once: true }});
+    }}
+}})();
+"#
+    ))
+}
+
 fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
     let scripts = profile.scripts();
-    if scripts.is_empty() {
+    let preamble = styles_preamble(profile);
+    if scripts.is_empty() && preamble.is_none() {
         return;
     }
 
@@ -642,6 +710,12 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         .window_decorations()
         .map_or_else(|| "null".to_string(), |wd| format!("'{wd}'"));
     replace_first(&mut code, "__WINDOW_DECORATIONS__", &window_decorations);
+
+    // Prepended only after placeholder substitution, so stylesheet bytes can
+    // never be mistaken for a `__PLACEHOLDER__` and consume a replacement.
+    if let Some(preamble) = preamble {
+        code.insert_str(0, &preamble);
+    }
 
     let url_uf = frame.url();
     let url = CefString::from(&url_uf);

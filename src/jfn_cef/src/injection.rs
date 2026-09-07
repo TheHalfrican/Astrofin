@@ -173,6 +173,7 @@ pub(crate) enum InjectedScript {
     ClientSettings,
     Csd,
     SelectMenu,
+    AstrofinTheme,
 }
 
 impl InjectedScript {
@@ -186,6 +187,7 @@ impl InjectedScript {
             "client-settings.js" => Self::ClientSettings,
             "csd.js" => Self::Csd,
             "select-menu.js" => Self::SelectMenu,
+            "astrofin-theme.js" => Self::AstrofinTheme,
             _ => return None,
         })
     }
@@ -200,12 +202,43 @@ impl InjectedScript {
             Self::ClientSettings => "client-settings.js",
             Self::Csd => "csd.js",
             Self::SelectMenu => "select-menu.js",
+            Self::AstrofinTheme => "astrofin-theme.js",
         }
     }
 
     fn from_menu(script: MenuScript) -> InjectedScript {
         match script {
             MenuScript::SelectMenu => Self::SelectMenu,
+        }
+    }
+}
+
+/// A stylesheet injected into a browser profile. Concatenated in declaration
+/// order and installed as one `<style id="af-theme">` element by the renderer,
+/// so the order here *is* the cascade order: tokens, then fonts, then the
+/// theme that consumes both.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InjectedStyle {
+    Tokens,
+    Fonts,
+    Theme,
+}
+
+impl InjectedStyle {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "astrofin-tokens.css" => Self::Tokens,
+            "astrofin-fonts.css" => Self::Fonts,
+            "astrofin-theme.css" => Self::Theme,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn file_name(self) -> &'static str {
+        match self {
+            Self::Tokens => "astrofin-tokens.css",
+            Self::Fonts => "astrofin-fonts.css",
+            Self::Theme => "astrofin-theme.css",
         }
     }
 }
@@ -250,6 +283,16 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::MpvAudioPlayer,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
+    // After native-shim.js: the theme reads `window.jmpInfo` for the Home
+    // server panel and expects the shim's `<meta name="theme-color">` observer
+    // to already be armed.
+    InjectedScript::AstrofinTheme,
+];
+
+const WEB_STYLES: &[InjectedStyle] = &[
+    InjectedStyle::Tokens,
+    InjectedStyle::Fonts,
+    InjectedStyle::Theme,
 ];
 const OVERLAY_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::GetSavedServerUrl,
@@ -274,6 +317,7 @@ const WINDOW_FUNCTIONS: &[NativeFunction] = &[
 
 const FUNCTIONS_KEY: &str = "functions";
 const SCRIPTS_KEY: &str = "scripts";
+const STYLES_KEY: &str = "styles";
 const DEVICE_PROFILE_JSON_KEY: &str = "device_profile_json";
 const SHARED_TEXTURES_ENABLED_KEY: &str = "shared_textures_enabled";
 const WINDOW_DECORATIONS_KEY: &str = "window_decorations";
@@ -285,6 +329,7 @@ static DEVICE_PROFILE_JSON: OnceLock<String> = OnceLock::new();
 pub(crate) struct ExtraInfo {
     functions: Vec<NativeFunction>,
     scripts: Vec<InjectedScript>,
+    styles: Vec<InjectedStyle>,
     device_profile_json: Option<String>,
     shared_textures_enabled: bool,
     window_decorations: Option<WindowDecorations>,
@@ -298,6 +343,7 @@ impl ExtraInfo {
         Self {
             functions: read_native_functions(&dict),
             scripts: read_injected_scripts(&dict),
+            styles: read_injected_styles(&dict),
             device_profile_json: read_string(&dict, DEVICE_PROFILE_JSON_KEY),
             shared_textures_enabled: read_bool(&dict, SHARED_TEXTURES_ENABLED_KEY),
             window_decorations: read_string(&dict, WINDOW_DECORATIONS_KEY)
@@ -315,6 +361,7 @@ impl ExtraInfo {
         let dict = dictionary_value_create()?;
         write_native_functions(&dict, &self.functions)?;
         write_injected_scripts(&dict, &self.scripts)?;
+        write_injected_styles(&dict, &self.styles)?;
         dict.set_bool(
             Some(&CefString::from(SHARED_TEXTURES_ENABLED_KEY)),
             if self.shared_textures_enabled { 1 } else { 0 },
@@ -347,6 +394,10 @@ impl ExtraInfo {
         &self.scripts
     }
 
+    pub(crate) fn styles(&self) -> &[InjectedStyle] {
+        &self.styles
+    }
+
     pub(crate) fn device_profile_json(&self) -> Option<&str> {
         self.device_profile_json.as_deref()
     }
@@ -370,6 +421,10 @@ fn read_native_functions(dict: &DictionaryValue) -> Vec<NativeFunction> {
 
 fn read_injected_scripts(dict: &DictionaryValue) -> Vec<InjectedScript> {
     read_typed_list(dict, SCRIPTS_KEY, InjectedScript::from_name)
+}
+
+fn read_injected_styles(dict: &DictionaryValue) -> Vec<InjectedStyle> {
+    read_typed_list(dict, STYLES_KEY, InjectedStyle::from_name)
 }
 
 fn read_typed_list<T>(
@@ -412,6 +467,10 @@ fn write_injected_scripts(dict: &DictionaryValue, scripts: &[InjectedScript]) ->
     write_string_list(dict, SCRIPTS_KEY, scripts.iter().map(|s| s.file_name()))
 }
 
+fn write_injected_styles(dict: &DictionaryValue, styles: &[InjectedStyle]) -> Option<()> {
+    write_string_list(dict, STYLES_KEY, styles.iter().map(|s| s.file_name()))
+}
+
 fn write_string_list<'a>(
     dict: &DictionaryValue,
     key: &str,
@@ -445,6 +504,7 @@ pub unsafe fn jfn_cef_set_device_profile_json(json_utf8: *const c_char, len: usi
 fn build_extra_info(
     functions: &[NativeFunction],
     scripts: &[InjectedScript],
+    styles: &[InjectedStyle],
     add_window: bool,
     shared_textures_enabled: bool,
 ) -> ExtraInfo {
@@ -461,6 +521,7 @@ fn build_extra_info(
     ExtraInfo {
         functions,
         scripts,
+        styles: styles.to_vec(),
         device_profile_json: None,
         shared_textures_enabled,
         window_decorations: None,
@@ -471,8 +532,13 @@ fn build_extra_info(
 pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Option<ExtraInfo> {
     match kind {
         "web" => {
-            let mut extra_info =
-                build_extra_info(WEB_FUNCTIONS, WEB_SCRIPTS, true, shared_textures_enabled);
+            let mut extra_info = build_extra_info(
+                WEB_FUNCTIONS,
+                WEB_SCRIPTS,
+                WEB_STYLES,
+                true,
+                shared_textures_enabled,
+            );
             if let Some(json) = DEVICE_PROFILE_JSON.get()
                 && !json.is_empty()
             {
@@ -496,11 +562,13 @@ pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Optio
         "overlay" => Some(build_extra_info(
             OVERLAY_FUNCTIONS,
             &[],
+            &[],
             true,
             shared_textures_enabled,
         )),
         "about" => Some(build_extra_info(
             ABOUT_FUNCTIONS,
+            &[],
             &[],
             true,
             shared_textures_enabled,
