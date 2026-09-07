@@ -331,14 +331,24 @@ pub fn apply(handle: &Handle, mode: VideoMode) {
     set_string(handle, DSCALE, &dscale);
     request_string(handle, READBACK_REPLY, GLSL_SHADERS);
 
-    let files: Vec<String> = resolved.iter().map(|p| p.display().to_string()).collect();
+    // Off resolves no chain of its own — what it wrote is the baseline, and
+    // reporting that as an empty list would read as "shaders disabled".
+    let shaders = if resolved.is_empty() && !chain_value.is_empty() {
+        format!("{chain_value} (restored from mpv.conf)")
+    } else {
+        resolved
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     tracing::info!(
         target: "mpv",
         "video mode {} applied: scale={} dscale={} shaders=[{}]",
         mode.as_str(),
         if scale.is_empty() { "<mpv default>" } else { &scale },
         if dscale.is_empty() { "<mpv default>" } else { &dscale },
-        files.join(", ")
+        shaders
     );
 }
 
