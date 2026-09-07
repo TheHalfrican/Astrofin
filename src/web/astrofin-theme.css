@@ -1,0 +1,1004 @@
+/* Astrofin theme for jellyfin-web.
+ *
+ * Injected by the Rust renderer side as part of `<style id="af-theme">`
+ * (see src/jfn_cef/src/app.rs `styles_preamble`), after astrofin-tokens.css
+ * and astrofin-fonts.css. Every value comes from a `--af-*` token; nothing is
+ * redefined here.
+ *
+ * Companion script: src/web/astrofin-theme.js — it owns #af-space, the Home
+ * spotlight, the `af-*` classes on <html>, and keeping this element last in
+ * <head> (jellyfin-web appends chunk stylesheets lazily and would otherwise
+ * win the cascade at equal specificity).
+ *
+ * Selectors marked `jf-web 10.11.11` were read off the running bundle and are
+ * version sensitive; see docs/design/theme-injection.md.
+ *
+ * VIDEO SAFETY: mpv renders *under* the web layer and the CEF browser is
+ * created with background_color 0. Nothing here may paint an unconditional
+ * opaque background on html/body/.backgroundContainer/.backdropContainer.
+ * `html` gets --af-bg-base only because jellyfin-web's own inline
+ * `.transparentDocument { background: 0 0 !important }` (index.html, applied
+ * to <html> by setBackdropTransparency) overrides it during playback, and
+ * #af-space is display:none in video mode. `.mpvPoster` is never touched.
+ */
+
+/* ===================================================================== */
+/* (a) Type base                                                          */
+/* ===================================================================== */
+
+/* html.preload is matched explicitly: jf-web 10.11.11 leaves the `preload`
+ * class on <html> for the life of the session and its inline
+ * `.preload { background-color: #101010 }` outranks a bare `html` selector. */
+html,
+html.preload {
+  font-family: var(--af-font-body);
+  /* Opaque only where .transparentDocument!important can lift it. */
+  background-color: var(--af-bg-base);
+  color: var(--af-text-primary);
+}
+
+body {
+  font: var(--af-type-body);
+  color: var(--af-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .sectionTitle, .pageTitle {
+  font-family: var(--af-font-display);
+  letter-spacing: var(--af-tracking-display);
+}
+
+/* ===================================================================== */
+/* (b) jellyfin-web palette overrides                                     */
+/*                                                                        */
+/* jf-web 10.11.11 ships NO CSS custom properties: themes/dark/theme.css   */
+/* hard-codes #101010 / #202020 / #00a4dc etc. There is no `--theme-*`     */
+/* layer to remap, so the swap is done selector by selector below.         */
+/* ===================================================================== */
+
+/* jf-web 10.11.11: the two full-viewport art layers React renders inside
+ * #reactRoot. Kept transparent so #af-space (z-index -3) shows through; it
+ * already goes transparent during playback via .backgroundContainer-transparent,
+ * so this only removes the #101010 fill, it never adds one.
+ *
+ * .withBackdrop is the exception: on pages that show item art (details, live
+ * TV) jellyfin-web darkens it here, and dropping that scrim leaves white text
+ * on bright art. Same job, Astrofin's base colour. */
+.backgroundContainer {
+  background-color: transparent;
+}
+.backgroundContainer.withBackdrop {
+  background-color: rgba(var(--af-bg-base-rgb), .86);
+}
+
+/* jf-web 10.11.11 own backdrop (z-index -1). Faded out only while #af-backdrop
+ * is driving the art; removing html.af-backdrop restores it. */
+.backdropContainer {
+  transition: opacity var(--af-dur-backdrop) var(--af-ease-out);
+}
+html.af-backdrop .backdropContainer {
+  opacity: 0;
+}
+
+.dialog,
+.nowPlayingContextMenu,
+.nowPlayingPlaylist,
+.mainDrawer,
+.drawer-open,
+.collapseContent,
+.paperList,
+.visualCardBox,
+.formDialogHeader:not(.formDialogHeader-clear),
+.formDialogFooter:not(.formDialogFooter-clear) {
+  background-color: var(--af-surface);
+  color: var(--af-text-primary);
+}
+
+.appfooter,
+.playlistSectionButton,
+.toast {
+  background: var(--af-surface-raised);
+  color: var(--af-text-primary);
+}
+
+/* The Jellyfin blue, everywhere it leaks through as an accent. */
+.button-link,
+.button-flat:hover,
+.buttonActive,
+.upNextDialog-countdownText,
+.metadataSidebarIcon,
+.inputLabelFocused,
+.selectLabelFocused,
+.textareaLabelFocused,
+.emby-tab-button-active,
+.emby-tab-button:hover,
+.emby-tab-button.show-focus:focus {
+  color: var(--af-accent-primary);
+}
+
+.progressring-spiner {
+  border-color: var(--af-accent-primary);
+}
+
+.countIndicator,
+.playedIndicator,
+.fullSyncIndicator,
+.mediaSourceIndicator {
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+}
+
+.cardText-secondary,
+.fieldDescription,
+.listItem .secondary,
+.secondaryText,
+.nowPlayingBarSecondaryText,
+.programSecondaryTitle,
+.inputLabel,
+.inputLabelUnfocused,
+.checkboxListLabel,
+.paperListLabel {
+  color: var(--af-text-muted);
+}
+
+.listItem:hover {
+  background: var(--af-glass-fill-soft);
+}
+.listItem:focus {
+  background: var(--af-surface-raised);
+}
+.listItem-border {
+  border-color: var(--af-hairline) !important;
+}
+.actionsheetDivider {
+  background: var(--af-divider);
+}
+
+.navMenuOption:hover {
+  background: var(--af-glass-fill-soft);
+}
+.navMenuOption-selected {
+  background: var(--af-glass-fill) !important;
+  color: var(--af-accent-primary);
+  box-shadow: inset 3px 0 0 0 var(--af-accent-primary);
+}
+
+/* ===================================================================== */
+/* (c) Background: starfield, nebula, art backdrop                        */
+/*                                                                        */
+/* Stacking: html canvas < #af-space (-3) < .backdropContainer (-1)        */
+/* < page content (0) < #af-spotlight (900) < .skinHeader (999)           */
+/* < .videoPlayerContainer (1000, inline style from mpv-video-player.js). */
+/* ===================================================================== */
+
+#af-space {
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: var(--af-bg-base);
+  contain: strict;
+}
+
+/* Video mode: both gates. `transparentDocument` is set on <html> by
+ * jellyfin-web's setBackdropTransparency(1|2); `af-video` is set by
+ * astrofin-theme.js while a .videoPlayerContainer exists. Either one hides
+ * every Astrofin chrome layer so mpv shows through untouched. */
+html.transparentDocument #af-space,
+html.af-video #af-space,
+html.transparentDocument #af-spotlight,
+html.af-video #af-spotlight,
+html.transparentDocument #af-server-panel,
+html.af-video #af-server-panel,
+html.transparentDocument #af-hint,
+html.af-video #af-hint {
+  display: none !important;
+}
+
+#af-space > * {
+  position: absolute;
+  pointer-events: none;
+}
+
+.af-stars {
+  inset: -40px;
+  background-repeat: repeat;
+  will-change: transform;
+}
+.af-stars-1 {
+  background-image: var(--af-stars-1);
+  opacity: var(--af-stars-1-opacity);
+  animation: af-drift-1 var(--af-dur-drift-1) linear infinite alternate;
+}
+.af-stars-2 {
+  background-image: var(--af-stars-2);
+  opacity: var(--af-stars-2-opacity);
+  animation: af-drift-2 var(--af-dur-drift-2) linear infinite alternate;
+}
+
+@keyframes af-drift-1 {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-26px, 14px, 0); }
+}
+@keyframes af-drift-2 {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(18px, -22px, 0); }
+}
+
+.af-nebula {
+  left: 62%;
+  top: -10%;
+  width: 900px;
+  height: 900px;
+  border-radius: 50%;
+  background: var(--af-nebula-glow);
+  filter: blur(20px);
+}
+
+#af-backdrop {
+  inset: 0;
+}
+
+/* Two stacked art layers, crossfaded by astrofin-theme.js. */
+.af-backdrop-layer {
+  position: absolute;
+  inset: -6%;
+  opacity: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  transform: scale(var(--af-backdrop-scale-from));
+  transition:
+    opacity var(--af-dur-backdrop) var(--af-ease-out) var(--af-backdrop-hold),
+    transform var(--af-dur-backdrop) var(--af-ease-focus) var(--af-backdrop-hold);
+}
+.af-backdrop-layer.af-on {
+  opacity: .9;
+  transform: scale(1);
+}
+
+/* Blur plus the two PS5-style scrims, over the art, under everything else. */
+.af-backdrop-scrim {
+  position: absolute;
+  inset: 0;
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-backdrop));
+  backdrop-filter: blur(var(--af-glass-blur-backdrop));
+  background: var(--af-scrim-horizontal);
+}
+.af-backdrop-scrim::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--af-scrim-vertical);
+}
+
+/* ===================================================================== */
+/* (d) Header                                                             */
+/* jf-web 10.11.11: .skinHeader > .header > (.headerLeft | .headerRight)  */
+/* ===================================================================== */
+
+.skinHeader,
+.skinHeader.skinHeader-withBackground,
+.skinHeader.semiTransparent {
+  background: var(--af-glass) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: blur(var(--af-glass-blur));
+  backdrop-filter: blur(var(--af-glass-blur));
+  border-bottom: 1px solid var(--af-hairline);
+  color: var(--af-text-primary);
+  transition: background var(--af-dur-page) var(--af-ease-page);
+}
+
+/* Gutter: the design's 72px at >=1600px, shrinking so 1280px stays usable. */
+.skinHeader > .header {
+  min-height: var(--af-header-height);
+  padding-left: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
+  padding-right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
+  box-sizing: border-box;
+}
+
+.headerLeft {
+  gap: 14px;
+}
+
+/* jf-web 10.11.11: h3.pageTitle.pageTitleWithLogo.pageTitleWithDefaultLogo —
+ * the Jellyfin banner is a background-image on this element. */
+.pageTitle.pageTitleWithDefaultLogo,
+.layout-tv .pageTitle.pageTitleWithDefaultLogo {
+  display: flex;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  padding-left: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Ccircle cx='14' cy='14' r='13.25' fill='none' stroke='%236FE3FF' stroke-width='1.5' opacity='.45'/%3E%3Cpath d='M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z' fill='%236FE3FF'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 28px 28px;
+  font-size: 0; /* suppress any residual text node */
+}
+
+.pageTitle.pageTitleWithDefaultLogo::after {
+  content: "Astrofin";
+  margin-left: 14px;
+  font: var(--af-type-wordmark);
+  letter-spacing: var(--af-tracking-wordmark);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+  white-space: nowrap;
+}
+
+/* Circular header buttons. */
+.skinHeader .headerButton.paper-icon-button-light,
+.skinHeader button.headerButton {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: var(--af-radius-pill);
+  color: var(--af-text-muted);
+  background: transparent;
+  transition:
+    color var(--af-dur-tile) var(--af-ease-out),
+    background var(--af-dur-tile) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+.skinHeader .headerButton:hover,
+.skinHeader .headerButton:focus {
+  color: var(--af-text-primary);
+  background: var(--af-glass-fill-soft);
+}
+.skinHeader .headerButton:focus-visible,
+.skinHeader .headerButton.show-focus:focus {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+
+/* Section tabs under the header. */
+.headerTabs .emby-tab-button {
+  font: var(--af-type-tile-sub);
+  color: var(--af-text-muted);
+  text-transform: none;
+}
+.headerTabs .emby-tab-button-active {
+  color: var(--af-text-primary);
+  box-shadow: inset 0 -2px 0 0 var(--af-accent-primary);
+}
+
+/* ===================================================================== */
+/* (e) Cards / tiles                                                      */
+/* jf-web 10.11.11: .card > .cardBox > .cardScalable > .cardImageContainer */
+/* Focus lands on the inner a.cardImageContainer or a .cardOverlayButton,  */
+/* never on .card itself — hence :focus-within.                            */
+/* ===================================================================== */
+
+.card .cardBox {
+  background: transparent;
+  border: 0;
+}
+
+.card .cardScalable,
+.card .cardImageContainer,
+.card .cardPadder {
+  border-radius: var(--af-radius-tile);
+}
+
+.card .cardScalable {
+  position: relative;
+  border-radius: var(--af-radius-tile);
+  box-shadow: var(--af-focus-ring-rest);
+  transform: translateZ(0);
+  transition:
+    transform var(--af-dur-tile) var(--af-ease-focus),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+
+.card:hover .cardScalable,
+.card:focus-within .cardScalable,
+.card.af-focused .cardScalable {
+  transform: scale(var(--af-tile-scale));
+  box-shadow: var(--af-focus-ring-tile);
+  transition-duration: var(--af-dur-tile), var(--af-dur-ring-in);
+  z-index: 2;
+}
+
+/* jf-web 10.11.11 theme-dark paints a blue border on .card:focus — drop it,
+ * the ring above replaces it. */
+.card:focus .cardBox.visualCardBox,
+.card:focus .cardBox:not(.visualCardBox) .cardScalable {
+  border-color: transparent !important;
+}
+
+.card .cardImageContainer:focus,
+.card .cardImageContainer:focus-visible,
+.card .cardOverlayContainer:focus {
+  outline: none;
+}
+
+/* Missing art: a raised surface with a faint Astrofin mark instead of the
+ * defaultCardBackground1..5 blues. */
+.card .cardPadder,
+.card .defaultCardBackground1,
+.card .defaultCardBackground2,
+.card .defaultCardBackground3,
+.card .defaultCardBackground4,
+.card .defaultCardBackground5 {
+  background-color: var(--af-surface-raised) !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cpath d='M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z' fill='%236FE3FF' opacity='.12'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 44px 44px;
+}
+.card .cardImageIcon {
+  color: var(--af-text-muted);
+  opacity: .45;
+}
+
+/* Tile labels. */
+.card .cardText {
+  font: var(--af-type-tile);
+  color: var(--af-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+.card .cardText-secondary {
+  font: var(--af-type-tile-sub);
+  color: var(--af-text-muted);
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+}
+
+/* Home rails: unfocused labels recede. */
+html.af-home #homeTab .card .cardText {
+  opacity: .55;
+  transition: opacity var(--af-dur-tile) var(--af-ease-out);
+}
+html.af-home #homeTab .card:hover .cardText,
+html.af-home #homeTab .card:focus-within .cardText,
+html.af-home #homeTab .card.af-focused .cardText {
+  opacity: 1;
+}
+
+/* Watched-progress bar. jf-web 10.11.11: .innerCardFooter > .itemProgressBar. */
+.itemProgressBar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--af-progress-track);
+}
+.itemProgressBarForeground {
+  background-color: var(--af-accent-primary);
+  border-radius: 2px;
+}
+
+/* Kind badge. jf-web 10.11.11 has no badge element, but it does put the item
+ * type on .card[data-type]; astrofin-theme.js copies a display form of it into
+ * data-af-kind. Only the three types whose name reads well. */
+html.af-home #homeTab .card[data-af-kind] .cardScalable::before {
+  content: attr(data-af-kind);
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 3;
+  padding: 4px 8px;
+  border-radius: var(--af-radius-sm);
+  border: 1px solid var(--af-edge-chip);
+  background: rgba(var(--af-bg-base-rgb), .55);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-badge);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Overlay play/menu buttons on a hovered tile. */
+.cardOverlayButton {
+  color: var(--af-text-primary);
+}
+.cardOverlayButton.cardOverlayFab-primary {
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-primary-glow);
+}
+.cardOverlayContainer {
+  border-radius: var(--af-radius-tile);
+  background: var(--af-scrim-tile);
+}
+
+/* ===================================================================== */
+/* (f) Buttons, inputs                                                    */
+/* ===================================================================== */
+
+.emby-button.raised,
+.emby-button.button-submit,
+.button-submit,
+.raised,
+.fab,
+.emby-button.detailFloatingButton {
+  border-radius: var(--af-radius-pill);
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  font: var(--af-type-button);
+  text-transform: none;
+  letter-spacing: 0;
+  box-shadow: var(--af-primary-glow);
+  transition: box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+.emby-button.raised:focus,
+.emby-button.button-submit:focus,
+.button-submit:focus,
+.raised:focus,
+.fab:focus {
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+
+.button-delete,
+.emby-button.button-delete {
+  background: var(--af-accent-danger);
+  color: var(--af-on-accent);
+}
+
+/* Plain (non-raised) buttons: secondary glass pill. The exclusions keep the
+ * icon buttons, tabs, nav items and card actions out of it, plus jf-web
+ * 10.11.11's two deliberately chrome-less variants — .button-link (inline text
+ * links, e.g. the tag list on a details page) and .button-flat (the round
+ * icon+label detail actions). */
+.emby-button:not(.raised):not(.button-submit):not(.paper-icon-button-light):not(.emby-tab-button):not(.navMenuOption):not(.cardOverlayButton):not(.textActionButton):not(.itemAction):not(.button-link):not(.button-flat) {
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill-soft);
+  border: 1px solid var(--af-edge-strong);
+  color: var(--af-text-primary);
+  font: var(--af-type-button-secondary);
+  text-transform: none;
+}
+
+.emby-button.show-focus:focus {
+  background: var(--af-glass-fill);
+  color: var(--af-text-primary);
+  box-shadow: var(--af-focus-ring);
+}
+
+.paper-icon-button-light {
+  border-radius: var(--af-radius-pill);
+  color: var(--af-text-muted);
+  transition:
+    color var(--af-dur-tile) var(--af-ease-out),
+    background var(--af-dur-tile) var(--af-ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .paper-icon-button-light:hover:not(:disabled) {
+    background-color: var(--af-glass-fill-soft);
+    color: var(--af-text-primary);
+  }
+}
+.paper-icon-button-light:active:not(:disabled),
+.paper-icon-button-light.show-focus:focus {
+  background-color: var(--af-glass-fill-soft);
+  color: var(--af-accent-primary);
+}
+
+/* The 56px circular icon buttons from artboard 1c. */
+.af-icon-button {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--af-edge-strong);
+  background: var(--af-glass-fill-soft);
+  color: var(--af-text-primary);
+  display: grid;
+  place-items: center;
+  font: 400 20px var(--af-font-mono);
+  cursor: pointer;
+}
+
+.emby-input,
+.emby-textarea,
+.emby-select-withcolor {
+  background: var(--af-surface);
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-sm);
+  color: var(--af-text-primary);
+  font: var(--af-type-body);
+}
+.emby-input:focus,
+.emby-textarea:focus,
+.emby-select-withcolor:focus {
+  border-color: var(--af-accent-primary) !important;
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+}
+.emby-select-withcolor > option {
+  background: var(--af-surface);
+  color: var(--af-text-primary);
+}
+.emby-checkbox:checked + span + .checkboxOutline {
+  background-color: var(--af-accent-primary);
+  border-color: var(--af-accent-primary);
+}
+.emby-checkbox:focus + span + .checkboxOutline,
+.emby-checkbox:focus:not(:checked) + span + .checkboxOutline {
+  border-color: var(--af-accent-primary);
+  box-shadow: var(--af-focus-ring);
+}
+
+.mediaInfoText {
+  background: var(--af-glass-fill-soft);
+  border: 1px solid var(--af-edge-chip);
+  border-radius: var(--af-radius-pill);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+}
+
+/* ===================================================================== */
+/* (g) Section titles and meta chips                                      */
+/* ===================================================================== */
+
+.sectionTitle {
+  font: var(--af-type-tile);
+  font-size: 20px;
+  letter-spacing: 0;
+  color: var(--af-text-primary);
+}
+.sectionTitleContainer {
+  align-items: baseline;
+  gap: var(--af-space-4);
+}
+
+.af-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: var(--af-radius-pill);
+  border: 1px solid var(--af-edge-chip);
+  background: var(--af-glass-fill);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+  white-space: nowrap;
+}
+
+/* ===================================================================== */
+/* (h) Player OSD                                                         */
+/* Frosted bar plus cyan timeline. Layout, hide/show and timing stay with  */
+/* jellyfin-web and the native shims — colours and surfaces only.          */
+/* jf-web 10.11.11: .videoOsdBottom / .osdControls / .osdTimeText /        */
+/* .mdl-slider-background-lower|upper                                      */
+/* ===================================================================== */
+
+.videoOsdBottom {
+  background: linear-gradient(0deg, rgba(var(--af-bg-base-rgb), .92), rgba(var(--af-bg-base-rgb), 0));
+  color: var(--af-text-primary);
+}
+.videoOsdBottom .osdControls {
+  border-radius: var(--af-radius-panel);
+  background: var(--af-glass);
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+  backdrop-filter: blur(var(--af-glass-blur-panel));
+  border: 1px solid var(--af-edge-luminous);
+  padding: var(--af-space-4) var(--af-space-6);
+  margin: 0 clamp(16px, 4vw, var(--af-gutter));
+}
+.videoOsdBottom .osdTimeText {
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-primary);
+}
+.videoOsdBottom .osdTitle,
+.videoOsdBottom .osdTitleSmall {
+  font-family: var(--af-font-display);
+  font-weight: 300;
+}
+.videoOsdBottom .osdMediaInfo .mediaInfoText {
+  background: var(--af-glass-fill-soft);
+}
+.videoOsdBottom .mdl-slider-background-lower {
+  background-color: var(--af-accent-primary);
+}
+.videoOsdBottom .mdl-slider-background-upper {
+  background-color: var(--af-progress-track);
+}
+.videoOsdBottom .mdl-slider-background-flex-inner,
+.videoOsdBottom .mdl-slider-background-flex {
+  height: 3px;
+}
+.videoOsdBottom .mdl-slider::-webkit-slider-thumb {
+  background: var(--af-accent-primary);
+  border-color: var(--af-accent-primary);
+}
+.videoOsdBottom .paper-icon-button-light {
+  color: var(--af-text-primary);
+}
+.sliderBubble {
+  background: var(--af-glass-fill);
+  border: 1px solid var(--af-edge-chip);
+  border-radius: var(--af-radius-sm);
+  color: var(--af-text-primary);
+  font: var(--af-type-meta-sm);
+}
+
+/* ===================================================================== */
+/* (i) Dialogs, action sheets, popovers                                   */
+/* ===================================================================== */
+
+.dialog,
+.actionSheet,
+.focuscontainer.dialog,
+.actionSheetContent {
+  background: var(--af-glass) !important;
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+  backdrop-filter: blur(var(--af-glass-blur-panel));
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-panel) !important;
+  color: var(--af-text-primary);
+}
+.actionSheetMenuItem:hover,
+.actionSheetMenuItem:focus {
+  background: var(--af-glass-fill-soft);
+}
+.formDialogHeader:not(.formDialogHeader-clear) {
+  border-bottom: 1px solid var(--af-hairline);
+  background: transparent;
+}
+.infoBanner {
+  background: var(--af-surface-raised);
+  border: 1px solid var(--af-hairline);
+  border-radius: var(--af-radius-md);
+  color: var(--af-text-primary);
+}
+
+/* ===================================================================== */
+/* (j) Scrollbars                                                         */
+/* native-shim.js already zeroes these when the "Hide Scrollbar" setting   */
+/* is on; this is the styling for when it is off.                          */
+/* ===================================================================== */
+
+* {
+  scrollbar-color: var(--af-progress-track) transparent;
+  scrollbar-width: thin;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece {
+  background-color: transparent;
+  box-shadow: none;
+}
+::-webkit-scrollbar-thumb:horizontal,
+::-webkit-scrollbar-thumb:vertical {
+  background: var(--af-progress-track);
+  border-radius: 2px;
+}
+
+/* ===================================================================== */
+/* (k) Home spotlight, server panel, controller hint                      */
+/* Built by astrofin-theme.js. Fixed, below .skinHeader (999) and well     */
+/* below .videoPlayerContainer (1000).                                     */
+/* ===================================================================== */
+
+#af-spotlight,
+#af-server-panel,
+#af-hint {
+  position: fixed;
+  z-index: 900;
+  box-sizing: border-box;
+  opacity: 0;
+  transition: opacity var(--af-dur-overlay-out) var(--af-ease-in);
+}
+#af-spotlight[hidden],
+#af-server-panel[hidden],
+#af-hint[hidden] {
+  display: none !important;
+}
+#af-spotlight.af-show,
+#af-server-panel.af-show,
+#af-hint.af-show {
+  opacity: 1;
+  transition-duration: var(--af-dur-overlay-in);
+  transition-timing-function: var(--af-ease-out);
+}
+
+#af-spotlight {
+  left: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
+  bottom: clamp(24px, 6vh, var(--af-gutter));
+  width: min(760px, 56vw);
+  outline: none;
+}
+
+/* jellyfin-web stacks rails down the whole page, so on anything shorter than
+ * the design's 1080 the spotlight sits over the lower rails. Its own scrim
+ * keeps the panel legible instead of fighting the tiles behind it. */
+#af-spotlight::before {
+  content: "";
+  /* Fixed, so it is measured against the viewport rather than the panel box:
+   * the scrim has to reach well past the panel to swallow the tiles behind it.
+   * #af-spotlight already carries z-index 900, so -1 keeps this behind the
+   * panel's own content but above the page. */
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(
+    88% 88% at 0% 100%,
+    rgba(var(--af-bg-base-rgb), .97) 0%,
+    rgba(var(--af-bg-base-rgb), .88) 34%,
+    rgba(var(--af-bg-base-rgb), .52) 60%,
+    rgba(var(--af-bg-base-rgb), 0) 84%
+  );
+  pointer-events: none;
+}
+
+.af-sp-title {
+  margin: 0 0 var(--af-space-6);
+  font: var(--af-type-display);
+  letter-spacing: var(--af-tracking-display);
+  color: var(--af-text-primary);
+  text-wrap: pretty;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.af-sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.af-sp-chips:empty {
+  display: none;
+}
+
+.af-sp-overview {
+  margin: 0 0 var(--af-space-8);
+  max-width: 640px;
+  font: var(--af-type-body-lg);
+  color: var(--af-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.af-sp-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.af-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--af-radius-pill);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: var(--af-type-button);
+  transition: box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+.af-btn:focus-visible,
+.af-btn:hover {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+.af-btn-primary {
+  padding: 17px 34px;
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-primary-glow);
+}
+.af-btn-secondary {
+  padding: 17px 28px;
+  background: var(--af-glass-fill-soft);
+  border-color: var(--af-edge-strong);
+  color: var(--af-text-primary);
+  font: var(--af-type-button-secondary);
+}
+.af-btn-glyph {
+  width: 0;
+  height: 0;
+  border-left: 13px solid var(--af-on-accent);
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+}
+
+#af-server-panel {
+  right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
+  bottom: clamp(24px, 6vh, var(--af-gutter));
+  width: 300px;
+  padding: 24px 26px;
+  border-radius: var(--af-radius-panel);
+  border: 1px solid var(--af-edge-luminous);
+  background: var(--af-glass);
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+  backdrop-filter: blur(var(--af-glass-blur-panel));
+}
+.af-srv-eyebrow {
+  margin-bottom: var(--af-space-4);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+.af-srv-name {
+  font: 500 18px/1.3 var(--af-font-body);
+  color: var(--af-text-primary);
+  overflow-wrap: anywhere;
+}
+.af-srv-rule {
+  height: 1px;
+  margin: 18px 0;
+  background: var(--af-edge-soft);
+}
+.af-srv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--af-space-4);
+  font: 400 15px/1.6 var(--af-font-body);
+  color: var(--af-text-muted);
+}
+.af-srv-row > span:last-child {
+  font-family: var(--af-font-mono);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-primary);
+}
+
+#af-hint {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 26px;
+  padding: 0 clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-muted);
+}
+
+/* Short viewports (720p and the like): the spotlight has to share the screen
+ * with the first rail, so it sheds the overview and drops a type step. */
+@media (max-height: 900px) {
+  .af-sp-title {
+    font: var(--af-type-title);
+    letter-spacing: var(--af-tracking-display);
+    -webkit-line-clamp: 1;
+    margin-bottom: var(--af-space-4);
+  }
+  .af-sp-chips { margin-bottom: var(--af-space-4); }
+  .af-sp-overview { display: none; }
+  #af-server-panel { display: none; }
+}
+/* Below the height the panel needs to read at all, drop it and leave the
+ * plain themed rails. Above this the spotlight stays, overlapping the lower
+ * rails the way the PS5 layout does — its own scrim keeps it legible. */
+@media (max-height: 560px) {
+  #af-spotlight,
+  #af-hint { display: none !important; }
+}
+
+/* ===================================================================== */
+/* (l) Reduced motion                                                     */
+/* Durations, scales and offsets all come from tokens, which the tokens    */
+/* sheet already collapses under prefers-reduced-motion. Only the two      */
+/* keyframe drifts need switching off explicitly.                          */
+/* ===================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .af-stars-1,
+  .af-stars-2 {
+    animation: none;
+  }
+}
