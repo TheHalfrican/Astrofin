@@ -103,7 +103,7 @@ impl Listener {
     {
         match Self::make(name, false) {
             Ok(listener) => Self::spawn(listener, handle),
-            Err(e) if e.kind() == ErrorKind::AddrInUse => match Self::probe(name).await {
+            Err(e) if name_taken(&e) => match Self::probe(name).await {
                 Probe::AlreadyRunning => Start::AlreadyRunning,
                 Probe::Stale => match Self::make(name, true) {
                     Ok(listener) => Self::spawn(listener, handle),
@@ -164,6 +164,16 @@ impl Drop for Listener {
             accept.abort();
         }
     }
+}
+
+/// Does a failed bind mean somebody already holds the name?
+///
+/// Unix reports a socket file that is already there — live or stale — as
+/// `AddrInUse`. Windows never does: `interprocess` creates the first pipe
+/// instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so every later
+/// `CreateNamedPipe` on that name fails with `ERROR_ACCESS_DENIED`.
+fn name_taken(e: &io::Error) -> bool {
+    e.kind() == ErrorKind::AddrInUse || (cfg!(windows) && e.kind() == ErrorKind::PermissionDenied)
 }
 
 enum Probe {
