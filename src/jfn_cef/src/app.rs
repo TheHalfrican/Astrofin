@@ -627,30 +627,55 @@ fn styles_preamble(profile: &ExtraInfo) -> Option<String> {
     Some(format!(
         r#"(function () {{
     'use strict';
-    var css = {css_json};
-    var ID = 'af-theme';
-    function install() {{
-        var el = document.getElementById(ID);
-        if (!el) {{
-            el = document.createElement('style');
-            el.id = ID;
-            el.setAttribute('data-astrofin', 'theme');
+    // This preamble shares one execute_java_script call with every shim that
+    // follows it, so it must never throw: an uncaught exception here would
+    // abort native-shim.js and the mpv players with it.
+    try {{
+        var css = {css_json};
+        var ID = 'af-theme';
+        function install() {{
+            // OnContextCreated fires before parsing starts, so there may be
+            // no <html> yet. Report failure and let the caller retry.
+            var host = document.head || document.documentElement;
+            if (!host) {{
+                return null;
+            }}
+            var el = document.getElementById(ID);
+            if (!el) {{
+                el = document.createElement('style');
+                el.id = ID;
+                el.setAttribute('data-astrofin', 'theme');
+            }}
+            if (el.textContent !== css) {{
+                el.textContent = css;
+            }}
+            // Park it once. astrofin-theme.js owns its position from then on:
+            // jf-web loads its own theme sheet from a <div> inside <body>, so
+            // no position in <head> wins the cascade after the app has booted.
+            if (!el.parentNode || el.parentNode === document.documentElement) {{
+                host.appendChild(el);
+            }}
+            return el;
         }}
-        if (el.textContent !== css) {{
-            el.textContent = css;
+        window.__afInstallTheme = install;
+        if (!install() && typeof MutationObserver === 'function') {{
+            // Wait for the root element to appear, then install once.
+            var mo = new MutationObserver(function () {{
+                if (install()) {{
+                    mo.disconnect();
+                }}
+            }});
+            mo.observe(document, {{ childList: true, subtree: true }});
         }}
-        // Park it once. astrofin-theme.js owns its position from then on:
-        // jf-web loads its own theme sheet from a <div> inside <body>, so no
-        // position in <head> wins the cascade after the app has booted.
-        if (!el.parentNode || el.parentNode === document.documentElement) {{
-            (document.head || document.documentElement).appendChild(el);
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', function () {{
+                install();
+            }}, {{ once: true }});
         }}
-        return el;
-    }}
-    window.__afInstallTheme = install;
-    install();
-    if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', install, {{ once: true }});
+    }} catch (e) {{
+        if (window.console && console.warn) {{
+            console.warn('[Astrofin theme] stylesheet install failed', e);
+        }}
     }}
 }})();
 "#

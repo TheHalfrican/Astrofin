@@ -36,7 +36,8 @@
     var SCROLL_HIDE_RATIO = 0.35;
 
     var doc = document;
-    var root = doc.documentElement;
+    // Resolved lazily: at OnContextCreated there is no <html> element yet.
+    function root() { return doc.documentElement; }
 
     function log(err) {
         if (window.console && console.debug) {
@@ -177,7 +178,7 @@
      */
     function updateVideoMode() {
         var playing = !!doc.querySelector('.videoPlayerContainer');
-        root.classList.toggle('af-video', playing);
+        root().classList.toggle('af-video', playing);
         if (playing) {
             clearBackdrop();
         }
@@ -201,7 +202,7 @@
             next.classList.add('af-on');
             prev.classList.remove('af-on');
             backdropSlot = 1 - backdropSlot;
-            root.classList.add('af-backdrop');
+            root().classList.add('af-backdrop');
         });
         img.onerror = guard(function () {
             if (currentBackdropUrl === url) { clearBackdrop(); }
@@ -214,7 +215,7 @@
         for (var i = 0; i < backdropLayers.length; i++) {
             backdropLayers[i].classList.remove('af-on');
         }
-        root.classList.remove('af-backdrop');
+        root().classList.remove('af-backdrop');
     }
 
     /* ------------------------------------------------------------------ */
@@ -654,13 +655,13 @@
         keepThemeLast();
         pinThemeColor();
         if (isHomeRoute()) {
-            root.classList.add('af-home');
+            root().classList.add('af-home');
             buildUi();
             renderServerPanel();
             decorateCards();
             if (focusedItem) { showOverlays(true); } else { showOverlays(overlaysWanted); }
         } else {
-            root.classList.remove('af-home');
+            root().classList.remove('af-home');
             leaveHome();
         }
     }
