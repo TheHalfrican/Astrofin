@@ -130,6 +130,57 @@ Verified live: with a simulated `.videoPlayerContainer` + `transparentDocument`,
 computed `html` and `body` background are `rgba(0,0,0,0)`, all four Astrofin
 layers are `display: none`, and `.mpvPoster` is `rgb(0,0,0)`.
 
+### Playback verification (real mpv, 2026-09-07)
+
+Everything above was re-checked against **real playback** in the built app on
+Windows, against the reference server (jellyfin-web 10.11.11, Dune 2021 —
+3840×1608 HDR direct play — and a 4:3 episode), driven over the CEF remote
+debugging port at 1280×720 CSS / dpr 3.
+
+Every state below measured identical values:
+
+| Measured | Value |
+| --- | --- |
+| `html`, `body`, `.backgroundContainer`, `.backdropContainer`, `.videoPlayerContainer` background | `rgba(0, 0, 0, 0)` |
+| `#af-space`, `#af-spotlight`, `#af-server-panel`, `#af-hint` | `display: none` |
+| `html` classes | `af-video transparentDocument` (and `af-home` is dropped) |
+| `.backgroundContainer` classes | `backgroundContainer backgroundContainer-transparent` |
+
+States exercised: **playing with the OSD shown**, **playing with the OSD hidden**
+(5 s idle, `.videoOsdBottom-hidden hide`, `opacity: 0`), **paused**, **after a
+seek**, **resumed**, **subtitle picker open**, **subtitle picker closed**, and
+**after stop**.
+
+`.mpvPoster` behaves exactly as the design assumes — sampled every 300 ms from
+the click:
+
+```
+    3ms  no .videoPlayerContainer yet
+  315ms  poster bg=rgb(0, 0, 0) art display=block opacity=1   html=rgba(0,0,0,0)  html.af-video (no transparentDocument yet)
+  620ms  poster bg=rgb(0, 0, 0) art display=block opacity=1   html=rgba(0,0,0,0)  html.af-video.transparentDocument
+  930ms  .videoPlayerContainer present, .mpvPoster removed
+```
+
+The 315 ms sample is the hazard window the section above describes — it is real,
+it lasts roughly 300 ms per start, and `html.af-video` is the only thing holding
+the root canvas transparent through it.
+
+After stop, everything is restored: `html` back to `rgb(7, 10, 20)`, classes
+back to `af-home af-backdrop`, `#af-space` `block`, `#af-spotlight` `flex`, no
+`.videoPlayerContainer`, no stuck `af-video`, and the hover spotlight works
+again. (`#af-server-panel` stays `none` at 720 p — that is the documented
+`900px` viewport-height cut-off, not a video-mode leftover.)
+
+Only two things paint anything at all during playback besides mpv: the two OSD
+bands. Both are sub-1 alpha by construction (see below); an automated sweep of
+every visible descendant of `.videoOsdBottom` and `.skinHeader.osdHeader` found
+no opaque background other than the cyan progress fill itself.
+
+`.appfooter` is worth knowing about: it survives into playback at
+`z-index: 1201` — *above* `.videoPlayerContainer` — and the theme gives it
+`--af-surface-raised`. It is harmless only because jf-web leaves it empty and
+`0px` tall. If it ever grows content during playback it would paint over mpv.
+
 ## Z-index map
 
 | Layer | z-index | Notes |
@@ -141,8 +192,10 @@ layers are `display: none`, and `.mpvPoster` is `rgb(0,0,0)`.
 | page content, `.mainAnimatedPage` | 0 | |
 | `#af-server-panel`, `#af-hint` | `900` | fixed, `pointer-events: none` |
 | `#af-spotlight` | — | in flow inside `#homeTab .homeSectionsContainer`, not positioned |
-| `.skinHeader` | `999` | jellyfin-web's own value |
+| `.skinHeader` | `999` | jellyfin-web's own value; computes to `1` once `.osdHeader` is added during playback |
 | `.videoPlayerContainer` | `1000` | inline style from `mpv-video-player.js` when fullscreen |
+| `.videoOsdBottom`, `.skinHeader.osdHeader` | auto | inside `#reactRoot`, painted over `.videoPlayerContainer`; both sub-1 alpha so mpv shows through |
+| `.appfooter` | `1201` | above `.videoPlayerContainer`, and opaque — harmless only because jf-web leaves it empty and `0px` tall during playback |
 
 ## jellyfin-web selectors depended on
 
@@ -224,12 +277,65 @@ secondary pill, or the tag list on a details page turns into a wall of pills),
 `.emby-input`, `.emby-textarea`, `.emby-select-withcolor`, `.emby-checkbox` +
 `.checkboxOutline`, `.mediaInfoText`.
 
-**Player OSD**
-`.videoOsdBottom`, `.videoOsdBottom-hidden`, `.osdControls`, `.osdTimeText`,
-`.osdTitle`, `.osdTitleSmall`, `.osdMediaInfo`, `.mdl-slider`,
-`.mdl-slider-background-lower` (progress), `.mdl-slider-background-upper`
-(track), `.sliderBubble`. Layout, hide/show and timing are left to jellyfin-web
-and the native shims; only colours and surfaces change.
+**Player OSD** — all read off a live playing session, not off the CSS chunks.
+
+`.videoOsdBottom` (fixed, bottom, the band), `.videoOsdBottom-maincontrols`,
+`.videoOsdBottom-hidden` + `.hide` (the hidden state; `opacity: 0`,
+`display: none`), `.osdControls` (the bar), `.osdTextContainer`
+`.osdMainTextContainer` > `h3.osdTitle`, `.osdMediaStatus`, the
+`.flex.flex-direction-row.align-items-center` row holding
+`.osdTextContainer.startTimeText.osdPositionText` /
+`.sliderContainer.mdl-slider-container` /
+`.osdTextContainer.endTimeText.osdDurationText`, then
+`.buttons.focuscontainer-x` with `.btnPreviousChapter`, `.btnRewind`,
+`.btnPause`, `.btnFastForward`, `.btnNextChapter`, `div.osdTimeText >
+span.endsAtText`, `.btnUserRating`, `.btnSubtitles`, `.btnAudio`,
+`.volumeButtons` (`.buttonMute` + `.osdVolumeSlider`),
+`.btnVideoOsdSettings`, `.btnFullscreen` — all
+`button.paper-icon-button-light` with a
+`span.xlargePaperIconButton.material-icons` inside.
+
+Three things here were wrong in the pre-playback guesses:
+
+* **`h3.osdTitle` is empty on this path.** 10.11.11 puts the item title in the
+  top OSD banner instead, so the bottom bar must not reserve space for it
+  (`.osdMainTextContainer` otherwise contributes an 11 px margin around a 0-height
+  box). The theme zeroes that margin and re-adds it via `.osdTitle:not(:empty)`.
+* **The top OSD banner is `.skinHeader.osdHeader`, not a `.videoOsdTop`.**
+  jf-web reuses the app header and adds `osdHeader`
+  (`.skinHeader.focuscontainer-x.skinHeader-withBackground.skinHeader-blurred.osdHeader`),
+  carrying `.headerBackButton` and `.headerLeft .pageTitle` (the item title).
+  Section (h) restyles it after section (d), which is how it outranks the
+  `!important` glass background there at equal specificity.
+* **`.mdl-slider-background-upper` is not the track.** Measured inline styles
+  are `left: 14.012%; width: 0.401142%` — it is the **buffered** span. The real
+  track is `.mdl-slider-background-flex`, which jf-web paints
+  `rgba(255,255,255,.3)`; `.mdl-slider-background-lower` is the played span.
+  Chapter markers are `span.sliderMarker.watched` / `.unwatched`, 2×12 px ticks
+  positioned with `left: calc(N% - 1px)` (jf-web paints watched `#00a4dc`,
+  unwatched `rgba(255,255,255,.3)`).
+
+Also present: `.sliderMarkerContainer`, `.sliderBubbleTrack`, `.sliderBubble`,
+`input.osdPositionSlider.mdl-slider` (whose `color` is jf's `#00a4dc` and drives
+the thumb), `.mdl-slider-background-flex-container`,
+`.mdl-slider-background-flex-inner`, `.osdPoster` and `.osdMediaInfo` (neither
+appears on the desktop path), `.osdTitleSmall`.
+
+Layout order, hide/show and timing are left to jellyfin-web and the native
+shims. The theme changes surfaces, colour and the vertical rhythm only:
+
+| Band | jf-web default | Astrofin |
+| --- | --- | --- |
+| `.videoOsdBottom` | 274 px tall (120 px top padding) with a `rgba(bg,.92)` scrim | 120 px, no scrim — the bar *is* the band |
+| `.osdControls` | 126 px | 96 px, floating glass, `--af-radius-panel`, `--af-edge-luminous` (top edge `--af-edge-strong`) |
+| `.skinHeader.osdHeader` | 121 px opaque-reading glass slab | 68 px light scrim, no blur, no bottom hairline |
+
+Neither band may be opaque. The bar is
+`linear-gradient(180deg, rgba(surface-raised,.40), rgba(bg-base,.48))` over
+`backdrop-filter: blur(20px) brightness(.62) saturate(1.05)` — the
+`brightness()` is what buys legibility over a bright frame *without* an opaque
+fill, so the picture keeps moving through the band. The banner is
+`rgba(bg,.80) → .52 @62% → 0`.
 
 **Dialogs / chrome**
 `.dialog`, `.actionSheet`, `.actionSheetContent`, `.actionSheetMenuItem`,
@@ -252,12 +358,26 @@ uses); `window.jmpInfo.settings.playback.hwdec` and
   `THEME_CHANGE` and `HEADER_RENDERED` on a Home page. `SHOW_VIDEO_OSD` presumably
   appears once the video OSD mounts; `native-shim.js` already creates the array
   itself, and the theme does not use it.
-* **The OSD selectors** were read from the CSS chunks, not from a live playing
-  session — playback was never started against the user's server.
 * **A "kind" badge element** does not exist in 10.11.11's card markup. The badge
   is synthesised: `astrofin-theme.js` copies `.card[data-type]` into
   `data-af-kind` for Movie / Series / Episode only, and the CSS renders it with
-  `content: attr(data-af-kind)`.
+  `content: attr(data-af-kind)` on `.cardScalable::before`. The attribute is set
+  on **both** the `.card` and its `.cardScalable`: `attr()` resolves against the
+  pseudo-element's own originating element, never against an ancestor, so with
+  it only on `.card` every declaration in the rule applied but `content`
+  resolved to `""` and the badge measured 0×0. That is why it appeared to be
+  missing on "some" cards — it was missing on all of them.
+* **Action-sheet rows are `.emby-button`.** In 10.11.11 each one is
+  `button.listItem.listItem-button.actionSheetMenuItem.emby-button`, which the
+  secondary-pill rule in section (f) was styling — the subtitle and audio
+  pickers came out as a wall of bordered pills. `:not(.listItem)` was added to
+  that rule's exclusion chain. The selected track is marked by *visibility*, not
+  a class: unselected rows carry an inline `style="visibility:hidden;"` on
+  `span.actionsheetMenuItemIcon`, the selected row's icon has no `style`
+  attribute at all.
+* **`.emby-button.button-link`** has to be spelled out. A bare `.button-link`
+  (0,1,0) ties with jf-web's own `.emby-button` colour rule and lost on source
+  order, so the tag list on a details page rendered white instead of accent.
 * **`.homePage`** was not observed; `#homeTab` is the real hook. `.homePage` is
   kept in the route fallback selector as a cheap safety net.
 * **Route detection** uses the hash as authoritative whenever there is one,
@@ -396,8 +516,44 @@ theme.css` is inserted, the card structure and `data-action` values, and the
 
 ### Video safety check
 
-With the app running, start playback and confirm `html`/`body` computed
-background are transparent, `#af-space` is `display: none`, and the video is
-visible. The same can be simulated in a browser by inserting a
-`div.videoPlayerContainer` at `body.firstChild` and adding `transparentDocument`
-to `<html>`.
+The cheap version: in a browser, insert a `div.videoPlayerContainer` at
+`body.firstChild` and add `transparentDocument` to `<html>`, then read the
+computed backgrounds.
+
+The real version, and the one the numbers in
+[Playback verification](#playback-verification-real-mpv-2026-09-07) come from —
+run the built app against the server on a **copy** of the profile so a crash
+cannot damage the user's, and drive it over the CEF remote debugging port:
+
+```powershell
+robocopy "$env:APPDATA\astrofin"      "$scratch\profile-p" /E /NFL /NDL /NJH /NJS
+robocopy "$env:LOCALAPPDATA\astrofin" "$scratch\cache-p"   /E /NFL /NDL /NJH /NJS
+build\astrofin.exe --config-dir $scratch\profile-p --cache-dir $scratch\cache-p `
+  --remote-debug-port 9223 --log-level debug --log-file $scratch\playback-run.log
+```
+
+Then, from Node (26+ has a global `WebSocket`), attach to
+`http://127.0.0.1:9223/json`, `Emulation.setDeviceMetricsOverride` to
+1280×720 at `deviceScaleFactor: 3`, and:
+
+* start playback by clicking a real card button —
+  `.card[data-id][data-type="Movie"] .cardOverlayButton[data-action="resume"]` —
+  so jellyfin-web owns the resume offset and media-source choice;
+* wake and sleep the OSD with `Input.dispatchMouseEvent` `mouseMoved`
+  (5 s of stillness hides it and sets `body.mouseIdle`);
+* pause with `.btnPause`, seek by setting `.osdPositionSlider.value` and firing
+  `change`, open the pickers with `.btnSubtitles` / `.btnAudio`;
+* **dismiss an action sheet by clicking the backdrop**, not with Escape — a
+  synthetic Escape does not reach it, and an open sheet then swallows the click
+  on `.headerBackButton` that stops playback. Dismissing without choosing makes
+  jellyfin-web log its own `Uncaught (in promise) Error: ActionSheet closed
+  without resolving`; that is jf-web, not the theme;
+* stop with `.headerBackButton`.
+
+`Page.captureScreenshot` only ever returns the **web layer** — mpv is not in the
+CEF surface. For a composited picture (video + OSD) capture the window off the
+screen instead, from a **DPI-aware** process: a DPI-unaware
+`GetWindowRect`/`CopyFromScreen` returns virtualised 1292×732 logical
+coordinates and silently grabs the top-left third of the 3876×2196 window.
+Call `SetProcessDpiAwarenessContext(-4)` first. The OSD hides after ~3 s, so
+pump `mouseMoved` from the CDP side while the capture runs.
