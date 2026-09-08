@@ -173,6 +173,7 @@ impl NativeFunction {
 pub(crate) enum InjectedScript {
     NativeShim,
     VideoModeResolver,
+    MpvStats,
     MpvPlayerBase,
     MpvVideoPlayer,
     MpvAudioPlayer,
@@ -189,6 +190,7 @@ impl InjectedScript {
         Some(match name {
             "native-shim.js" => Self::NativeShim,
             "video-mode-resolver.js" => Self::VideoModeResolver,
+            "mpv-stats.js" => Self::MpvStats,
             "mpv-player-base.js" => Self::MpvPlayerBase,
             "mpv-video-player.js" => Self::MpvVideoPlayer,
             "mpv-audio-player.js" => Self::MpvAudioPlayer,
@@ -206,6 +208,7 @@ impl InjectedScript {
         match self {
             Self::NativeShim => "native-shim.js",
             Self::VideoModeResolver => "video-mode-resolver.js",
+            Self::MpvStats => "mpv-stats.js",
             Self::MpvPlayerBase => "mpv-player-base.js",
             Self::MpvVideoPlayer => "mpv-video-player.js",
             Self::MpvAudioPlayer => "mpv-audio-player.js",
@@ -294,6 +297,8 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::NativeShim,
     // Before the video player: it reads `window.AstrofinVideoMode` on play.
     InjectedScript::VideoModeResolver,
+    // Before the player classes: their shared `getStats()` calls into it.
+    InjectedScript::MpvStats,
     InjectedScript::MpvPlayerBase,
     InjectedScript::MpvVideoPlayer,
     InjectedScript::MpvAudioPlayer,

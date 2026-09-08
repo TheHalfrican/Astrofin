@@ -427,7 +427,6 @@
 
         togglePictureInPicture() {}
         toggleAirPlay() {}
-        getStats() { return Promise.resolve({ categories: [] }); }
         getSupportedAspectRatios() {
             return [
                 { id: 'auto',  name: this.globalize.translate('Auto') },
