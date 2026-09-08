@@ -157,6 +157,7 @@ impl Drop for PlaybackCoordinator {
 fn worker(rx: Receiver<Input>, shared: Arc<Shared>) {
     let mut sm = PlaybackStateMachine::new();
     while let Ok(first) = rx.recv() {
+        jfn_mpv::memprobe::note_coordinator_qlen(rx.len());
         let mut events: Vec<PlaybackEvent> = Vec::new();
         let mut actions: Vec<PlaybackAction> = Vec::new();
         for input in std::iter::once(first).chain(rx.try_iter()) {

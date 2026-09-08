@@ -311,6 +311,9 @@ fn digest_cache_state(value: &PropertyValue) -> Vec<IngestOut> {
     let PropertyValue::Node(node) = value else {
         return Vec::new();
     };
+    if let Some(fw) = node.get("fw-bytes").and_then(|v| v.as_int()) {
+        jfn_mpv::memprobe::note_fw_bytes(fw);
+    }
     let Some(arr) = node.get("seekable-ranges").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
