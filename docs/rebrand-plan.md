@@ -635,7 +635,8 @@ flatpak file is wrong and predates the fork.)
 
 ## 6c. What breaks in the user's existing setup at `%APPDATA%\jellium-desktop\mpv`
 
-> **Superseded (feat/video-mode).** The out-of-repo mode switcher is gone: Movies/Anime/Off is now
+> **Superseded (feat/video-mode, feat/auto-video-mode).** The out-of-repo mode switcher is gone:
+> Auto/Live-Action/Animation/Off is now
 > a built-in setting (Settings -> Playback -> Video mode) that switches live through libmpv, the
 > shaders ship in `resources/shaders/`, and no `mpv.conf` rewrite or app restart is involved. See
 > `docs/video-modes.md`. Two rows of the table below are therefore resolved in-repo rather than by

@@ -274,6 +274,26 @@ fn with_args(args: Option<&ListValue>, f: impl FnOnce(&ListValue)) -> bool {
     true
 }
 
+/// `setPlaybackVideoMode`: the per-title mode the web layer resolved from the
+/// item's tags, genres and library, applied for this playback only.
+///
+/// The gate — honoured only while the mode selected for this run is `auto` —
+/// lives in `jfn_mpv::video_mode::apply_resolved`, so a stale resolver call
+/// (the page script racing a settings change, say) and a `--video-mode`
+/// override are handled in one place. Nothing here persists.
+fn handle_playback_video_mode(mode: &str, reason: &str, name: &str) {
+    match jfn_mpv::VideoMode::parse(mode) {
+        Some(m) => {
+            jfn_mpv::video_mode::apply_resolved(m, reason, name);
+        }
+        None => jfn_logging::log(
+            jfn_logging::CATEGORY_CEF,
+            jfn_logging::LEVEL_WARN,
+            &format!("setPlaybackVideoMode: unknown mode {mode:?}; leaving the chain alone"),
+        ),
+    }
+}
+
 fn handle_message(message: BrowserMessage) -> bool {
     let args = message.args();
 
@@ -359,6 +379,9 @@ fn handle_message(message: BrowserMessage) -> bool {
             } else if !st.was_fullscreen_before_osd {
                 jfn_platform_abi::get().set_fullscreen(false);
             }
+        }),
+        "setPlaybackVideoMode" => with_args(args, |a| {
+            handle_playback_video_mode(&list_string(a, 0), &list_string(a, 1), &list_string(a, 2));
         }),
         "toggleFullscreen" => {
             jfn_platform_abi::get().toggle_fullscreen();

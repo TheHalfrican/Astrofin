@@ -154,9 +154,28 @@ struct StartupOptions {
     remote_debugging_port: c_int,
 }
 
+/// The persisted video mode, normalised once onto the post-rename names.
+///
+/// A `settings.json` written before the rename carries no `videoModeMigrated`
+/// marker; there `movies`/`anime` mean live-action/animation and `off` meant
+/// "leave mpv.conf alone", whose closest new behaviour is auto (the new `off`
+/// actively clears every shader). The normalised name is written straight
+/// back, and every file this build saves carries the marker, so this runs at
+/// most once per profile.
+fn stored_video_mode() -> jfn_mpv::VideoMode {
+    let raw = jfn_config::video_mode();
+    if jfn_config::video_mode_migrated() {
+        return jfn_mpv::VideoMode::parse(&raw).unwrap_or_default();
+    }
+    let mode = jfn_mpv::VideoMode::parse_legacy(&raw).unwrap_or_default();
+    jfn_config::set_video_mode(mode.as_str());
+    jfn_config::settings_save_async();
+    mode
+}
+
 fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     let saved_hwdec = jfn_config::hwdec();
-    let saved_video_mode = jfn_config::video_mode();
+    let saved_video_mode = stored_video_mode();
     let saved_pass = jfn_config::audio_passthrough();
     let saved_chans = jfn_config::audio_channels();
     let saved_log_level = jfn_config::log_level();
@@ -185,7 +204,9 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         hwdec = v;
     }
     if let Some(v) = cli.video_mode.clone() {
-        video_mode = v;
+        // A flag is an explicit choice for this run only: `off` here always
+        // means the new "no shaders", never the legacy "leave mpv.conf alone".
+        video_mode = jfn_mpv::VideoMode::parse(&v).unwrap_or(video_mode);
     }
     if let Some(v) = cli.audio_passthrough.clone() {
         audio_passthrough = v;
@@ -216,7 +237,7 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
 
     StartupOptions {
         hwdec,
-        video_mode: jfn_mpv::VideoMode::parse(&video_mode).unwrap_or_default(),
+        video_mode,
         audio_passthrough,
         audio_exclusive,
         audio_channels,
@@ -554,11 +575,18 @@ pub fn jfn_app_main() -> c_int {
         print_version();
         return 0;
     }
+    // The overrides are also exported as ASTROFIN_CONFIG_DIR/ASTROFIN_CACHE_DIR
+    // so the CEF helper processes, which `jfn_cef_start` returned from above
+    // before argv was parsed and which load settings.json on their own for
+    // the injected `jmpInfo`, inherit the same directories. Single-threaded
+    // here: nothing has been spawned yet.
     if let Some(path) = &cli.config_dir {
         jfn_paths::set_config_dir_override(path.into());
+        unsafe { std::env::set_var(jfn_paths::ENV_CONFIG_DIR, path) };
     }
     if let Some(path) = &cli.cache_dir {
         jfn_paths::set_cache_dir_override(path.into());
+        unsafe { std::env::set_var(jfn_paths::ENV_CACHE_DIR, path) };
     }
 
     // Only the browser process reaches this point (helper processes returned

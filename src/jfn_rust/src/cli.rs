@@ -7,8 +7,8 @@ use clap::{ArgAction, Parser};
 
 const ENV_LOG_LEVEL: &str = "ASTROFIN_LOG_LEVEL";
 const ENV_LOG_FILE: &str = "ASTROFIN_LOG_FILE";
-const ENV_CONFIG_DIR: &str = "ASTROFIN_CONFIG_DIR";
-const ENV_CACHE_DIR: &str = "ASTROFIN_CACHE_DIR";
+const ENV_CONFIG_DIR: &str = jfn_paths::ENV_CONFIG_DIR;
+const ENV_CACHE_DIR: &str = jfn_paths::ENV_CACHE_DIR;
 
 #[cfg(test)]
 const ENV_BACKED: &[&str] = &[ENV_LOG_LEVEL, ENV_LOG_FILE, ENV_CONFIG_DIR, ENV_CACHE_DIR];
@@ -50,7 +50,7 @@ pub struct Cli {
     #[arg(long)]
     pub hwdec: Option<String>,
 
-    /// Upscaling preset: movies | anime | off (default: movies).
+    /// Upscaling preset: auto | live-action | animation | off (default: auto).
     #[arg(long)]
     pub video_mode: Option<String>,
 
@@ -347,8 +347,11 @@ mod tests {
     fn const_defaults_match_help_text() {
         assert_eq!(jfn_mpv::HWDEC_DEFAULT, "no");
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
-        assert_eq!(jfn_mpv::VideoMode::default().as_str(), "movies");
-        assert_eq!(jfn_mpv::VideoMode::options(), ["movies", "anime", "off"]);
+        assert_eq!(jfn_mpv::VideoMode::default().as_str(), "auto");
+        assert_eq!(
+            jfn_mpv::VideoMode::options(),
+            ["auto", "live-action", "animation", "off"]
+        );
     }
 
     #[test]
@@ -360,10 +363,19 @@ mod tests {
         // Validation is the settings layer's job, not clap's: an unknown value
         // parses and is then rejected into the default.
         assert_eq!(
-            ok(&["app", "--video-mode=off", "--video-mode=anime"])
+            ok(&["app", "--video-mode=off", "--video-mode=animation"])
                 .video_mode
                 .as_deref(),
-            Some("anime")
+            Some("animation")
         );
+        // Pre-rename spellings still parse, at the settings layer.
+        for (legacy, expected) in [
+            ("movies", jfn_mpv::VideoMode::LiveAction),
+            ("anime", jfn_mpv::VideoMode::Animation),
+        ] {
+            let a = ok(&["app", "--video-mode", legacy]);
+            assert_eq!(a.video_mode.as_deref(), Some(legacy));
+            assert_eq!(jfn_mpv::VideoMode::parse(legacy), Some(expected));
+        }
     }
 }

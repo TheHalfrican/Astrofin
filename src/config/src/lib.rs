@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -52,6 +53,13 @@ struct SettingsData {
     server_url: String,
     hwdec: String,
     video_mode: String,
+    /// True when the loaded file was written by a build that knows the
+    /// post-rename video-mode names. Absent means the stored `videoMode` is a
+    /// legacy value and needs one-shot normalisation by the caller.
+    video_mode_migrated: bool,
+    /// Per-library video-mode overrides, `<library item id> -> wire value`.
+    /// Hand-edited only; the app reads it and writes it back untouched.
+    video_mode_libraries: BTreeMap<String, String>,
     audio_passthrough: String,
     audio_channels: String,
     log_level: String,
@@ -71,6 +79,8 @@ impl Default for SettingsData {
             server_url: String::new(),
             hwdec: String::new(),
             video_mode: String::new(),
+            video_mode_migrated: false,
+            video_mode_libraries: BTreeMap::new(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
             log_level: String::new(),
@@ -125,6 +135,15 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     video_mode: Option<String>,
+
+    // Always written by this build, never by the ones that predate the
+    // auto/live-action/animation rename — which is exactly what makes it a
+    // usable marker for the one-shot legacy normalisation.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    video_mode_migrated: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    video_mode_libraries: Option<BTreeMap<String, String>>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<String>,
@@ -209,6 +228,9 @@ struct CliSettings<'a> {
     video_mode: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    video_mode_libraries: Option<&'a BTreeMap<String, String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +270,12 @@ impl SettingsData {
         }
         if let Some(v) = file.video_mode {
             self.video_mode = v;
+        }
+        if let Some(v) = file.video_mode_migrated {
+            self.video_mode_migrated = v;
+        }
+        if let Some(v) = file.video_mode_libraries {
+            self.video_mode_libraries = v;
         }
         if let Some(v) = file.audio_passthrough {
             self.audio_passthrough = v;
@@ -323,6 +351,11 @@ impl SettingsData {
             hwdec: (!self.hwdec.is_empty() && self.hwdec != HWDEC_DEFAULT)
                 .then(|| self.hwdec.clone()),
             video_mode: (!self.video_mode.is_empty()).then(|| self.video_mode.clone()),
+            // Unconditional: any file this build writes is by definition
+            // written in the new names, whatever was loaded.
+            video_mode_migrated: Some(true),
+            video_mode_libraries: (!self.video_mode_libraries.is_empty())
+                .then(|| self.video_mode_libraries.clone()),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -341,6 +374,8 @@ impl SettingsData {
         let view = CliSettings {
             hwdec: (!self.hwdec.is_empty()).then_some(self.hwdec.as_str()),
             video_mode: (!self.video_mode.is_empty()).then_some(self.video_mode.as_str()),
+            video_mode_libraries: (!self.video_mode_libraries.is_empty())
+                .then_some(&self.video_mode_libraries),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then_some(self.audio_passthrough.as_str()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -533,9 +568,19 @@ macro_rules! bool_accessors {
 
 string_accessors!(server_url, set_server_url, server_url);
 string_accessors!(hwdec, set_hwdec, hwdec);
-// video_mode: upscaling preset key (`movies` | `anime` | `off`). Empty means
-// "never chosen"; the caller resolves that to the built-in default.
+// video_mode: upscaling preset key (`auto` | `live-action` | `animation` |
+// `off`). Empty means "never chosen"; the caller resolves that to the built-in
+// default.
 string_accessors!(video_mode, set_video_mode, video_mode);
+
+/// False when the loaded `settings.json` predates the video-mode rename, so
+/// its `videoMode` still uses the old names *and* its `off` means the old
+/// "leave mpv.conf alone". The caller normalises once and saves; every file
+/// this build writes carries the marker.
+#[must_use]
+pub fn video_mode_migrated() -> bool {
+    state().lock().data.video_mode_migrated
+}
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
@@ -663,7 +708,8 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsData, SettingsFile, WindowDecorations, default_device_name, normalize_device_name,
+        BTreeMap, SettingsData, SettingsFile, WindowDecorations, default_device_name,
+        normalize_device_name,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -711,7 +757,12 @@ mod tests {
     #[test]
     fn default_settings_write_only_server_url_and_maximized() {
         let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
-        assert_eq!(text, r#"{"serverUrl":"","windowMaximized":false}"#);
+        // videoModeMigrated is the one unconditional key: it marks the file
+        // as written in the post-rename video-mode names.
+        assert_eq!(
+            text,
+            r#"{"serverUrl":"","windowMaximized":false,"videoModeMigrated":true}"#
+        );
     }
 
     #[test]
@@ -719,7 +770,9 @@ mod tests {
         let data = SettingsData {
             server_url: "http://host".into(),
             hwdec: "vaapi".into(),
-            video_mode: "anime".into(),
+            video_mode: "animation".into(),
+            video_mode_migrated: true,
+            video_mode_libraries: BTreeMap::from([("lib1".into(), "animation".into())]),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
             log_level: "debug".into(),
@@ -756,6 +809,8 @@ mod tests {
                 "windowMaximized",
                 "hwdec",
                 "videoMode",
+                "videoModeMigrated",
+                "videoModeLibraries",
                 "audioPassthrough",
                 "audioExclusive",
                 "audioChannels",
@@ -779,6 +834,36 @@ mod tests {
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
         assert_eq!(data.window.x, -1);
+    }
+
+    /// The marker that tells the startup path whether `videoMode` still uses
+    /// the pre-rename names (and whether its `off` meant "leave mpv.conf
+    /// alone"). Only files written by this build have it.
+    #[test]
+    fn video_mode_migration_marker_tracks_the_file() {
+        let legacy = loaded(r#"{"videoMode":"off"}"#);
+        assert_eq!(legacy.video_mode, "off");
+        assert!(!legacy.video_mode_migrated);
+
+        let current = loaded(r#"{"videoMode":"off","videoModeMigrated":true}"#);
+        assert!(current.video_mode_migrated);
+    }
+
+    #[test]
+    fn video_mode_libraries_round_trip_untouched() {
+        let data = loaded(r#"{"videoModeLibraries":{"abc":"animation","def":"live-action"}}"#);
+        assert_eq!(
+            data.video_mode_libraries.get("abc").map(String::as_str),
+            Some("animation")
+        );
+        assert_eq!(
+            data.video_mode_libraries.get("def").map(String::as_str),
+            Some("live-action")
+        );
+
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""videoModeLibraries":{"abc":"animation","def":"live-action"}"#));
+        assert!(data.video_mode_libraries.len() == 2);
     }
 
     #[test]
@@ -812,7 +897,8 @@ mod tests {
     fn cli_json_emits_the_web_ui_contract() {
         let data = SettingsData {
             hwdec: "vaapi".into(),
-            video_mode: "movies".into(),
+            video_mode: "live-action".into(),
+            video_mode_libraries: BTreeMap::from([("lib1".into(), "animation".into())]),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
@@ -823,6 +909,7 @@ mod tests {
             [
                 "hwdec",
                 "videoMode",
+                "videoModeLibraries",
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
@@ -831,7 +918,8 @@ mod tests {
                 "hwdecOptions",
             ]
         );
-        assert!(text.contains(r#""videoMode":"movies""#));
+        assert!(text.contains(r#""videoMode":"live-action""#));
+        assert!(text.contains(r#""videoModeLibraries":{"lib1":"animation"}"#));
         assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,
