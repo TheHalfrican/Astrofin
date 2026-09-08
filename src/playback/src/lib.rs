@@ -17,6 +17,7 @@ pub mod lifecycle;
 pub mod shutdown;
 pub mod sink_core;
 mod state_machine;
+pub mod stats;
 pub mod theme_color_sink;
 mod types;
 pub mod window_source;

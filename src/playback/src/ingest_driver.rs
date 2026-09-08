@@ -393,6 +393,20 @@ fn ingest_events(rx: Receiver<Event>) {
         {
             continue;
         }
+        // Stats observations are their own channel: registered only while
+        // jellyfin-web's Playback Info panel is open, dispatched by name
+        // (they all share one observe id) and consumed here — the state
+        // machine has no use for them.
+        if let Event::PropertyChange {
+            id,
+            ref name,
+            ref value,
+        } = event
+            && id == crate::stats::STATS_OBSERVE_ID
+        {
+            crate::stats::on_property(name, value);
+            continue;
+        }
         if let Event::PropertyChange { id, ref value, .. } = event
             && id == crate::ingest::observe_id::FULLSCREEN
             && let PropertyValue::Flag(f) = value

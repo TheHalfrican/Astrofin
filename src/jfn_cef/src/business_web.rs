@@ -380,6 +380,24 @@ fn handle_message(message: BrowserMessage) -> bool {
                 jfn_platform_abi::get().set_fullscreen(false);
             }
         }),
+        "playerStatsActive" => with_args(args, |a| {
+            // jellyfin-web's Playback Info panel polls `getStats()`; the web
+            // layer keeps this flag alive while it does. The stats property
+            // set is observed only for that window — see
+            // `jfn_playback::stats`.
+            let active = a.bool(0) != 0;
+            if jfn_playback::stats::jfn_playback_set_stats_active(active) {
+                jfn_logging::log(
+                    jfn_logging::CATEGORY_CEF,
+                    jfn_logging::LEVEL_DEBUG,
+                    if active {
+                        "playerStatsActive: observing mpv stats properties"
+                    } else {
+                        "playerStatsActive: unobserving mpv stats properties"
+                    },
+                );
+            }
+        }),
         "setPlaybackVideoMode" => with_args(args, |a| {
             handle_playback_video_mode(&list_string(a, 0), &list_string(a, 1), &list_string(a, 2));
         }),
