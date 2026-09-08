@@ -2324,7 +2324,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jfn-cef"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "cef",
  "crossbeam-channel",
@@ -2350,18 +2350,18 @@ dependencies = [
 
 [[package]]
 name = "jfn-color"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "parking_lot",
 ]
 
 [[package]]
 name = "jfn-compositor-core"
-version = "0.1.0-dev"
+version = "0.2.0"
 
 [[package]]
 name = "jfn-config"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "gethostname",
  "jfn-mailbox",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-gpu-paint"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "ash",
  "nix",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-input"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "jfn-platform-abi",
  "jfn-playback",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-instance-ipc"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "interprocess",
  "jfn-paths",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-jellyfin"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-js-json"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-linux-util"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "clap",
  "cosmic-text",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-logging"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "jfn-wake-event",
  "memchr",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-macos"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "cef",
  "dispatch2",
@@ -2495,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-macos-sink"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "block2",
  "jfn-playback",
@@ -2509,14 +2509,14 @@ dependencies = [
 
 [[package]]
 name = "jfn-mailbox"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "parking_lot",
 ]
 
 [[package]]
 name = "jfn-mpris"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "async-io",
  "crossbeam-channel",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-mpv"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "bindgen",
  "crossbeam-channel",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-paths"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "nix",
@@ -2554,7 +2554,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-platform-abi"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "cef",
  "jfn-gpu-paint",
@@ -2569,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-playback"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-rust"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "clap",
  "embed-resource",
@@ -2613,7 +2613,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-wake-event"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "calloop",
  "nix",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-wayland"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "calloop",
  "calloop-wayland-source",
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-windows"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "cef",
  "jfn-compositor-core",
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-windows-sink"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "jfn-playback",
  "tracing",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-x11"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "calloop",
@@ -5586,7 +5586,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-dev"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cargo-lock",
