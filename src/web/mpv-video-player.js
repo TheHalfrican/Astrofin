@@ -99,6 +99,11 @@
         }
 
         async play(options) {
+            // The source badge only learns the play method from playbackstart,
+            // which jellyfin-web fires after this promise resolves — up to
+            // ~20 s of 4K transcode start-up later. Hand it the answer now.
+            // Decoration only: it must never affect playback.
+            try { window.AstrofinPlaybackSource?.notePlayOptions?.(options); } catch (e) { /* badge is optional */ }
             console.debug(`[Media] [${this.logTag}] play() called with options:`, options);
             this._started = false;
             this._timeUpdated = false;

@@ -6,13 +6,19 @@
 // row commented out, and TranscodeReasons only reaches this client through
 // /Sessions, not through the MediaSource it already holds.
 //
-// Two data planes:
-//   - instant, from the `playbackstart` state: PlayState.PlayMethod plus the
-//     source video stream (codec, resolution, bit depth, frame rate);
-//   - delayed, from `ApiClient.getSessions({deviceId})` 4 s after start and
-//     every 10 s while transcoding: TranscodingInfo, which is the only place
-//     HardwareAccelerationType, TranscodeReasons and the transcoder's own
-//     frame rate and completion appear.
+// Three data planes, earliest first:
+//   - immediate, from the play options our own mpv plugin is handed: the
+//     play method and the MediaSource are known the moment the user presses
+//     play, which for a 4K transcode is ~20 s before mpv shows a frame and
+//     therefore ~20 s before jellyfin-web fires `playbackstart`. See
+//     notePlayOptions;
+//   - authoritative, from the `playbackstart` state: PlayState.PlayMethod
+//     plus the source video stream (codec, resolution, bit depth, frame
+//     rate). For the same item this refines the provisional badge in place;
+//   - delayed, from `ApiClient.getSessions({deviceId})` 4 s after the play
+//     request and every 10 s while transcoding: TranscodingInfo, which is the
+//     only place HardwareAccelerationType, TranscodeReasons and the
+//     transcoder's own frame rate and completion appear.
 //
 // Everything here is best-effort decoration over mpv's playback. The whole
 // module is wrapped in try/catch and every callback is guarded, because all
@@ -34,6 +40,12 @@
 
         var FIRST_POLL_MS = 4000;
         var POLL_INTERVAL_MS = 10000;
+
+        // Polling normally runs until `playbackstop`. A session started from
+        // the play options alone has not been confirmed by `playbackstart`
+        // yet, and if the play request fails outright no stop ever arrives —
+        // so the pre-start loop is bounded rather than left to run forever.
+        var PROVISIONAL_POLL_MAX = 12;
 
         // Measured transcoder throughput below this fraction of the source
         // frame rate means the server is not keeping up in real time.
@@ -332,6 +344,7 @@
         function newSession() {
             return {
                 player: null,
+                itemId: null,
                 playMethod: null,
                 source: null,
                 durationSec: null,
@@ -341,6 +354,10 @@
                 level: null,
                 polled: false,
                 toastShown: false,
+                // True until `playbackstart` confirms this item is really
+                // playing; see PROVISIONAL_POLL_MAX.
+                provisional: false,
+                pollsBeforeStart: 0,
                 tracker: newTracker()
             };
         }
@@ -360,6 +377,14 @@
             }) || null;
         }
 
+        function firstVideoStream(streams) {
+            if (!Array.isArray(streams)) return null;
+            for (var i = 0; i < streams.length; i++) {
+                if (streams[i] && streams[i].Type === 'Video') return streams[i];
+            }
+            return null;
+        }
+
         function videoStream(player, state) {
             var ms = null;
             if (pm && typeof pm.currentMediaSource === 'function' && player) {
@@ -370,15 +395,10 @@
             if (!ms && state) ms = state.MediaSource;
             var streams = (ms && ms.MediaStreams) || null;
             if (!streams && state && state.NowPlayingItem) streams = state.NowPlayingItem.MediaStreams;
-            if (!Array.isArray(streams)) return null;
-            for (var i = 0; i < streams.length; i++) {
-                if (streams[i] && streams[i].Type === 'Video') return streams[i];
-            }
-            return null;
+            return firstVideoStream(streams);
         }
 
-        function readSource(player, state) {
-            var v = videoStream(player, state);
+        function describeStream(v) {
             if (!v) return null;
             return {
                 codec: typeof v.Codec === 'string' ? v.Codec : null,
@@ -391,10 +411,66 @@
             };
         }
 
+        // The same description is reachable from either end of the timeline:
+        // from the play options the mpv plugin is handed before playback
+        // starts, or from the (player, state) pair `playbackstart` carries.
+        function readSource(player, state) {
+            return describeStream(videoStream(player, state));
+        }
+
+        function readOptionsSource(options) {
+            var ms = options && options.mediaSource;
+            var streams = (ms && ms.MediaStreams) || null;
+            if (!streams && options && options.item) streams = options.item.MediaStreams;
+            return describeStream(firstVideoStream(streams));
+        }
+
+        function ticksToSeconds(ticks) {
+            var t = positive(ticks);
+            return t === null ? null : t / 10000000;
+        }
+
         function durationSeconds(state) {
             var item = state && state.NowPlayingItem;
-            var ticks = item ? positive(item.RunTimeTicks) : null;
-            return ticks === null ? null : ticks / 10000000;
+            return item ? ticksToSeconds(item.RunTimeTicks) : null;
+        }
+
+        function optionsDuration(options) {
+            var ms = options && options.mediaSource;
+            var secs = ms ? ticksToSeconds(ms.RunTimeTicks) : null;
+            if (secs === null && options && options.item) secs = ticksToSeconds(options.item.RunTimeTicks);
+            return secs;
+        }
+
+        // Item identity, used only to decide whether a `playbackstart` refines
+        // the badge already on screen or replaces it. The two sides come from
+        // different server payloads, so ids are compared without their dashes
+        // and without case.
+        function itemKey(id) {
+            if (typeof id !== 'string') return null;
+            var v = id.replace(/-/g, '').toLowerCase().trim();
+            return v || null;
+        }
+
+        function optionsItemId(options) {
+            if (!options) return null;
+            var id = options.item ? options.item.Id : null;
+            if (!id && options.mediaSource) id = options.mediaSource.ItemId || options.mediaSource.Id;
+            return itemKey(id);
+        }
+
+        function stateItemId(state) {
+            var item = state && state.NowPlayingItem;
+            return itemKey(item ? item.Id : null);
+        }
+
+        // Both sides must actually know the item: two unknowns are not a match.
+        function sameItem(a, b) {
+            return a !== null && b !== null && a === b;
+        }
+
+        function knownMethod(v) {
+            return v === 'DirectPlay' || v === 'DirectStream' || v === 'Transcode' ? v : null;
         }
 
         function positionSeconds() {
@@ -618,15 +694,24 @@
             timer = null;
         }
 
+        // A transcode that has not been confirmed by `playbackstart` yet gets a
+        // bounded number of polls: if the play request never succeeds there is
+        // no `playbackstop` to clear the loop.
+        function keepPolling() {
+            if (session.playMethod !== 'Transcode') return false;
+            return !session.provisional || session.pollsBeforeStart < PROVISIONAL_POLL_MAX;
+        }
+
         function schedule(delay) {
             var w = win();
             if (!w || typeof w.setTimeout !== 'function') return;
             clearTimer();
             timer = w.setTimeout(function () {
                 timer = null;
-                if (session.playMethod !== 'Transcode') return;
+                if (!keepPolling()) return;
+                if (session.provisional) session.pollsBeforeStart += 1;
                 pollOnce().then(function () {
-                    if (session.playMethod === 'Transcode') schedule(POLL_INTERVAL_MS);
+                    if (keepPolling()) schedule(POLL_INTERVAL_MS);
                 });
             }, delay);
         }
@@ -714,19 +799,69 @@
 
         // ---- lifecycle ------------------------------------------------------
 
+        // The instant the user presses play, before mpv has decoded anything.
+        // The play method here is the one the server already agreed to in its
+        // PlaybackInfo answer, so it is not a guess — but nothing is known yet
+        // about the transcoder, so a Transcode draws the plain badge and the
+        // /Sessions poll starts counting down from now rather than from the
+        // first frame.
+        function notePlayOptions(options) {
+            return guard('notePlayOptions', function () {
+                var method = knownMethod(options && options.playMethod);
+                // Nothing usable: leave whatever is on screen alone rather
+                // than tearing down a good session over a bad guess.
+                if (!method) return;
+                session = newSession();
+                session.itemId = optionsItemId(options);
+                session.playMethod = method;
+                session.source = readOptionsSource(options);
+                session.durationSec = optionsDuration(options);
+                session.provisional = true;
+                debug('play requested method=' + method + ' item=' + session.itemId);
+                clearRetry();
+                retriesLeft = RETRY_MAX;
+                render();
+                clearTimer();
+                if (method === 'Transcode') schedule(FIRST_POLL_MS);
+            });
+        }
+
         function handleStart(player, state) {
             var st = playerState(player, state);
-            session = newSession();
+            var itemId = stateItemId(st);
+            var method = st && st.PlayState ? st.PlayState.PlayMethod || null : null;
+            // A provisional badge for this same item is refined in place: the
+            // session, the toast gate and any poll already in flight all
+            // survive, because none of them has anything to do with mpv
+            // finally having a frame. A different item — or a second start on
+            // an already-confirmed session — begins clean, as before.
+            var refining = session.provisional && sameItem(session.itemId, itemId);
+            // Re-arm polling when the play method turned out different from
+            // what was requested, or when the pre-start loop already spent its
+            // bounded budget and stopped.
+            var restartPolling =
+                !refining || method !== session.playMethod || session.pollsBeforeStart >= PROVISIONAL_POLL_MAX;
+            if (!refining) session = newSession();
+            session.itemId = itemId;
             session.player = player || null;
-            session.playMethod = st && st.PlayState ? st.PlayState.PlayMethod || null : null;
-            session.source = readSource(player, st);
-            session.durationSec = durationSeconds(st);
-            debug('playbackstart method=' + session.playMethod + ' sourceFps=' + (session.source && session.source.fps));
+            session.playMethod = method;
+            session.provisional = false;
+            var source = readSource(player, st);
+            if (source) session.source = source;
+            var dur = durationSeconds(st);
+            if (dur !== null) session.durationSec = dur;
+            debug(
+                'playbackstart method=' + session.playMethod +
+                    ' sourceFps=' + (session.source && session.source.fps) +
+                    (refining ? ' (refines the provisional badge)' : '')
+            );
             clearRetry();
             retriesLeft = RETRY_MAX;
             render();
-            clearTimer();
-            if (session.playMethod === 'Transcode') schedule(FIRST_POLL_MS);
+            if (restartPolling) {
+                clearTimer();
+                if (session.playMethod === 'Transcode') schedule(FIRST_POLL_MS);
+            }
         }
 
         function handleStop() {
@@ -779,6 +914,7 @@
         var api = {
             attach: attach,
             detach: detach,
+            notePlayOptions: notePlayOptions,
             // Testing surface. Pure helpers first, then the bits that need a
             // document or a clock.
             classify: classify,

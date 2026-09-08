@@ -59,6 +59,8 @@
         }
 
         play(options) {
+            // Same early hand-off as the video player; see mpv-video-player.js.
+            try { window.AstrofinPlaybackSource?.notePlayOptions?.(options); } catch (e) { /* badge is optional */ }
             this._started = false;
             this._currentTime = null;
             this._duration = undefined;

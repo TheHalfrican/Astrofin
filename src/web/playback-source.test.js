@@ -756,6 +756,211 @@ test('attaching twice does not double-bind', () => {
     assert.strictEqual(pm._callbacks.playbackstart.length, 1);
 });
 
+// ---- the play request, ahead of playbackstart ----------------------------
+
+// What mpvVideoPlayer.play() is handed. Same item and same streams as
+// makeState(), so a notePlayOptions/playbackstart pair describes one item.
+function makeOptions(playMethod, itemId) {
+    const id = itemId || 'a';
+    return {
+        playMethod,
+        item: { Id: id, Name: 'Item A', RunTimeTicks: 3600 * 10000000 },
+        mediaSource: {
+            Id: id,
+            RunTimeTicks: 3600 * 10000000,
+            MediaStreams: [{ Type: 'Audio', Codec: 'eac3' }, SOURCE_STREAM]
+        }
+    };
+}
+
+test('notePlayOptions paints the badge before playbackstart ever fires', () => {
+    const { api, doc, timers } = load([session(HW_INFO)]);
+    mountOsdHeader(doc);
+    const pm = makePm(makeState('Transcode'));
+    api.attach(pm);
+
+    api.notePlayOptions(makeOptions('Transcode'));
+
+    assert.strictEqual(labelOf(doc), 'TRANSCODING', 'plain: nothing is known about the transcoder yet');
+    assert.strictEqual(levelClassOf(doc), 'af-source-badge--transcode');
+    assert.strictEqual(badgeOf(doc).hidden, false);
+    // The source description comes straight off the MediaSource.
+    assert.deepStrictEqual(popoverLinesOf(doc), ['HEVC 10-bit 1440x1080']);
+    // ...and the /Sessions clock is already ticking, from the play request.
+    assert.deepStrictEqual(timers.pending().map((t) => t.delay), [4000]);
+});
+
+test('a provisional direct play is labelled and never polls', () => {
+    const { api, doc, timers } = load();
+    mountOsdHeader(doc);
+    api.attach(makePm(makeState('DirectPlay')));
+
+    api.notePlayOptions(makeOptions('DirectPlay'));
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+    assert.strictEqual(levelClassOf(doc), 'af-source-badge--direct');
+    assert.deepStrictEqual(timers.pending(), []);
+});
+
+test('a provisional badge falls back to the item streams and survives a bare options object', () => {
+    const { api, doc } = load();
+    mountOsdHeader(doc);
+    api.attach(makePm(makeState('DirectStream')));
+
+    api.notePlayOptions({
+        playMethod: 'DirectStream',
+        item: { Id: 'a', MediaStreams: [SOURCE_STREAM] },
+        mediaSource: { Id: 'a' }
+    });
+    assert.strictEqual(labelOf(doc), 'DIRECT STREAM');
+    assert.deepStrictEqual(popoverLinesOf(doc), ['HEVC 10-bit 1440x1080']);
+
+    // Nothing but a play method: still a badge, still no throw.
+    assert.doesNotThrow(() => api.notePlayOptions({ playMethod: 'DirectPlay' }));
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+    assert.deepStrictEqual(popoverLinesOf(doc), []);
+});
+
+test('the badge appears once the OSD header mounts, without a second playbackstart', () => {
+    const { api, doc, timers } = load();
+    api.attach(makePm(makeState('DirectPlay')));
+
+    // Play is requested before the video view exists.
+    api.notePlayOptions(makeOptions('DirectPlay'));
+    assert.strictEqual(badgeOf(doc), null);
+    assert.strictEqual(timers.pending().length, 1, 'a render retry is armed');
+
+    mountOsdHeader(doc);
+    timers.flush();
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+});
+
+test('playbackstart refines the provisional badge in place', async () => {
+    const { api, doc, win, timers } = load([session(CPU_INFO)]);
+    mountOsdHeader(doc);
+    win.jmpInfo.settings.playback.transcodeNotice = 'cpu';
+    const state = makeState('Transcode');
+    const pm = makePm(state);
+    api.attach(pm);
+
+    api.notePlayOptions(makeOptions('Transcode'));
+    const provisional = badgeOf(doc);
+    await api.pollOnce();
+    assert.strictEqual(labelOf(doc), 'TRANSCODING · CPU');
+    assert.strictEqual(toastTexts(doc).length, 1);
+    const clock = timers.pending();
+
+    // ~20 s later, mpv finally has a frame.
+    Events.trigger(pm, 'playbackstart', [PLAYER, state]);
+
+    assert.strictEqual(doc.querySelectorAll('.af-source-badge').length, 1, 'no second badge');
+    assert.strictEqual(badgeOf(doc), provisional, 'the same node is refined');
+    assert.strictEqual(labelOf(doc), 'TRANSCODING · CPU', 'what the poll learned is not thrown away');
+    assert.strictEqual(toastTexts(doc).length, 1, 'the toast gate is not re-armed');
+    assert.strictEqual(api._session().polled, true, 'the session is not reset');
+    assert.deepStrictEqual(timers.pending(), clock, 'the poll clock is not pushed out again');
+
+    // The player handle only arrives with playbackstart; the lead needs it.
+    assert.strictEqual(api._session().player, PLAYER);
+    await api.pollOnce();
+    assert.deepStrictEqual(popoverLinesOf(doc), [
+        'HEVC 10-bit 1440x1080 → H264 1920x1080 8.0 Mbps',
+        'The video codec is not supported',
+        '1.0× realtime',
+        '12 s ahead'
+    ]);
+});
+
+test('playbackstart re-labels when the play method turned out different', async () => {
+    const { api, doc, timers } = load([session(HW_INFO)]);
+    mountOsdHeader(doc);
+    const state = makeState('DirectPlay');
+    const pm = makePm(state);
+    api.attach(pm);
+
+    api.notePlayOptions(makeOptions('Transcode'));
+    assert.strictEqual(labelOf(doc), 'TRANSCODING');
+
+    Events.trigger(pm, 'playbackstart', [PLAYER, state]);
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+    assert.strictEqual(levelClassOf(doc), 'af-source-badge--direct');
+    assert.deepStrictEqual(timers.pending(), [], 'the transcode poll is called off');
+});
+
+test('playbackstart for a different item than the one noted starts fresh', async () => {
+    const { api, doc, timers } = load([session(HW_INFO)]);
+    mountOsdHeader(doc);
+    const state = makeState('DirectPlay');
+    const pm = makePm(state);
+    api.attach(pm);
+
+    // The user backed out and started something else before the first frame.
+    api.notePlayOptions(makeOptions('Transcode', 'other-item'));
+    await api.pollOnce();
+    assert.strictEqual(labelOf(doc), 'TRANSCODING · NVENC');
+
+    Events.trigger(pm, 'playbackstart', [PLAYER, state]);
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+    assert.strictEqual(doc.querySelectorAll('.af-source-badge').length, 1);
+    const s = api._session();
+    assert.strictEqual(s.transcodingInfo, null, 'the noted session is discarded');
+    assert.strictEqual(s.polled, false);
+    assert.strictEqual(s.toastShown, false);
+    assert.deepStrictEqual(timers.pending(), []);
+});
+
+test('notePlayOptions ignores a play method it does not recognise', () => {
+    const { api, doc, timers } = load();
+    mountOsdHeader(doc);
+    const pm = makePm(makeState('DirectPlay'));
+    api.attach(pm);
+    Events.trigger(pm, 'playbackstart', [PLAYER, makeState('DirectPlay')]);
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY');
+
+    for (const opts of [undefined, null, {}, { playMethod: null }, { playMethod: 'Teleport' }, 'nonsense', 7]) {
+        assert.doesNotThrow(() => api.notePlayOptions(opts), String(opts));
+    }
+    assert.strictEqual(labelOf(doc), 'DIRECT PLAY', 'the live badge is left alone');
+    assert.strictEqual(doc.querySelectorAll('.af-source-badge').length, 1);
+    assert.deepStrictEqual(timers.pending(), [], 'and nothing is scheduled');
+});
+
+// A play request that never becomes playback gets no playbackstop, so the
+// pre-start poll loop has to stop itself.
+test('polling started by the play request alone is bounded', async () => {
+    const { api, doc, timers, calls } = load([session(HW_INFO)]);
+    mountOsdHeader(doc);
+    const state = makeState('Transcode');
+    const pm = makePm(state);
+    api.attach(pm);
+
+    api.notePlayOptions(makeOptions('Transcode'));
+    for (let i = 0; i < 30 && timers.pending().length; i++) {
+        timers.flush();
+        await new Promise((r) => setImmediate(r));
+    }
+    assert.strictEqual(calls.getSessions, 12);
+    assert.deepStrictEqual(timers.pending(), [], 'the loop stops rather than running forever');
+
+    // A late playbackstart re-arms it.
+    Events.trigger(pm, 'playbackstart', [PLAYER, state]);
+    assert.deepStrictEqual(timers.pending().map((t) => t.delay), [4000]);
+});
+
+test('a stop after a provisional badge clears everything', () => {
+    const { api, doc, timers } = load([session(HW_INFO)]);
+    mountOsdHeader(doc);
+    const pm = makePm(makeState('Transcode'));
+    api.attach(pm);
+
+    api.notePlayOptions(makeOptions('Transcode'));
+    assert.ok(badgeOf(doc));
+
+    Events.trigger(pm, 'playbackstop', [{}]);
+    assert.strictEqual(badgeOf(doc), null);
+    assert.deepStrictEqual(timers.pending(), []);
+    assert.strictEqual(api._session().playMethod, null);
+});
+
 // ---- failure containment -------------------------------------------------
 
 test('a getSessions that throws synchronously never throws out', async () => {
