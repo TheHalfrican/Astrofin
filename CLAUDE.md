@@ -21,6 +21,9 @@ just package       # [windows] build NSIS setup.exe + WiX .msi into dist/ (from 
 ```
 Platform-specific entry points live in `dev/linux/`, `dev/macos/`, `dev/windows/`, imported by the top-level justfile.
 
+## Working rules for Claude
+- **Delegate grunt work to Opus 5 subagents** (Agent tool, `model: "opus"`, fresh `general-purpose` agent): builds, test runs, installer/CI wiring, mechanical edits, verification sweeps. Keep design decisions, diff review and the final merge in the main session. A `fork` subagent runs on the main session's model and does not count as delegation.
+
 ## Before Committing
 Run `just fmt` and `just lint` before every commit; both must pass clean (lint runs `fmt-check` + `clippy`, and CI rejects unformatted or lint-failing code).
 
