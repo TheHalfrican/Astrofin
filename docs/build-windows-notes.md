@@ -209,6 +209,97 @@ Silent-install switches, for the record: NSIS `/S [/DESKTOP=1]`; MSI
 `ALLUSERS=1 MSIINSTALLPERUSER=""` for a per-machine install into
 `%ProgramFiles%\Astrofin`.
 
+## Gitea CI (self-hosted act_runner on this machine)
+
+`.gitea/workflows/build-windows.yml` runs on the host-mode act_runner
+(`C:\Users\NoahM\act_runner\config.yaml`, label `windows-latest`). The job
+junction-links `.cache\`, `build\` and `third_party\mpv-install` to a persistent
+cache under `C:\Users\NoahM\act_runner\cache\astrofin`, so a normal run should be
+an incremental cargo build. Two bugs kept it from ever getting there; both are
+fixed on `fix/gitea-ci`.
+
+### 1. "Build and package" died on MAX_PATH (the actual red step)
+
+act_runner's host-mode workspace is
+
+```
+C:\Users\NoahM\act_runner\workspaces\<16 hex>\hostexecutor        66 chars
+```
+
+and `cef-dll-sys` runs its own CMake/ninja build of `libcef_dll_wrapper` under
+the cargo target dir. The longest object it writes is 198 characters below the
+repo root:
+
+```
+build\cargo-target\release\build\cef-dll-sys-<hash>\out\build\libcef_dll_wrapper\
+CMakeFiles\libcef_dll_wrapper.dir\ctocpp\test\
+api_version_test_ref_ptr_library_child_child_v2_ctocpp.cc.obj
+```
+
+66 + 1 + 198 = **265 > MAX_PATH (260)**. `cl.exe` does not honour this machine's
+`LongPathsEnabled=1`, and `-DCMAKE_OBJECT_PATH_MAX=500` (which cef-dll-sys does
+pass) only silences CMake's own check. Eight objects — every
+`ctocpp/test/*_child_child_*` file — fail with
+
+```
+... api_version_test_ref_ptr_library_child_child_v2_ctocpp.cc : fatal error C1083:
+Cannot open compiler generated file: '': Invalid argument
+ninja: build stopped: subcommand failed.
+```
+
+and the build script panics in `cmake-0.1.58`, surfacing only as
+`Error: cargo build failed`.
+
+Why the earlier steps were green: `cargo clippy`/`cargo test` write to
+`src\target\debug`, ten characters shorter than `build\cargo-target\release`, so
+the same files land at 255 and compile. The boundary is that tight — the longest
+object that *did* compile in the failing step measures 258.
+
+Fix: the workflow makes a short junction to the workspace
+(`SHORT_WORKSPACE: C:\astrofin-ci`) in the linking step and every later step does
+`Set-Location $env:SHORT_WORKSPACE` first. Nothing is copied; only the paths
+handed to CMake get shorter (same trick as the worktree recipe below). It also
+stabilises the cargo fingerprints, which are keyed on absolute source paths.
+`cargo xtask build` additionally prints a warning up front when the target dir is
+deep enough for this to happen, rather than letting it surface as C1083 several
+hundred lines into ninja output.
+
+### 2. libmpv was rebuilt on every run and never cached
+
+`dev\windows\build_mpv_source.ps1` did
+
+```powershell
+if (Test-Path $OutputDir) { Remove-Item -Recurse -Force $OutputDir }
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+```
+
+On PowerShell 7 `Remove-Item -Recurse -Force` on a junction removes the *link*
+only (it does not follow it — the cache contents were never at risk), so this
+replaced the `third_party\mpv-install` junction with a real directory inside the
+disposable job workspace. `…\cache\astrofin\mpv-install-<mpv sha>` therefore
+stayed empty, the "skipped when the cache exists" guard never fired, and every
+run paid ~1–3 min rebuilding libmpv into a workspace that act deletes afterwards.
+
+Fix: clear the directory's *contents* when it already exists and only create it
+when it does not. `dev\windows\build.ps1 -Clean` had the same shape against
+`build\` and was hardened the same way.
+
+### Not a problem (checked)
+
+Version derivation does **not** use `git describe`: `src/xtask/src/version.rs`
+and `src/jfn_rust/build.rs` both read HEAD through `gix` and fall back to the
+bare Cargo version, so `actions/checkout`'s shallow clone with no tags is fine
+and `fetch-depth: 0` is not needed.
+
+### Other CI notes
+
+- Removing a path that might be a junction: use
+  `[IO.Directory]::Delete($path, $false)` on a reparse point and address it with
+  `Join-Path`, never `Resolve-Path`/`Convert-Path` (those resolve to the target).
+- `package.ps1` mirrors `build\` into `build\installer-payload`, which under CI
+  is inside the persistent cache — expect ~1.5 GB of payload/cab scratch to live
+  there alongside `cargo-target`.
+
 ## Script edit made — `dev\windows\env.ps1` (REVIEW / UPSTREAM CANDIDATE)
 
 Symptom — `cargo xtask build` failed in `jfn-mpv`'s `build.rs` with:

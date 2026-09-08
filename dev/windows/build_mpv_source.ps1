@@ -160,11 +160,18 @@ if (-not (Test-Path $BuiltDll)) {
 Write-Host ""
 Write-Host "=== Setting up output directory ===" -ForegroundColor Cyan
 
-# Setup output directory (matches EXTERNAL_MPV_DIR layout)
+# Setup output directory (matches EXTERNAL_MPV_DIR layout).
+#
+# Clear the CONTENTS, never the directory itself: CI junction-links
+# third_party\mpv-install to a persistent cache on the runner, and removing the
+# directory would drop the junction and re-create a plain directory inside the
+# disposable job workspace — libmpv would then be rebuilt from scratch on every
+# run and the cache would stay empty forever.
 if (Test-Path $OutputDir) {
-    Remove-Item -Recurse -Force $OutputDir
+    Get-ChildItem -LiteralPath $OutputDir -Force | Remove-Item -Recurse -Force
+} else {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
-New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $LibDir = Join-Path $OutputDir "lib"
 $IncludeDir = Join-Path $OutputDir "include"
 New-Item -ItemType Directory -Path $LibDir -Force | Out-Null

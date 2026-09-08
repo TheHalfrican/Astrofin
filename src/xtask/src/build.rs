@@ -21,6 +21,8 @@ pub fn run(args: &BuildArgs) -> Result<()> {
 
     // Cargo invocation — mirror the env CMake passes today.
     let target_dir = paths::cargo_target_dir(&out);
+    #[cfg(target_os = "windows")]
+    warn_if_target_dir_too_deep(&target_dir);
     let manifest = paths::workspace_manifest();
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
@@ -104,6 +106,42 @@ pub fn run(args: &BuildArgs) -> Result<()> {
     crate::platform::stage_mpv(&out, &mpv_info, used_external_mpv, &bin_dst)?;
     stage_shaders(&out)?;
     Ok(())
+}
+
+/// Longest path cef-dll-sys' bundled CMake/ninja build writes below the cargo
+/// target directory (measured on CEF 151.3.24):
+///
+/// ```text
+/// release\build\cef-dll-sys-<16 hex>\out\build\libcef_dll_wrapper\CMakeFiles\
+/// libcef_dll_wrapper.dir\ctocpp\test\
+/// api_version_test_ref_ptr_library_child_child_v2_ctocpp.cc.obj
+/// ```
+#[cfg(target_os = "windows")]
+const CEF_LONGEST_TARGET_RELPATH: usize = 179;
+
+/// Windows `MAX_PATH` (260) less the terminating NUL.
+#[cfg(target_os = "windows")]
+const MAX_PATH_CHARS: usize = 259;
+
+/// cl.exe does not honour the machine's `LongPathsEnabled`, so a deep target
+/// directory makes the longest ~30 `libcef_dll_wrapper` objects fail with
+/// `fatal error C1083: Cannot open compiler generated file: ''` — and ninja
+/// reports only `build stopped: subcommand failed`, several hundred lines
+/// after the real cause. Say so up front instead.
+#[cfg(target_os = "windows")]
+fn warn_if_target_dir_too_deep(target_dir: &std::path::Path) {
+    let len = target_dir.as_os_str().len();
+    let longest = len + 1 + CEF_LONGEST_TARGET_RELPATH;
+    if longest > MAX_PATH_CHARS {
+        eprintln!(
+            "warning: {} is {len} characters deep, so cef-dll-sys' CMake build \
+             would write object paths of up to {longest} characters — more than \
+             the {MAX_PATH_CHARS} a Windows path can hold. Expect `C1083: Cannot \
+             open compiler generated file` from cl.exe. Build through a short \
+             junction instead, e.g. `cmd /c mklink /J C:\\astrofin <repo>`.",
+            target_dir.display(),
+        );
+    }
 }
 
 /// Copy `resources/shaders/` next to the binary. The runtime resolver
