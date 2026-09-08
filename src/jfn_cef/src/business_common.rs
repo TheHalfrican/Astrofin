@@ -85,6 +85,23 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
             jfn_config::set_video_mode(mode.as_str());
             jfn_mpv::video_mode::apply_current(mode);
         }
+        // Which transcodes raise the one-time warning at playback start. The
+        // web side reads it back out of `jmpInfo` at fire time, so a bad
+        // value would be a silently dead setting — validate here instead.
+        "transcodeNotice" => {
+            let notice = match value {
+                "off" | "cpu" | "any" => value,
+                _ => {
+                    jfn_logging::log(
+                        jfn_logging::CATEGORY_CEF,
+                        jfn_logging::LEVEL_WARN,
+                        &format!("unknown transcodeNotice {value:?}; using cpu"),
+                    );
+                    "cpu"
+                }
+            };
+            jfn_config::set_transcode_notice(notice);
+        }
         "audioPassthrough" => jfn_config::set_audio_passthrough(value),
         "audioExclusive" => jfn_config::set_audio_exclusive(value == "true"),
         "audioChannels" => jfn_config::set_audio_channels(value),

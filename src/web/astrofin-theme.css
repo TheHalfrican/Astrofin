@@ -1772,3 +1772,184 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
     animation: none;
   }
 }
+
+/* ===================================================================== */
+/* (m) Playback source badge                                              */
+/* Injected by playback-source.js as a sibling of h3.pageTitle inside the  */
+/* OSD header's .headerLeft. Direct Play / Direct Stream / Transcoding,    */
+/* with a glass popover on focus or hover carrying the codec path, the     */
+/* server's transcode reasons and the measured throughput.                 */
+/*                                                                        */
+/* Two constraints from the OSD survey (docs/design/theme-injection.md):   */
+/*   - nothing opaque may sit over the video layer, so the chip is the     */
+/*     same translucent --af-glass-fill as .af-chip and nothing more;      */
+/*   - no second backdrop-filter over the video — the header band already  */
+/*     supplies its own scrim, and a blur here would cost a compositing    */
+/*     layer for a 26 px pill.                                             */
+/* Worst case (white frame under the header scrim under the chip fill)     */
+/* measures 5.2:1 for --af-text-muted, 7.4:1 warm and 4.6:1 danger.        */
+/* ===================================================================== */
+
+/* The popover has to escape two clips jellyfin-web puts on the header, both
+ * verified live: `.skinHeader { contain: layout style paint }`
+ * (librarybrowser.scss:221) — paint containment clips every descendant to the
+ * 68 px band — and `.headerLeft { overflow: hidden }` (:157). Both are
+ * relaxed for the OSD header only; layout and style containment stay, and the
+ * clip moves onto .pageTitle itself so a long title still cannot spill into
+ * the cast/user buttons on the right. */
+.skinHeader.osdHeader {
+  contain: layout style;
+}
+.skinHeader.osdHeader .headerLeft {
+  overflow: visible;
+}
+.skinHeader.osdHeader .headerLeft .pageTitle {
+  overflow: hidden;
+}
+
+/* Hidden by default: the app header outlives playback and only gains
+ * .osdHeader while the video OSD is mounted, so scoping visibility here is
+ * what makes the badge vanish when playback ends. */
+.af-source-badge {
+  display: none;
+}
+.skinHeader.osdHeader .af-source-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--af-space-2);
+  flex: none;
+  margin-left: var(--af-space-4);
+  padding: 5px 12px;
+  border-radius: var(--af-radius-pill);
+  border: 1px solid var(--af-edge-chip);
+  background: var(--af-glass-fill);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-badge);
+  text-transform: uppercase;
+  color: var(--af-text-muted);
+  white-space: nowrap;
+  cursor: default;
+}
+.af-source-badge[hidden] {
+  display: none !important;
+}
+
+.af-source-badge:focus {
+  outline: none;
+}
+.af-source-badge:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  transition: box-shadow var(--af-dur-ring-in) var(--af-ease-focus);
+}
+
+.af-source-badge-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--af-radius-pill);
+  background: var(--af-text-muted);
+}
+
+.af-source-badge-label {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+/* Direct play is the calm state: a cyan dot, and the label keeps the base
+ * --af-text-muted so the good case does not compete with the picture.
+ * Direct stream is the same, one notch quieter — a muted dot. */
+.af-source-badge--direct .af-source-badge-dot {
+  background: var(--af-accent-primary);
+}
+.af-source-badge--stream .af-source-badge-dot {
+  background: var(--af-text-muted);
+}
+
+.skinHeader.osdHeader .af-source-badge--transcode {
+  color: var(--af-accent-warm);
+  border-color: rgba(var(--af-accent-warm-rgb), .34);
+}
+.af-source-badge--transcode .af-source-badge-dot {
+  background: var(--af-accent-warm);
+}
+
+.skinHeader.osdHeader .af-source-badge--cpu,
+.skinHeader.osdHeader .af-source-badge--struggling {
+  color: var(--af-accent-danger);
+  border-color: rgba(var(--af-accent-danger-rgb), .38);
+}
+.af-source-badge--cpu .af-source-badge-dot,
+.af-source-badge--struggling .af-source-badge-dot {
+  background: var(--af-accent-danger);
+}
+
+/* The one moving part: a slow breath on the dot when the transcoder is
+ * losing ground. Opacity only, so it costs no layout. */
+@keyframes af-source-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+.af-source-badge--struggling .af-source-badge-dot {
+  animation: af-source-pulse 1.2s var(--af-ease-focus) infinite;
+}
+
+/* Glass popover below the chip. Focus is the primary state per the design
+ * brief; hover is accepted too because the OSD is mouse-driven on desktop. */
+.af-source-popover {
+  position: absolute;
+  top: calc(100% + var(--af-space-2));
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-1);
+  min-width: 260px;
+  max-width: 440px;
+  padding: var(--af-space-3) var(--af-space-4);
+  border-radius: var(--af-radius-md);
+  border: 1px solid var(--af-edge-luminous);
+  /* Two translucent layers, not an opaque fill: the popover carries several
+   * lines of small text, so it needs the glass floor under the glass. */
+  background: linear-gradient(var(--af-glass-floor), var(--af-glass-floor)), var(--af-glass-fill);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: none;
+  color: var(--af-text-muted);
+  white-space: normal;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(calc(-1 * var(--af-overlay-offset)));
+  transition:
+    opacity var(--af-dur-overlay-out) var(--af-ease-out),
+    transform var(--af-dur-overlay-out) var(--af-ease-out),
+    visibility 0s linear var(--af-dur-overlay-out);
+}
+.af-source-badge:hover .af-source-popover,
+.af-source-badge:focus-within .af-source-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus),
+    visibility 0s;
+}
+
+.af-source-popover-line {
+  color: var(--af-text-muted);
+}
+/* The codec path is the headline of the popover. */
+.af-source-popover-path {
+  color: var(--af-text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-source-badge--struggling .af-source-badge-dot {
+    animation: none;
+  }
+}

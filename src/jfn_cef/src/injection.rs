@@ -173,6 +173,7 @@ pub(crate) enum InjectedScript {
     MpvPlayerBase,
     MpvVideoPlayer,
     MpvAudioPlayer,
+    PlaybackSource,
     InputPlugin,
     ClientSettings,
     Csd,
@@ -188,6 +189,7 @@ impl InjectedScript {
             "mpv-player-base.js" => Self::MpvPlayerBase,
             "mpv-video-player.js" => Self::MpvVideoPlayer,
             "mpv-audio-player.js" => Self::MpvAudioPlayer,
+            "playback-source.js" => Self::PlaybackSource,
             "input-plugin.js" => Self::InputPlugin,
             "client-settings.js" => Self::ClientSettings,
             "csd.js" => Self::Csd,
@@ -204,6 +206,7 @@ impl InjectedScript {
             Self::MpvPlayerBase => "mpv-player-base.js",
             Self::MpvVideoPlayer => "mpv-video-player.js",
             Self::MpvAudioPlayer => "mpv-audio-player.js",
+            Self::PlaybackSource => "playback-source.js",
             Self::InputPlugin => "input-plugin.js",
             Self::ClientSettings => "client-settings.js",
             Self::Csd => "csd.js",
@@ -290,6 +293,9 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::MpvPlayerBase,
     InjectedScript::MpvVideoPlayer,
     InjectedScript::MpvAudioPlayer,
+    // Before input-plugin.js: its constructor is the only place that holds a
+    // playbackManager handle, and it hands it straight to this module.
+    InjectedScript::PlaybackSource,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
 ];
