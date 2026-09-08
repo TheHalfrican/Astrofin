@@ -59,8 +59,13 @@ function makePlaybackManager() {
     const pm = {
         _currentPlayer: null,
         _playQueueManager: {
-            getPlaylist() { return [{ Id: 'a' }, { Id: 'b' }]; },
-            getCurrentPlaylistIndex() { return 0; }
+            _playlist: [{ Id: 'a' }, { Id: 'b' }],
+            _index: 0,
+            getPlaylist() { return this._playlist; },
+            getCurrentPlaylistIndex() { return this._index; },
+            // jellyfin-web's reset(): runs in onPlaybackStopped before
+            // 'playbackstop' when nothing follows.
+            reset() { this._playlist = []; this._index = -1; }
         },
         getCurrentPlayer() { return this._currentPlayer; },
         getCurrentTicks(player) {
@@ -143,6 +148,53 @@ test('queue state and position tracking survive having no player at all', () => 
     // The queue is still reported: canNext from the playlist, canPrev
     // from a null state.
     assert.deepStrictEqual(native.calls.filter(c => c[0] === 'queue'), [['queue', true, false]]);
+});
+
+test('a real stop reports an empty queue once; the next start reports the real one', () => {
+    const { Plugin, native } = load();
+    const pm = makePlaybackManager();
+    const qm = pm._playQueueManager;
+    const player = makePlayer(0);
+    new Plugin({ playbackManager: pm, inputManager: null });
+    const queue = () => native.calls.filter(c => c[0] === 'queue').map(c => c.slice(1));
+
+    // Item A (first of two) starts.
+    pm._currentPlayer = player;
+    Events.trigger(pm, 'playbackstart', [player]);
+    assert.deepStrictEqual(queue(), [[true, false]]);
+
+    // OSD back: jellyfin-web resets the queue, then fires playbackstop
+    // with no next item and drops the player.
+    qm.reset();
+    Events.trigger(pm, 'playbackstop', [{ nextMediaType: null }]);
+    pm._currentPlayer = null;
+    assert.deepStrictEqual(queue(), [[true, false], [false, false]]);
+
+    // Item B: mpv's first `playing` lands before setPlaylist. The queue is
+    // still empty, and that was already reported, so nothing is sent.
+    Events.trigger(player, 'playing');
+    assert.deepStrictEqual(queue(), [[true, false], [false, false]]);
+
+    // setPlaylist + setPlaylistState, then playbackstart: the real state.
+    qm._playlist = [{ Id: 'b' }, { Id: 'c' }, { Id: 'd' }];
+    qm._index = 1;
+    pm._currentPlayer = player;
+    Events.trigger(pm, 'playbackstart', [player]);
+    assert.deepStrictEqual(queue(), [[true, false], [false, false], [true, true]]);
+
+    // Same state again is not re-sent.
+    Events.trigger(player, 'playing');
+    assert.strictEqual(queue().length, 3);
+});
+
+test('a playlist with no current item yet is skipped, not reported', () => {
+    const { Plugin, native } = load();
+    const pm = makePlaybackManager();
+    pm._playQueueManager._index = -1;
+    const plugin = new Plugin({ playbackManager: pm, inputManager: null });
+
+    plugin.updateQueueState();
+    assert.ok(!native.calls.some(c => c[0] === 'queue'));
 });
 
 test('destroy really unbinds the player and manager handlers', () => {
