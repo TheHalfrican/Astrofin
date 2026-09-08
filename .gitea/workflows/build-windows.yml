@@ -26,15 +26,34 @@ jobs:
     runs-on: windows-latest
     env:
       RUNNER_CACHE_ROOT: C:\Users\NoahM\act_runner\cache\astrofin
+      # act_runner's host-mode workspace is
+      #   C:\Users\NoahM\act_runner\workspaces\<16 hex>\hostexecutor   (66 chars)
+      # and cef-dll-sys' bundled CMake/ninja build writes object paths up to 198
+      # characters below the repo root, e.g.
+      #   build\cargo-target\release\build\cef-dll-sys-<hash>\out\build\
+      #   libcef_dll_wrapper\CMakeFiles\libcef_dll_wrapper.dir\ctocpp\test\
+      #   api_version_test_ref_ptr_library_child_child_v2_ctocpp.cc.obj
+      # 66 + 1 + 198 = 265 > MAX_PATH (260), and cl.exe does not honour the
+      # machine's LongPathsEnabled, so the longest ~30 wrapper objects die with
+      # "fatal error C1083: Cannot open compiler generated file: ''" while ninja
+      # only reports "build stopped: subcommand failed".
+      #
+      # Every step below therefore runs through a short junction to the
+      # workspace. Nothing is copied; only the paths handed to CMake get shorter.
+      # A single fixed alias is safe because the runner has capacity 1.
+      # (`cargo clippy`/`cargo test` write to src\target\debug, 10 characters
+      # shorter, which is why lint+test passed while "Build and package" did not.)
+      SHORT_WORKSPACE: C:\astrofin-ci
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Link persistent caches into the workspace
+      - name: Link persistent caches and shorten the workspace path
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $root = $env:RUNNER_CACHE_ROOT
           $mpvSha = (git -C third_party/mpv rev-parse HEAD).Trim()
           $links = @(
@@ -42,16 +61,29 @@ jobs:
             @{ link = 'build';                    target = "$root\build" },
             @{ link = 'third_party\mpv-install';  target = "$root\mpv-install-$mpvSha" }
           )
+          # Never Remove-Item -Recurse a path that may already be a junction into
+          # the persistent cache: unlink it explicitly instead. Join-Path (not
+          # Convert-Path/Resolve-Path) so the link, not its target, is addressed.
+          function Remove-LinkOrDir([string]$path) {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            if (-not $item) { return }
+            if ($item.LinkType) { [IO.Directory]::Delete($path, $false) }
+            else { Remove-Item -LiteralPath $path -Recurse -Force }
+          }
           foreach ($l in $links) {
             New-Item -ItemType Directory -Force $l.target | Out-Null
-            if (Test-Path $l.link) { Remove-Item -Recurse -Force $l.link }
+            Remove-LinkOrDir (Join-Path (Get-Location).Path $l.link)
             New-Item -ItemType Junction -Path $l.link -Target $l.target | Out-Null
             "linked $($l.link) -> $($l.target)"
           }
+          Remove-LinkOrDir $env:SHORT_WORKSPACE
+          New-Item -ItemType Junction -Path $env:SHORT_WORKSPACE -Target (Get-Location).Path | Out-Null
+          "linked $env:SHORT_WORKSPACE -> $(Get-Location)"
 
       - name: Build libmpv (skipped when the cache for this submodule commit exists)
         shell: pwsh
         run: |
+          Set-Location $env:SHORT_WORKSPACE
           $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
           pwsh -ExecutionPolicy Bypass -File dev\windows\build_mpv_source.ps1 -Arch x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -59,6 +91,7 @@ jobs:
       - name: Fetch CEF (cached)
         shell: pwsh
         run: |
+          Set-Location $env:SHORT_WORKSPACE
           $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
           cargo xtask fetch-cef
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -66,6 +99,7 @@ jobs:
       - name: Lint (fmt + clippy) and test
         shell: pwsh
         run: |
+          Set-Location $env:SHORT_WORKSPACE
           $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
           . dev\windows\env.ps1
           cargo fmt --manifest-path src/Cargo.toml --all -- --check
@@ -78,6 +112,7 @@ jobs:
       - name: Installer tooling (WiX as a user-scope dotnet tool; NSIS into the linked .cache)
         shell: pwsh
         run: |
+          Set-Location $env:SHORT_WORKSPACE
           $env:Path = "$env:USERPROFILE\.dotnet\tools;$env:Path"
           if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
             dotnet tool install --global wix --version 5.*
@@ -94,6 +129,7 @@ jobs:
       - name: Build and package
         shell: pwsh
         run: |
+          Set-Location $env:SHORT_WORKSPACE
           $env:Path = "$env:USERPROFILE\.cargo\bin;$env:USERPROFILE\.dotnet\tools;$env:Path"
           . dev\windows\env.ps1
           cargo xtask package --external-mpv "$PWD\third_party\mpv-install" --prefix build/install --dist dist
@@ -112,3 +148,10 @@ jobs:
             dist/*.zip
             dist/*-setup.exe
             dist/*.msi
+
+      - name: Drop the short workspace junction
+        if: always()
+        shell: pwsh
+        run: |
+          $item = Get-Item -LiteralPath $env:SHORT_WORKSPACE -Force -ErrorAction SilentlyContinue
+          if ($item -and $item.LinkType) { [IO.Directory]::Delete($env:SHORT_WORKSPACE, $false) }

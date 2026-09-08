@@ -13,7 +13,10 @@ $BuildDir = Join-Path $RepoRoot "build"
 
 if ($Clean -and (Test-Path $BuildDir)) {
     Write-Host "Cleaning build directory..."
-    Remove-Item -Recurse -Force $BuildDir
+    # Contents, not the directory: build\ is a junction into a persistent cache
+    # under CI, and removing it would silently replace the link with a plain
+    # directory in the job workspace.
+    Get-ChildItem -LiteralPath $BuildDir -Force | Remove-Item -Recurse -Force
 }
 
 # Locate mpv install (prefer mpv-install from build_mpv_source.ps1)
