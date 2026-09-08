@@ -818,15 +818,25 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-text-primary);
 }
 
-/* Frosted bar: semi-transparent wash + blur, never a solid fill. The
- * brightness() in the backdrop filter is what buys 4.5:1 for 16px text over
- * a bright frame without making the surface opaque. */
+/* Frosted bar: semi-transparent wash + blur, never a solid fill.
+ *
+ * The wash is what carries the contrast, not the blur. mpv renders in its own
+ * window UNDER the CEF surface, so backdrop-filter here never samples a single
+ * video pixel — during playback the web layer behind this bar is transparent
+ * and the brightness(.62) has nothing to act on. It is kept because the bar
+ * also appears over web content, but the alphas below are what have to hold
+ * the 4.5:1 floor (design-brief.md:43).
+ *
+ * Measured off a composited capture of the brightest frame to hand: at
+ * .40/.48 the bar sat at 4.6-6.3:1 for --af-text-primary and 2.2-3.0:1 for
+ * --af-text-muted. At .58/.66 both clear 4.5:1 and the picture still reads
+ * through. */
 .videoOsdBottom .osdControls {
   border-radius: var(--af-radius-panel);
   background: linear-gradient(
     180deg,
-    rgba(var(--af-surface-raised-rgb), .40),
-    rgba(var(--af-bg-base-rgb), .48));
+    rgba(var(--af-surface-raised-rgb), .58),
+    rgba(var(--af-bg-base-rgb), .66));
   -webkit-backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
   backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
   border: 1px solid var(--af-edge-luminous);
@@ -864,8 +874,11 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-text-primary);
   font-variant-numeric: tabular-nums;
 }
+/* The "ends at" label was --af-text-muted, which measured 2.2-3.0:1 over a
+ * bright frame. It is a real reading, not decoration, so it takes the primary
+ * colour; its lower rank is carried by the mono face and tracking instead. */
 .videoOsdBottom .osdTimeText {
-  color: var(--af-text-muted);
+  color: var(--af-text-primary);
 }
 
 .videoOsdBottom .osdTitle,
@@ -944,9 +957,13 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   background: rgba(var(--af-text-primary-rgb), .62);
 }
 
-/* Minimal icon buttons: muted at rest, primary on hover/focus. */
+/* Minimal icon buttons: one step below primary at rest, full primary on
+ * hover/focus. The token set has no rung between --af-text-muted and
+ * --af-text-primary, and muted measured 2.2-3.0:1 over a bright frame, so the
+ * resting state is primary held back with alpha instead. Focus and active are
+ * untouched. */
 .videoOsdBottom .paper-icon-button-light {
-  color: var(--af-text-muted);
+  color: rgba(var(--af-text-primary-rgb), .78);
   padding: 6px;
   transition:
     color var(--af-dur-tile) var(--af-ease-out),
