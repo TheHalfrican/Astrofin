@@ -62,6 +62,8 @@ Wall time: **62s** (13:08:54 → 13:09:56). Runs fine WITHOUT vcvars — rustc f
 `link.exe` on its own.
 Result: `.cache\cef\151.3.16\cef_windows_x86_64` (592 MB including the `.tar.bz2`).
 CEF 151.3.16 + chromium 151.0.7922.109; the crate reports `151.3.0+151.3.16`.
+(Since then the pin moved to CEF 151.3.24: the crate reports `151.8.1+151.3.24`
+and the cache holds both versions.)
 
 ## Step 3 — app build
 
