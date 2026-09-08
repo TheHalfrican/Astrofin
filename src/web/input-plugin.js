@@ -17,6 +17,11 @@
 
             console.debug('[Media] inputPlugin constructed with playbackManager:', !!playbackManager);
 
+            // The OSD source badge needs the same handle and there is no
+            // other route to it: playbackManager is not on window. attach()
+            // never throws.
+            window.AstrofinPlaybackSource?.attach(playbackManager);
+
             if (playbackManager && window.Events) {
                 this.setupEvents(playbackManager);
             }
