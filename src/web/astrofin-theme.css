@@ -1906,8 +1906,9 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   display: flex;
   flex-direction: column;
   gap: var(--af-space-1);
+  width: max-content;
   min-width: 260px;
-  max-width: 440px;
+  max-width: min(60vw, 560px);
   padding: var(--af-space-3) var(--af-space-4);
   border-radius: var(--af-radius-md);
   border: 1px solid var(--af-edge-luminous);
