@@ -21,6 +21,14 @@ const LOG_FILE_NAME: &str = "astrofin.log";
 /// can find a Jellium Desktop profile to import on first run.
 pub(crate) const LEGACY_APP_DIR_NAME: &str = "jellium-desktop";
 
+/// Environment variables that name the config/cache directory. The CLI
+/// reads them as fallbacks for `--config-dir`/`--cache-dir`, and the browser
+/// process re-exports an explicit flag into them so CEF helper processes —
+/// which return from `jfn_cef_start` before argv is ever parsed, and load
+/// `settings.json` on their own — resolve the same directory.
+pub const ENV_CONFIG_DIR: &str = "ASTROFIN_CONFIG_DIR";
+pub const ENV_CACHE_DIR: &str = "ASTROFIN_CACHE_DIR";
+
 struct Overrides {
     config_dir: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
@@ -43,12 +51,24 @@ pub fn set_cache_dir_override(path: PathBuf) {
     overrides().cache_dir = Some(path);
 }
 
+fn env_override(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 fn config_override() -> Option<PathBuf> {
-    overrides().config_dir.clone()
+    overrides()
+        .config_dir
+        .clone()
+        .or_else(|| env_override(ENV_CONFIG_DIR))
 }
 
 fn cache_override() -> Option<PathBuf> {
-    overrides().cache_dir.clone()
+    overrides()
+        .cache_dir
+        .clone()
+        .or_else(|| env_override(ENV_CACHE_DIR))
 }
 
 #[cfg(not(windows))]

@@ -18,6 +18,11 @@
         return mediaStreams.find(s => s.Index === index) || null;
     }
 
+    // Session cache for the extra lookups the auto video-mode resolver needs
+    // (series items by id, ancestor lists by `ancestors:<parent id>`). A
+    // failed fetch caches null so a broken id is not retried on every play.
+    const vmItemCache = new Map();
+
     class mpvVideoPlayer extends window.MpvPlayerBase {
         constructor(args) {
             super(args);
@@ -102,6 +107,7 @@
             if (options.resetSubtitleOffset !== false) this.resetSubtitleOffset();
             if (options.fullscreen) this.loading.show();  // fills entire web content area, not the actual screen
             await this.createMediaElement(options);
+            await this.applyAutoVideoMode(options);
             console.debug(`[Media] [${this.logTag}] createMediaElement done, calling setCurrentSrc`);
             const result = await this.setCurrentSrc(options);
 
@@ -165,6 +171,88 @@
 
         _beforeLoad(options) {
             window.api.player.setAspectMode(options?.aspectRatio || this.getAspectRatio());
+        }
+
+        // ---- auto video mode ------------------------------------------------
+        //
+        // Only runs while the stored setting is `auto`; any other value is a
+        // statement about every title and the native side ignores us anyway
+        // (it also does so under a `--video-mode` override, which jmpInfo
+        // cannot see). Resolution happens here, immediately before loadfile, and is
+        // applied transiently: nothing is persisted and the next play resolves
+        // again. Every failure degrades to live-action rather than throwing —
+        // a metadata lookup must never be able to stop playback.
+        async applyAutoVideoMode(options) {
+            const item = options?.item || null;
+            try {
+                const jmp = window.jmpInfo;
+                if (jmp?.settings?.playback?.videoMode !== 'auto') return;
+                const resolver = window.AstrofinVideoMode;
+                if (!resolver) throw new Error('video-mode-resolver.js not loaded');
+
+                const settings = { videoModeLibraries: jmp.videoModeLibraries || {} };
+                // The series is only worth a round trip when the item's own
+                // tags and genres decided nothing.
+                const itemOnly = resolver.resolveVideoMode(item, null, null, settings);
+                const series = itemOnly.reason === 'default' && item?.SeriesId
+                    ? await this._vmItem(item.SeriesId)
+                    : null;
+                const library = await this._vmLibrary(item, series);
+                const resolved = resolver.resolveVideoMode(item, series, library, settings);
+                this._vmApply(resolved.mode, resolved.reason, item);
+            } catch (e) {
+                const why = (e && e.message) || String(e);
+                console.warn(`[Media] [${this.logTag}] auto video mode failed:`, e);
+                this._vmApply('live-action', `fallback after error: ${why}`, item);
+            }
+        }
+
+        _vmApply(mode, reason, item) {
+            const name = item?.Name || item?.SeriesName || 'unknown';
+            console.info(`[Media] [${this.logTag}] video mode auto -> ${mode} (${reason}) for "${name}"`);
+            window.jmpNative?.setPlaybackVideoMode?.(mode, reason, name);
+        }
+
+        async _vmItem(id) {
+            if (!id) return null;
+            if (vmItemCache.has(id)) return vmItemCache.get(id);
+            const client = window.ApiClient;
+            let fetched = null;
+            try {
+                if (client?.getItem) fetched = await client.getItem(client.getCurrentUserId(), id);
+            } catch (e) {
+                console.warn(`[Media] [${this.logTag}] video mode: getItem(${id}) failed:`, e);
+            }
+            vmItemCache.set(id, fetched || null);
+            return fetched || null;
+        }
+
+        // The item's top-level library. A ParentId walk cannot find it: a
+        // movie's parent is the physical media folder, whose parent is the
+        // aggregate root, and the library (CollectionFolder) is only virtual.
+        // /Items/{id}/Ancestors?userId= translates that physical folder into
+        // the user's CollectionFolder, so the library is simply the first
+        // ancestor with a CollectionType. Cached by the nearest shared parent
+        // (series for episodes, folder for movies), so one call serves every
+        // sibling for the session.
+        async _vmLibrary(item, series) {
+            if (!item?.Id) return null;
+            const key = 'ancestors:' + (series?.Id || item.SeriesId || item.ParentId || item.Id);
+            let ancestors = vmItemCache.get(key);
+            if (ancestors === undefined) {
+                const client = window.ApiClient;
+                ancestors = null;
+                try {
+                    if (client?.getAncestorItems) {
+                        ancestors = await client.getAncestorItems(item.Id, client.getCurrentUserId());
+                    }
+                } catch (e) {
+                    console.warn(`[Media] [${this.logTag}] video mode: getAncestorItems(${item.Id}) failed:`, e);
+                }
+                vmItemCache.set(key, ancestors || null);
+            }
+            const lib = (ancestors || []).find(a => a && (a.CollectionType || a.Type === 'CollectionFolder' || a.Type === 'UserView'));
+            return lib ? { Id: lib.Id, Name: lib.Name } : null;
         }
 
         setSubtitleStreamIndex(index) {

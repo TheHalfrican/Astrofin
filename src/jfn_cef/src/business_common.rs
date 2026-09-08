@@ -70,8 +70,12 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
         // shader chain on the next frame, so the switch is visible mid-playback.
         // An unknown value is rejected to the default rather than persisted.
         "videoMode" => {
-            let mode = jfn_mpv::VideoMode::parse(value).unwrap_or_default();
-            if mode.as_str() != value {
+            // Pre-rename spellings (`movies`, `anime`) still parse and are
+            // stored under their new names; anything else falls back to the
+            // default rather than being persisted as-is.
+            let parsed = jfn_mpv::VideoMode::parse(value);
+            let mode = parsed.unwrap_or_default();
+            if parsed.is_none() {
                 jfn_logging::log(
                     jfn_logging::CATEGORY_CEF,
                     jfn_logging::LEVEL_WARN,

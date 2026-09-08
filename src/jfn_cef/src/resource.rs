@@ -52,6 +52,7 @@ static RESOURCES: &[(&str, Embedded)] = &[
     embedded!("overlay.html", "text/html"),
     embedded!("overlay.js", "application/javascript"),
     embedded!("overlay.lang.js", "application/javascript"),
+    embedded!("video-mode-resolver.js", "application/javascript"),
 ];
 
 fn lookup(url_path: &str) -> Option<&'static Embedded> {

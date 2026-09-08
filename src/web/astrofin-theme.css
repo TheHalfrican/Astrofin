@@ -1265,6 +1265,9 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
 }
 .af-srv-row > span:last-child {
   font-family: var(--af-font-mono);
+  /* Metadata values read as machine state, not prose: uppercase mono, as in
+     the design brief. */
+  text-transform: uppercase;
   letter-spacing: var(--af-tracking-meta);
   color: var(--af-text-primary);
 }

@@ -1,18 +1,23 @@
 //! Built-in upscaling presets ("Video mode"), switched live through libmpv.
 //!
-//! Each mode is a `glsl-shaders` chain plus, for [`VideoMode::Movies`], a pair
-//! of scaler settings. Everything is applied by writing mpv properties, so a
-//! switch takes effect on the next rendered frame — no restart, no rewriting
-//! `mpv.conf`, and nothing at all is written to disk from here.
+//! Four modes: [`VideoMode::Auto`] (the default — the web layer resolves a
+//! concrete mode per title and applies it transiently),
+//! [`VideoMode::LiveAction`] (FSRCNNX x2 plus sharp scalers),
+//! [`VideoMode::Animation`] (Anime4K Mode A HQ), and [`VideoMode::Off`]
+//! (no shaders at all, mpv's own default scalers).
+//!
+//! Everything is applied by writing mpv properties, so a switch takes effect
+//! on the next rendered frame — no restart, no rewriting `mpv.conf`, and
+//! nothing at all is written to disk from here.
 //!
 //! # Baseline
 //!
-//! [`VideoMode::Off`] means "whatever the user's `mpv.conf` says", and Anime
-//! mode leaves the scalers to `mpv.conf` as well. Those values are only known
-//! after `mpv_initialize` has parsed the config, and reading them
-//! synchronously at that point would park the caller on mpv's core thread
-//! while the VO is still coming up. So [`init`] fires three *async* property
-//! reads and [`consume_reply`] latches the answers.
+//! [`VideoMode::Animation`] leaves the scalers to `mpv.conf`, because Anime4K
+//! does its own downscale gating. That value is only known after
+//! `mpv_initialize` has parsed the config, and reading it synchronously at
+//! that point would park the caller on mpv's core thread while the VO is
+//! still coming up. So [`init`] fires three *async* property reads and
+//! [`consume_reply`] latches the answers.
 //!
 //! Ordering is what makes that safe: libmpv funnels
 //! `mpv_get_property_async` and `mpv_set_property_async` through the same
@@ -20,6 +25,11 @@
 //! so the reads queued by [`init`] are served *before* the writes [`apply`]
 //! queues right after them. The baseline therefore reflects the config file
 //! even though the boot apply does not wait for it.
+//!
+//! [`VideoMode::Off`] deliberately does *not* use the baseline: it means "no
+//! shaders", and the user's own `mpv.conf` may well set a shader chain of its
+//! own, so Off writes an empty `glsl-shaders` plus mpv's compiled-in scaler
+//! defaults over whatever the config file asked for.
 
 use std::path::{Path, PathBuf};
 
@@ -49,12 +59,12 @@ pub const BASELINE_DSCALE_REPLY: ReplyUserdata = 4;
 /// actually accepted into the log.
 pub const READBACK_REPLY: ReplyUserdata = 5;
 
-/// Bundled subdirectory + file list for [`VideoMode::Movies`].
+/// Bundled subdirectory + file list for [`VideoMode::LiveAction`].
 const FSRCNNX_DIR: &str = "fsrcnnx";
 const FSRCNNX_FILES: &[&str] = &["FSRCNNX_x2_16-0-4-1.glsl"];
 
-/// Bundled subdirectory + file list for [`VideoMode::Anime`]. Order is the
-/// upstream Anime4K "Mode A (HQ)" recipe and is load-bearing.
+/// Bundled subdirectory + file list for [`VideoMode::Animation`]. Order is
+/// the upstream Anime4K "Mode A (HQ)" recipe and is load-bearing.
 const ANIME4K_DIR: &str = "anime4k";
 const ANIME4K_FILES: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
@@ -65,20 +75,34 @@ const ANIME4K_FILES: &[&str] = &[
     "Anime4K_Upscale_CNN_x2_M.glsl",
 ];
 
-/// Scalers Movies mode pairs with FSRCNNX.
-const MOVIES_SCALE: &str = "ewa_lanczossharp";
-const MOVIES_DSCALE: &str = "mitchell";
+/// Scalers Live-Action mode pairs with FSRCNNX.
+const LIVE_ACTION_SCALE: &str = "ewa_lanczossharp";
+const LIVE_ACTION_DSCALE: &str = "mitchell";
+
+/// mpv's own compiled-in scaler defaults, from `gl_video_opts_def` in
+/// `video/out/gpu/video.c` (`SCALER_LANCZOS` / `SCALER_HERMITE`) and
+/// documented in `DOCS/man/options.rst` under `--scale`/`--dscale`.
+///
+/// [`VideoMode::Off`] writes these rather than the `mpv.conf` baseline: the
+/// user's config may pair a shader chain with sharp scalers, and "off" has to
+/// undo the whole preset, not half of it.
+const MPV_DEFAULT_SCALE: &str = "lanczos";
+const MPV_DEFAULT_DSCALE: &str = "hermite";
 
 /// Which upscaling preset is active.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VideoMode {
-    /// Touch nothing: `mpv.conf` (or mpv's own defaults) decide.
-    Off,
-    /// FSRCNNX x2 plus sharp scalers — the everyday default.
+    /// Resolve per title at play time (tags, genres, library), falling back to
+    /// [`VideoMode::LiveAction`]. The resolution itself happens in the web
+    /// layer; this crate only ever receives the concrete result.
     #[default]
-    Movies,
+    Auto,
+    /// FSRCNNX x2 plus sharp scalers.
+    LiveAction,
     /// Anime4K Mode A (HQ).
-    Anime,
+    Animation,
+    /// No shaders at all, and mpv's built-in default scalers.
+    Off,
 }
 
 impl VideoMode {
@@ -86,47 +110,81 @@ impl VideoMode {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
+            Self::LiveAction => "live-action",
+            Self::Animation => "animation",
             Self::Off => "off",
-            Self::Movies => "movies",
-            Self::Anime => "anime",
         }
     }
 
-    /// Parse a wire value. `None` for anything else, so a stale or hand-edited
-    /// setting falls back to the default instead of failing the load.
+    /// Parse a wire value, accepting the pre-rename spellings (`movies`,
+    /// `anime`) as aliases. `None` for anything else, so a stale or
+    /// hand-edited setting falls back to the default instead of failing the
+    /// load.
+    ///
+    /// Note that `off` maps to [`VideoMode::Off`] here. A *stored* `off`
+    /// written before the rename meant "leave `mpv.conf` alone", which is not
+    /// the same thing — see [`VideoMode::parse_legacy`].
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "auto" => Some(Self::Auto),
+            "live-action" | "movies" => Some(Self::LiveAction),
+            "animation" | "anime" => Some(Self::Animation),
             "off" => Some(Self::Off),
-            "movies" => Some(Self::Movies),
-            "anime" => Some(Self::Anime),
             _ => None,
+        }
+    }
+
+    /// [`VideoMode::parse`] for a value persisted by a build that predates the
+    /// rename, where `off` meant "leave `mpv.conf` as it is" rather than
+    /// "no shaders". The closest new behaviour is [`VideoMode::Auto`].
+    ///
+    /// Only ever applied once, to a `settings.json` that carries no
+    /// `videoModeMigrated` marker; the normalised name is written straight
+    /// back so this never runs twice.
+    #[must_use]
+    pub fn parse_legacy(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Auto),
+            other => Self::parse(other),
         }
     }
 
     /// Every accepted wire value, in menu order.
     #[must_use]
     pub fn options() -> &'static [&'static str] {
-        &["movies", "anime", "off"]
+        &["auto", "live-action", "animation", "off"]
+    }
+
+    /// The mode actually handed to mpv. [`VideoMode::Auto`] has no chain of
+    /// its own: until the web layer resolves a title it behaves as
+    /// [`VideoMode::LiveAction`], which is also Auto's documented fallback.
+    #[must_use]
+    pub fn effective(self) -> Self {
+        match self {
+            Self::Auto => Self::LiveAction,
+            other => other,
+        }
     }
 
     /// Shader file names this mode needs, in chain order.
     #[must_use]
     pub fn shader_files(self) -> &'static [&'static str] {
-        match self {
+        match self.effective() {
+            Self::Animation => ANIME4K_FILES,
             Self::Off => &[],
-            Self::Movies => FSRCNNX_FILES,
-            Self::Anime => ANIME4K_FILES,
+            _ => FSRCNNX_FILES,
         }
     }
 
     /// The bundled subdirectory holding this mode's shaders.
     #[must_use]
     pub fn bundled_subdir(self) -> &'static str {
-        match self {
+        match self.effective() {
+            Self::Animation => ANIME4K_DIR,
             Self::Off => "",
-            Self::Movies => FSRCNNX_DIR,
-            Self::Anime => ANIME4K_DIR,
+            _ => FSRCNNX_DIR,
         }
     }
 
@@ -201,6 +259,11 @@ impl Baseline {
 }
 
 struct State {
+    /// What the user chose for this run: the stored setting, or the
+    /// `--video-mode` override. Only [`apply`] moves it.
+    selected: VideoMode,
+    /// What mpv is actually running: `selected`, or — while `selected` is
+    /// [`VideoMode::Auto`] — the mode last resolved for a title.
     mode: VideoMode,
     baseline: Baseline,
 }
@@ -209,16 +272,24 @@ fn state() -> &'static Mutex<State> {
     static SLOT: std::sync::OnceLock<Mutex<State>> = std::sync::OnceLock::new();
     SLOT.get_or_init(|| {
         Mutex::new(State {
-            mode: VideoMode::Off,
+            selected: VideoMode::default(),
+            mode: VideoMode::default(),
             baseline: Baseline::default(),
         })
     })
 }
 
-/// The mode last applied (or requested).
+/// The mode last applied (or requested), per-title resolutions included.
 #[must_use]
 pub fn current() -> VideoMode {
     state().lock().mode
+}
+
+/// The mode chosen for this run — the stored setting or the CLI override —
+/// which is what decides whether per-title resolutions are honoured.
+#[must_use]
+pub fn selected() -> VideoMode {
+    state().lock().selected
 }
 
 /// Queue the three async baseline reads. Call once, immediately after
@@ -302,27 +373,41 @@ pub fn consume_reply(reply: ReplyUserdata, value: &crate::PropertyValue) -> bool
 /// which is fine, but keep the CLAUDE.md rule in view for future edits: no
 /// sync property calls here).
 pub fn apply(handle: &Handle, mode: VideoMode) {
-    state().lock().mode = mode;
+    state().lock().selected = mode;
+    apply_inner(handle, mode);
+}
 
-    let (chain_value, resolved) = match mode {
-        // Restore whatever the config file had. Before the baseline reply has
-        // landed the safest value is "no shaders": the alternative is leaving
-        // the previous mode's chain running under a mode that says it is off.
-        VideoMode::Off => (baseline_field(|b| b.glsl_shaders.clone()), Vec::new()),
+/// [`apply`] without moving `selected`: the shared tail for a user's choice
+/// and for a per-title resolution under Auto.
+fn apply_inner(handle: &Handle, mode: VideoMode) {
+    state().lock().mode = mode;
+    let effective = mode.effective();
+
+    let chain = match effective {
+        VideoMode::Off => Vec::new(),
         _ => {
-            let dir = mode.shader_dir();
-            let chain = mode.shader_chain(&dir);
-            (chain_to_property(&chain), chain)
+            let dir = effective.shader_dir();
+            effective.shader_chain(&dir)
         }
     };
+    let chain_value = chain_to_property(&chain);
 
-    let (scale, dscale) = match mode {
-        VideoMode::Movies => (MOVIES_SCALE.to_string(), MOVIES_DSCALE.to_string()),
+    let (scale, dscale) = match effective {
         // Anime4K does its own downscale gating; leave the scalers to the
-        // user's config, exactly as Off does.
-        _ => (
+        // user's config.
+        VideoMode::Animation => (
             baseline_field(|b| b.scale.clone()),
             baseline_field(|b| b.dscale.clone()),
+        ),
+        // Off means "no preset at all", so it puts mpv's own defaults back
+        // rather than whatever mpv.conf asked for.
+        VideoMode::Off => (
+            MPV_DEFAULT_SCALE.to_string(),
+            MPV_DEFAULT_DSCALE.to_string(),
+        ),
+        _ => (
+            LIVE_ACTION_SCALE.to_string(),
+            LIVE_ACTION_DSCALE.to_string(),
         ),
     };
 
@@ -331,24 +416,22 @@ pub fn apply(handle: &Handle, mode: VideoMode) {
     set_string(handle, DSCALE, &dscale);
     request_string(handle, READBACK_REPLY, GLSL_SHADERS);
 
-    // Off resolves no chain of its own — what it wrote is the baseline, and
-    // reporting that as an empty list would read as "shaders disabled".
-    let shaders = if resolved.is_empty() && !chain_value.is_empty() {
-        format!("{chain_value} (restored from mpv.conf)")
+    let label = if mode == VideoMode::Auto {
+        "auto (live-action until a title is resolved)"
     } else {
-        resolved
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+        mode.as_str()
     };
     tracing::info!(
         target: "mpv",
         "video mode {} applied: scale={} dscale={} shaders=[{}]",
-        mode.as_str(),
+        label,
         if scale.is_empty() { "<mpv default>" } else { &scale },
         if dscale.is_empty() { "<mpv default>" } else { &dscale },
-        shaders
+        chain
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 }
 
@@ -362,26 +445,63 @@ pub fn apply_current(mode: VideoMode) {
     apply(&handle, mode);
 }
 
+/// Apply a mode the web layer resolved for one title.
+///
+/// Honoured only while the mode [`selected`] for this run is
+/// [`VideoMode::Auto`]: an explicit mode — stored or from `--video-mode` —
+/// is a statement about every title, so a stale or racing resolution must
+/// not undo it. `Auto` itself is not a resolution and is refused too.
+///
+/// Transient by construction: nothing is written to `settings.json`, and the
+/// next `loadfile` resolves again from scratch. `reason` names the rule that
+/// matched and `name` the title, so a run log says why a chain switched.
+/// Returns whether the chain was switched.
+pub fn apply_resolved(mode: VideoMode, reason: &str, name: &str) -> bool {
+    let selected = selected();
+    if selected != VideoMode::Auto {
+        tracing::debug!(
+            target: "mpv",
+            "video mode {} resolved for \"{}\" ignored: mode is {}",
+            mode.as_str(),
+            name,
+            selected.as_str()
+        );
+        return false;
+    }
+    if mode == VideoMode::Auto {
+        tracing::warn!(
+            target: "mpv",
+            "video mode auto resolved to auto for \"{}\"; leaving the chain alone",
+            name
+        );
+        return false;
+    }
+    let Some(handle) = crate::boot::current_handle() else {
+        tracing::warn!(target: "mpv", "video mode {}: no mpv handle yet", mode.as_str());
+        return false;
+    };
+    tracing::info!(
+        target: "mpv",
+        "video mode auto -> {} ({}) for \"{}\"",
+        mode.as_str(),
+        reason,
+        name
+    );
+    apply_inner(&handle, mode);
+    true
+}
+
 /// Boot-time bring-up against the process-global handle: latch the baseline,
 /// then apply `mode`.
 ///
 /// Call right after `mpv_initialize`, before anything is loaded — mpv holds
 /// the chain as ordinary options, so it does not need a file to be open.
-///
-/// [`VideoMode::Off`] applies nothing at all: `mpv.conf` is already in force
-/// and writing the (not yet known) baseline back over it would be a no-op at
-/// best and a race at worst.
 pub fn boot(mode: VideoMode) {
     let Some(handle) = crate::boot::current_handle() else {
         tracing::warn!(target: "mpv", "video mode: no mpv handle at boot");
         return;
     };
     init(&handle);
-    if mode == VideoMode::Off {
-        state().lock().mode = mode;
-        tracing::info!(target: "mpv", "video mode off: leaving mpv.conf settings as they are");
-        return;
-    }
     apply(&handle, mode);
 }
 
@@ -401,27 +521,68 @@ mod tests {
 
     #[test]
     fn wire_values_round_trip() {
-        for mode in [VideoMode::Off, VideoMode::Movies, VideoMode::Anime] {
+        for mode in [
+            VideoMode::Auto,
+            VideoMode::LiveAction,
+            VideoMode::Animation,
+            VideoMode::Off,
+        ] {
             assert_eq!(VideoMode::parse(mode.as_str()), Some(mode));
         }
         assert_eq!(VideoMode::parse(""), None);
-        assert_eq!(VideoMode::parse("Movies"), None);
+        assert_eq!(VideoMode::parse("Animation"), None);
         assert_eq!(VideoMode::parse("nope"), None);
     }
 
     #[test]
-    fn default_is_movies_and_options_cover_every_variant() {
-        assert_eq!(VideoMode::default(), VideoMode::Movies);
-        for value in VideoMode::options() {
-            assert!(VideoMode::parse(value).is_some(), "{value}");
-        }
-        assert_eq!(VideoMode::options().len(), 3);
+    fn legacy_names_map_onto_the_new_ones() {
+        // Accepted everywhere, including a live setValue from an old page.
+        assert_eq!(VideoMode::parse("movies"), Some(VideoMode::LiveAction));
+        assert_eq!(VideoMode::parse("anime"), Some(VideoMode::Animation));
+        assert_eq!(VideoMode::parse("off"), Some(VideoMode::Off));
+
+        // A *stored* pre-rename value: `off` meant "leave mpv.conf alone",
+        // whose closest new behaviour is auto, not the new shader-clearing off.
+        assert_eq!(VideoMode::parse_legacy("off"), Some(VideoMode::Auto));
+        assert_eq!(
+            VideoMode::parse_legacy("movies"),
+            Some(VideoMode::LiveAction)
+        );
+        assert_eq!(VideoMode::parse_legacy("anime"), Some(VideoMode::Animation));
+        assert_eq!(VideoMode::parse_legacy("auto"), Some(VideoMode::Auto));
+        assert_eq!(
+            VideoMode::parse_legacy("live-action"),
+            Some(VideoMode::LiveAction)
+        );
+        assert_eq!(VideoMode::parse_legacy("nope"), None);
     }
 
     #[test]
-    fn anime_chain_is_the_upstream_mode_a_order() {
+    fn default_is_auto_and_options_cover_every_variant() {
+        assert_eq!(VideoMode::default(), VideoMode::Auto);
+        for value in VideoMode::options() {
+            assert!(VideoMode::parse(value).is_some(), "{value}");
+        }
         assert_eq!(
-            VideoMode::Anime.shader_files(),
+            VideoMode::options(),
+            ["auto", "live-action", "animation", "off"]
+        );
+    }
+
+    #[test]
+    fn auto_falls_back_to_live_action() {
+        assert_eq!(VideoMode::Auto.effective(), VideoMode::LiveAction);
+        assert_eq!(VideoMode::Auto.shader_files(), FSRCNNX_FILES);
+        assert_eq!(VideoMode::Auto.bundled_subdir(), FSRCNNX_DIR);
+        for mode in [VideoMode::LiveAction, VideoMode::Animation, VideoMode::Off] {
+            assert_eq!(mode.effective(), mode);
+        }
+    }
+
+    #[test]
+    fn animation_chain_is_the_upstream_mode_a_order() {
+        assert_eq!(
+            VideoMode::Animation.shader_files(),
             [
                 "Anime4K_Clamp_Highlights.glsl",
                 "Anime4K_Restore_CNN_VL.glsl",
@@ -432,6 +593,17 @@ mod tests {
             ]
         );
         assert!(VideoMode::Off.shader_files().is_empty());
+        assert_eq!(VideoMode::Off.bundled_subdir(), "");
+    }
+
+    /// Off has to be self-contained: mpv's own defaults, never the baseline,
+    /// because the user's mpv.conf may itself set a shader chain and sharp
+    /// scalers. Values from `gl_video_opts_def` in `video/out/gpu/video.c`.
+    #[test]
+    fn off_restores_mpvs_compiled_in_scaler_defaults() {
+        assert_eq!(MPV_DEFAULT_SCALE, "lanczos");
+        assert_eq!(MPV_DEFAULT_DSCALE, "hermite");
+        assert!(VideoMode::Off.shader_chain(Path::new("/nope")).is_empty());
     }
 
     #[test]
@@ -439,12 +611,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         // Everything except the third entry.
-        for name in VideoMode::Anime.shader_files() {
+        for name in VideoMode::Animation.shader_files() {
             if *name != "Anime4K_Upscale_CNN_x2_VL.glsl" {
                 std::fs::write(dir.join(name), "// s").expect("write");
             }
         }
-        let chain = VideoMode::Anime.shader_chain(dir);
+        let chain = VideoMode::Animation.shader_chain(dir);
         let names: Vec<String> = chain
             .iter()
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))

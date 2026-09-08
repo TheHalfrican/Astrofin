@@ -370,6 +370,23 @@
             details.addEventListener('click', guard(onDetailsClick));
         }
 
+        // Video-mode wire value -> panel label. The pre-rename spellings are
+        // still accepted because a settings.json normalised at startup only
+        // reaches jmpInfo on the next launch.
+        var VIDEO_MODE_LABELS = {
+            'auto': 'Auto',
+            'live-action': 'Live-Action',
+            'movies': 'Live-Action',
+            'animation': 'Animation',
+            'anime': 'Animation',
+            'off': 'Off'
+        };
+
+        function videoModeLabel(value) {
+            var key = String(value || '').toLowerCase();
+            return VIDEO_MODE_LABELS[key] || key;
+        }
+
         function renderServerPanel() {
             if (!ui) { return; }
             var api = window.ApiClient;
@@ -398,8 +415,8 @@
             var rows = [];
             var jmp = window.jmpInfo;
             if (jmp && jmp.settings) {
-                if (jmp.settings.transcode) {
-                    rows.push(['Mode', jmp.settings.transcode.forceTranscoding ? 'Transcode' : 'Direct']);
+                if (jmp.settings.playback && jmp.settings.playback.videoMode) {
+                    rows.push(['Mode', videoModeLabel(jmp.settings.playback.videoMode)]);
                 }
                 if (jmp.settings.playback && jmp.settings.playback.hwdec) {
                     rows.push(['Decode', String(jmp.settings.playback.hwdec)]);

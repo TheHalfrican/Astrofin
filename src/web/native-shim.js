@@ -92,7 +92,7 @@
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
                 hwdec: _savedSettings.hwdec || 'auto',
-                videoMode: _savedSettings.videoMode || 'movies'
+                videoMode: _savedSettings.videoMode || 'auto'
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -110,13 +110,17 @@
                 deviceName: _savedSettings.deviceName || ''
             }
         },
+        // Hand-edited in settings.json only: `<library item id>` -> mode.
+        // Read by video-mode-resolver.js, never written from the UI.
+        videoModeLibraries: _savedSettings.videoModeLibraries || {},
         settingsDescriptions: {
             playback: [
                 { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions },
-                { key: 'videoMode', displayName: 'Video mode', help: 'GPU upscaling preset, applied live. Movies: FSRCNNX x2 + sharp scalers. Anime: Anime4K Mode A (HQ). Off: use mpv.conf as-is. Both presets skip upscaling for content already at display resolution.', options: [
-                    { value: 'movies', title: 'Movies — FSRCNNX x2 + sharp scalers' },
-                    { value: 'anime', title: 'Anime — Anime4K Mode A (HQ)' },
-                    { value: 'off', title: 'Off — use mpv.conf as-is' }
+                { key: 'videoMode', displayName: 'Video mode', help: 'GPU upscaling preset, applied live. Auto picks per title from tags, genres and library. Both shader presets skip upscaling for content already at display resolution.', options: [
+                    { value: 'auto', title: 'Auto — pick per title from tags, genres and library' },
+                    { value: 'live-action', title: 'Live-Action — FSRCNNX x2 + sharp scalers' },
+                    { value: 'animation', title: 'Animation — Anime4K Mode A (HQ)' },
+                    { value: 'off', title: 'Off — no shaders, mpv default scalers' }
                 ]}
             ],
             audio: [

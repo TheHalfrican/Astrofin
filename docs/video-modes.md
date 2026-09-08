@@ -7,17 +7,114 @@ that switches **live**, mid-playback, through libmpv.
 
 | Mode | `glsl-shaders` | `scale` | `dscale` |
 | --- | --- | --- | --- |
-| `movies` (default) | `FSRCNNX_x2_16-0-4-1.glsl` | `ewa_lanczossharp` | `mitchell` |
-| `anime` | Anime4K v4.0.1 Mode A (HQ), six files in order | *baseline* | *baseline* |
-| `off` | *baseline* | *baseline* | *baseline* |
+| `auto` (default) | *per title* — see [Auto](#auto) | *per title* | *per title* |
+| `live-action` | `FSRCNNX_x2_16-0-4-1.glsl` | `ewa_lanczossharp` | `mitchell` |
+| `animation` | Anime4K v4.0.1 Mode A (HQ), six files in order | *baseline* | *baseline* |
+| `off` | *(empty)* | `lanczos` | `hermite` |
 
 *baseline* = whatever the user's `mpv.conf` (or mpv's own default) had at
-startup; see [Baseline and restore](#baseline-and-restore).
+startup; see [Baseline](#baseline). Anime4K does its own downscale gating, so
+Animation deliberately leaves the scalers to the config file.
+
+`off` is **not** "leave `mpv.conf` alone" — it clears the shader chain outright
+and puts mpv's compiled-in scaler defaults back, because the user's own
+`mpv.conf` may well set an FSRCNNX chain and sharp scalers of its own and "off"
+has to undo the whole preset, not half of it. Those defaults are `lanczos` and
+`hermite`, from `gl_video_opts_def` in
+`third_party/mpv/video/out/gpu/video.c` (`SCALER_LANCZOS` / `SCALER_HERMITE`),
+documented under `--scale` / `--dscale` in `DOCS/man/options.rst`.
 
 Both shader chains gate themselves on the output/source size ratio — FSRCNNX
 above ~1.3x, Anime4K above ~1.2x — so neither costs anything on content that is
 already at display resolution. Leaving either mode on permanently is safe; that
-is why `movies` is the default on a fresh install rather than `off`.
+is why the default is a shader mode rather than `off`.
+
+## Auto
+
+`auto` picks a concrete mode **per title**, immediately before mpv is told to
+load the file, and applies it *transiently*: nothing is persisted, and the next
+play resolves from scratch. Any other setting is a statement about every title,
+so while the mode selected for this run — the stored setting, or a
+`--video-mode` override — is not `auto`, the resolver does not run at all and
+the native side (`video_mode::apply_resolved`, gated on `video_mode::selected`)
+ignores a resolution that arrives anyway (a page script racing a settings
+change, say).
+
+Resolution lives in `src/web/video-mode-resolver.js` as a pure function,
+`resolveVideoMode(item, series, library, settings) -> { mode, reason }`. First
+rule that matches wins:
+
+1. **Tag** on the item, then on its series/parent. Case-insensitive, matched
+   against the whole tag:
+
+   | Tag | Mode |
+   | --- | --- |
+   | `astrofin:animation`, `astrofin:anime` | `animation` |
+   | `astrofin:live-action`, `astrofin:live` | `live-action` |
+
+2. **Genre** on the item, then on its series/parent: `Animation` or `Anime`
+   (case-insensitive, whole genre) → `animation`. Genres never select
+   `live-action`; that is the fallback, so "no animation genre" and "a
+   live-action genre" are the same thing.
+3. **Library** — the item's top-level library, taken from
+   `/Items/{id}/Ancestors?userId=` as the first ancestor with a
+   `CollectionType`. (A `ParentId` walk cannot find it: a movie's parent is the
+   physical media folder, whose parent is the aggregate root; the library is a
+   virtual `CollectionFolder` that only the ancestors endpoint maps in.) First
+   an explicit mapping from settings.json:
+
+   ```json
+   "videoModeLibraries": {
+     "f137a2dd21bbc1b99aa5c0f6bf02a805": "animation",
+     "a656b907eb3a73532e40e44b968d0225": "live-action"
+   }
+   ```
+
+   The key is the library item's id (visible in the URL of the library page, or
+   from `/Users/<id>/Views`); the value takes the same spellings as the setting,
+   legacy names included. There is no UI for this — it is hand-edited, and the
+   app writes it back untouched on every save.
+
+   With no mapping, a name heuristic: a library whose name contains "anime" or
+   "animation" (case-insensitive) → `animation`.
+4. **Fallback**: `live-action`.
+
+The series is only fetched (`ApiClient.getItem`) when the item's own tags and
+genres decided nothing *and* it has a `SeriesId`; fetched series and ancestor
+lists are cached for the session (ancestors by the nearest shared parent), so
+a second episode of the same show costs no requests. Nothing here can stop
+playback: any failure logs and falls back to `live-action`.
+
+`jmpInfo` — and so `videoModeLibraries` — is built in the CEF renderer process
+from its own read of `settings.json`. That process never parses argv, so the
+browser process re-exports `--config-dir`/`--cache-dir` as
+`ASTROFIN_CONFIG_DIR`/`ASTROFIN_CACHE_DIR` (`app.rs::jfn_app_main`) and
+`jfn_paths` honours those variables; without that, a `--config-dir` run showed
+the page the default profile's settings.
+
+Each resolution writes one line to the log, naming the rule that matched:
+
+```
+INFO mpv: video mode auto -> animation (genre: Anime) for "Dragon Ball Z Kai"
+INFO mpv: video mode auto -> live-action (default) for "Dune"
+INFO mpv: video mode live-action applied: scale=ewa_lanczossharp dscale=mitchell shaders=[…]
+```
+
+Reason strings are `tag: <tag>`, `series tag: <tag>`, `genre: <genre>`,
+`series genre: <genre>`, `library: <name>`, `library name: <name>`, `default`,
+or `fallback after error: <message>`.
+
+The path is JS → `jmpNative.setPlaybackVideoMode(mode, reason, name)`
+(`NativeFunction::SetPlaybackVideoMode` in `src/jfn_cef/src/injection.rs`) →
+`business_web::handle_playback_video_mode` →
+`jfn_mpv::video_mode::apply_resolved`.
+
+Before any title has been resolved — at boot, for instance — `auto` behaves as
+`live-action`, which is also its documented fallback (`VideoMode::effective`).
+
+Unit tests: `src/web/video-mode-resolver.test.js`, run with `just test-js` (or
+`node --test src/web/video-mode-resolver.test.js`). They are node-only and are
+deliberately not part of `just test`, which is the cargo suite.
 
 ## Where the shaders come from
 
@@ -63,8 +160,8 @@ recompiles on the next rendered frame.
   logs what came back, so a run log proves what mpv actually accepted:
 
 ```
-INFO mpv: video mode anime applied: scale=<mpv default> dscale=<mpv default> shaders=[…]
-INFO mpv: video mode anime: mpv reports glsl-shaders=…
+INFO mpv: video mode animation applied: scale=<mpv default> dscale=<mpv default> shaders=[…]
+INFO mpv: video mode animation: mpv reports glsl-shaders=…
 ```
 
 Boot order (`src/jfn_rust/src/app.rs::run_app`): the baseline reads and the
@@ -72,12 +169,12 @@ first apply are queued straight after `mpv_initialize`, before any file is
 loaded and before the VO wait — mpv holds the chain as plain options, so it is
 in force for the first frame of the first video.
 
-### Baseline and restore
+### Baseline
 
-`off`, and the scalers under `anime`, mean "put back what `mpv.conf` said".
-Those values are only knowable after `mpv_initialize` has parsed the config,
-and reading them synchronously there would park the caller on mpv's core thread
-while the VO is still coming up. So the module fires three async property reads
+Animation mode's scalers mean "put back what `mpv.conf` said". Those values are
+only knowable after `mpv_initialize` has parsed the config, and reading them
+synchronously there would park the caller on mpv's core thread while the VO is
+still coming up. So the module fires three async property reads
 (`glsl-shaders`, `scale`, `dscale`) and latches the replies.
 
 That is race-free because libmpv funnels `mpv_get_property_async` and
@@ -88,49 +185,60 @@ not wait for it. The replies are consumed by whichever pump is running — the
 boot pump in `app.rs::consume_boot_event` before the ingest thread exists, and
 `jfn_playback::ingest_driver::ingest_events` afterwards.
 
+`off` deliberately does not use the baseline; see the table above.
+
 ## Setting, CLI flag, and the web UI
 
-- **settings.json**: `"videoMode": "movies" | "anime" | "off"`. Absent means
-  "never chosen" and resolves to the default (`movies`).
-- **CLI**: `--video-mode movies|anime|off`, overriding the stored value for
-  that run. An unrecognised value falls back to the default with a warning
-  rather than failing the launch.
+- **settings.json**: `"videoMode": "auto" | "live-action" | "animation" | "off"`.
+  Absent means "never chosen" and resolves to the default (`auto`).
+  `"videoModeLibraries"` is the per-library map described under
+  [Auto](#auto). `"videoModeMigrated": true` is written unconditionally; see
+  [Legacy names](#legacy-names).
+- **CLI**: `--video-mode auto|live-action|animation|off`, overriding the stored
+  value for that run. The pre-rename spellings are accepted too. An
+  unrecognised value is ignored (the stored mode stands) rather than failing
+  the launch.
 - **Web UI**: `jmpInfo.settings.playback.videoMode` is readable by page
-  scripts, and `jmpInfo.settingsDescriptions.playback` carries the select.
-  Changing it calls `window.api.settings.setValue('playback', 'videoMode', v)`
-  → IPC `setSettingValue` → `business_common::apply_setting_value`, which
-  persists the value *and* applies it to the live mpv handle. It is the only
-  setting that takes effect without a restart.
+  scripts, and `jmpInfo.settingsDescriptions.playback` carries the select
+  (Auto / Live-Action / Animation / Off). Changing it calls
+  `window.api.settings.setValue('playback', 'videoMode', v)` → IPC
+  `setSettingValue` → `business_common::apply_setting_value`, which persists
+  the value *and* applies it to the live mpv handle. It is the only setting
+  that takes effect without a restart.
+- The Home server panel (`src/web/astrofin-theme.js`) shows the mode in its
+  "Mode" row, from the same `jmpInfo` value. It re-renders on the theme's own
+  refresh (route changes), and `client-settings.js` writes the new value into
+  `jmpInfo` as it saves, so leaving Settings is enough to update it.
 
 Switching from a page script, e.g. for testing:
 
 ```js
-window.api.settings.setValue('playback', 'videoMode', 'anime');
+window.api.settings.setValue('playback', 'videoMode', 'animation');
 ```
 
-## Legacy `mpv.conf` repair
+## Legacy names
 
-The first-run import from a Jellium Desktop profile copies `mpv/mpv.conf`
-byte-for-byte, so absolute paths in it still point into
-`…/jellium-desktop/mpv/shaders`. Two things fix that, both in
-`src/paths/src/migrate.rs`:
+The modes used to be `movies | anime | off`, where `off` meant "leave
+`mpv.conf` as it is". The mapping is:
 
-1. **At import time** the copied `mpv.conf` has every absolute reference to the
-   legacy config directory rewritten to the new one — both slash styles, case
-   insensitively on Windows, with everything else left byte-identical
-   (`input-ipc-server=\\.\pipe\jellium-mpv` included; it is harmless).
-2. **At every launch**, `repair_mpv_conf()` does the same for installs migrated
-   before that existed. It is idempotent and conservative: it acts only when
-   the file names the legacy directory *and* at least one rewritten path
-   resolves to a real file under the current config directory, and it leaves a
-   one-time `mpv.conf.bak` beside the file. Otherwise it does nothing and says
-   so once at `info`.
+| Old | New |
+| --- | --- |
+| `movies` | `live-action` |
+| `anime` | `animation` |
+| `off` *(stored, pre-rename)* | `auto` |
 
-Neither path ever touches the legacy tree.
+`movies` and `anime` are accepted anywhere a mode is parsed
+(`VideoMode::parse`, `--video-mode`, `setValue`, and the
+`videoModeLibraries` values) and are stored back under the new names.
 
-Note that a repaired `mpv.conf` still sets a `glsl-shaders` chain of its own.
-That becomes the *baseline*: `off` restores it, and it is what the app falls
-back to when a mode's own files are missing.
+`off` is the awkward one: the string is still valid, but it now means something
+different from what a pre-rename `settings.json` meant by it. The
+`videoModeMigrated` key disambiguates — every file this build writes carries it,
+no file written before the rename does. On load, a `settings.json` without the
+marker goes through `VideoMode::parse_legacy` once (`off` → `auto`), the
+normalised name is written straight back, and the marker lands with it, so the
+one-shot never runs twice and an explicitly chosen `off` survives a restart.
+That happens in `app.rs::stored_video_mode`.
 
 ## Adding a mode
 
@@ -141,7 +249,8 @@ back to when a mode's own files are missing.
    `parse`, `options`, `shader_files`, and `bundled_subdir`, and — if it needs
    scalers — its arm in `apply`. The unit tests in that file cover the wire
    round-trip and the chain order.
-3. Add the option to the `videoMode` select in `src/web/native-shim.js`.
+3. Add the option to the `videoMode` select in `src/web/native-shim.js`, and a
+   label to `VIDEO_MODE_LABELS` in `src/web/astrofin-theme.js`.
 
 Nothing else needs touching: staging, the CLI flag, persistence, and the live
 switch are all driven off those lists.
