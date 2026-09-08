@@ -87,8 +87,30 @@ jobs:
           set "PATH=%PATH%;%MSYS_BIN%"
           cargo xtask package --external-mpv "%CD%\third_party\mpv-install" --prefix build/install --dist dist
 
+      - name: Installer tooling (x64 only; package.ps1 names and builds x64 packages)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.*
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wix extension add --global WixToolset.UI.wixext/5.0.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dev\windows\fetch-nsis.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build installers (NSIS + MSI)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dev\windows\package.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: windows-${{ matrix.arch }}
-          path: dist/Astrofin-*.zip
+          path: |
+            dist/Astrofin-*.zip
+            dist/Astrofin-*-setup.exe
+            dist/Astrofin-*.msi

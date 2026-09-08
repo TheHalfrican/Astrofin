@@ -17,6 +17,7 @@ just strict-lint # lint + clippy pedantic/nursery
 just appimage build # [linux] build AppImage
 just flatpak build  # [linux] build Flatpak bundle
 just dmg            # [macos] build Apple Disk Image (.dmg)
+just package       # [windows] build NSIS setup.exe + WiX .msi into dist/ (from the staged build/)
 ```
 Platform-specific entry points live in `dev/linux/`, `dev/macos/`, `dev/windows/`, imported by the top-level justfile.
 
