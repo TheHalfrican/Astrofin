@@ -555,6 +555,9 @@ pub fn jfn_mpv_request_background_color() {
     if h.is_null() {
         return;
     }
+    // Boot-time entry point for this property: a fresh handle is back on
+    // mpv.conf's value, so forget what the previous one was told.
+    *background_color_memo().lock() = None;
     unsafe {
         sys::mpv_get_property_async(
             h,
@@ -574,9 +577,28 @@ pub fn background_color_from_reply(value: &crate::PropertyValue) -> Option<u32> 
     }
 }
 
+/// The last `background-color` written, so writing it again is free.
+///
+/// mpv keeps `background-color` in `gl_video_conf` — the very option group
+/// `vo_gpu_next`'s `update_options` watches — so any write it counts as a
+/// change re-runs `update_render_options`, which walks the whole user-shader
+/// chain through `load_hook` again and re-decides whether to flush the
+/// renderer cache. The app writes this on every player open and every close,
+/// always the same two colours, so most of that work is for nothing.
+fn background_color_memo() -> &'static Mutex<Option<CString>> {
+    use std::sync::OnceLock;
+    static SLOT: OnceLock<Mutex<Option<CString>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
 pub unsafe fn jfn_mpv_set_background_color_hex(hex: *const c_char) {
     let Some(h) = (unsafe { cstr(hex) }) else {
         return;
     };
+    let mut last = background_color_memo().lock();
+    if last.as_deref() == Some(h) {
+        return;
+    }
     unsafe { set_str(c"background-color", h) };
+    *last = Some(h.to_owned());
 }
