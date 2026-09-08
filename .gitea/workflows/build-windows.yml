@@ -140,8 +140,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist
 
+      # v3, not v4: upload-artifact@v4 refuses any server that is not
+      # github.com ("not currently supported on GHES"), while Gitea implements
+      # the v3 artifact protocol. The GitHub workflow keeps v4.
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: windows-x64
           path: |
