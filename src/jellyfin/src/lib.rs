@@ -197,16 +197,8 @@ pub fn build_device_profile(
         }
     }
 
-    let video_csv = if force_transcode {
-        String::new()
-    } else {
-        video_codecs.join(",")
-    };
-    let audio_csv = if force_transcode {
-        String::new()
-    } else {
-        audio_codecs.join(",")
-    };
+    let video_csv = video_codecs.join(",");
+    let audio_csv = audio_codecs.join(",");
 
     let containers = expand_with_renames(demuxers, CONTAINER_RENAMES);
     let subtitle_names = expand_with_renames(&subtitle_codecs, SUBTITLE_RENAMES);
@@ -226,30 +218,51 @@ pub fn build_device_profile(
     // does case-insensitive equality, so one entry with every container
     // comma-joined matches identically to N entries with one container each —
     // without repeating the codec CSV per container.
+    //
+    // Force Transcoding emits NO DirectPlayProfiles at all. An entry whose
+    // codec CSV is the empty string does NOT mean "no codec is supported" to
+    // the server — DirectPlayProfile.SupportsVideoCodec/SupportsAudioCodec
+    // return true when the profile's codec list is empty, i.e. an empty list
+    // means "any codec". Emitting empty-CSV entries therefore *widened* direct
+    // play to everything instead of blocking it, and forced transcoding did
+    // nothing. Only an empty DirectPlayProfiles list leaves the server without
+    // a DirectPlay or a DirectStream candidate — StreamBuilder decides both
+    // inside its per-DirectPlayProfile projection, so an empty list short-
+    // circuits to TranscodeReason.DirectPlayError and falls through to the
+    // TranscodingProfiles below.
+    //
+    // Caveat, verified live: the server may still stream-copy the video into
+    // the HLS container when the source codec is one the TranscodingProfile
+    // lists (TranscodingInfo.IsVideoDirect = true). That is still a server
+    // transcode session on a `master.m3u8` URL rather than a direct play, so
+    // the setting does what it says; denying the copy too would mean dropping
+    // the source codec from the transcode targets, which is a separate call.
     let container_csv = containers.join(",");
     let mut direct_play: Vec<DirectPlayProfile> = Vec::new();
-    if !video_csv.is_empty() || force_transcode {
+    if !force_transcode {
+        if !video_csv.is_empty() {
+            direct_play.push(DirectPlayProfile {
+                container: Some(&container_csv),
+                profile_type: ProfileType::Video,
+                video_codec: Some(&video_csv),
+                audio_codec: Some(&audio_csv),
+            });
+        }
+        if !audio_csv.is_empty() {
+            direct_play.push(DirectPlayProfile {
+                container: Some(&container_csv),
+                profile_type: ProfileType::Audio,
+                video_codec: None,
+                audio_codec: Some(&audio_csv),
+            });
+        }
         direct_play.push(DirectPlayProfile {
-            container: Some(&container_csv),
-            profile_type: ProfileType::Video,
-            video_codec: Some(&video_csv),
-            audio_codec: Some(&audio_csv),
-        });
-    }
-    if !audio_csv.is_empty() || force_transcode {
-        direct_play.push(DirectPlayProfile {
-            container: Some(&container_csv),
-            profile_type: ProfileType::Audio,
+            container: None,
+            profile_type: ProfileType::Photo,
             video_codec: None,
-            audio_codec: Some(&audio_csv),
+            audio_codec: None,
         });
     }
-    direct_play.push(DirectPlayProfile {
-        container: None,
-        profile_type: ProfileType::Photo,
-        video_codec: None,
-        audio_codec: None,
-    });
 
     // mpv handles both Embed and External natively, so no need to distinguish.
     let mut sub_profiles: Vec<SubtitleProfile> = Vec::new();
@@ -417,31 +430,58 @@ mod tests {
     }
 
     #[test]
-    fn force_transcode_empties_codec_csvs_and_drops_fmp4() -> TestResult {
+    fn force_transcode_drops_the_fmp4_transcoding_profile() -> TestResult {
         let decoders = vec![
             codec("h264", MediaKind::Video),
             codec("aac", MediaKind::Audio),
         ];
         let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", true);
         let v = parse(&s)?;
-        let dp = v["DirectPlayProfiles"].as_array().ok_or("expected array")?;
-        let video = dp
-            .iter()
-            .find(|e| e["Type"] == "Video")
-            .ok_or("no Video entry")?;
-        assert_eq!(video["VideoCodec"], "");
-        assert_eq!(video["AudioCodec"], "");
-        let audio = dp
-            .iter()
-            .find(|e| e["Type"] == "Audio")
-            .ok_or("no Audio entry")?;
-        assert_eq!(audio["AudioCodec"], "");
-
         let tp = v["TranscodingProfiles"]
             .as_array()
             .ok_or("expected array")?;
         // Audio + Video (ts) + Photo. No fmp4 entry under force_transcode.
         assert!(!tp.iter().any(|e| e["Container"] == "mp4"));
+        Ok(())
+    }
+
+    #[test]
+    fn force_transcode_emits_no_direct_play_profiles_but_keeps_a_transcode_target() -> TestResult {
+        // An empty codec CSV reads as "any codec" on the server, so the only
+        // way to deny DirectPlay *and* DirectStream is to ship no
+        // DirectPlayProfile at all — while still offering somewhere to
+        // transcode to, or the server has nothing left to pick.
+        let decoders = vec![
+            codec("h264", MediaKind::Video),
+            codec("aac", MediaKind::Audio),
+            codec("subrip", MediaKind::Subtitle),
+        ];
+        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", true);
+        let v = parse(&s)?;
+        let dp = v["DirectPlayProfiles"].as_array().ok_or("expected array")?;
+        assert!(dp.is_empty(), "expected no DirectPlayProfiles, got {dp:?}");
+
+        let tp = v["TranscodingProfiles"]
+            .as_array()
+            .ok_or("expected array")?;
+        let video: Vec<&Value> = tp.iter().filter(|e| e["Type"] == "Video").collect();
+        assert!(!video.is_empty(), "no video TranscodingProfile to fall to");
+        assert!(video.iter().any(|e| e["Container"] == "ts"
+            && e["Protocol"] == "hls"
+            && e["VideoCodec"] == "h264"));
+
+        // The non-forced profile of the same client still direct-plays.
+        let unforced = parse(&build_device_profile(
+            &decoders,
+            &["matroska".into()],
+            "dev",
+            "1.0",
+            false,
+        ))?;
+        let dp = unforced["DirectPlayProfiles"]
+            .as_array()
+            .ok_or("expected array")?;
+        assert!(dp.iter().any(|e| e["Type"] == "Video"));
         Ok(())
     }
 
@@ -770,7 +810,7 @@ mod tests {
 
     const TYPICAL_PROFILE_JSON: &str = r#"{"Name":"dev","MaxStaticBitrate":1000000000,"MusicStreamingTranscodingBitrate":1280000,"TimelineOffsetSeconds":5,"DirectPlayProfiles":[{"Container":"matroska,mkv,webm,mpegts,ts","Type":"Video","VideoCodec":"h264,hevc","AudioCodec":"aac,opus"},{"Container":"matroska,mkv,webm,mpegts,ts","Type":"Audio","AudioCodec":"aac,opus"},{"Type":"Photo"}],"TranscodingProfiles":[{"Type":"Audio"},{"Container":"mp4","Type":"Video","Protocol":"hls","AudioCodec":"opus,aac","VideoCodec":"h264,hevc","MaxAudioChannels":"6"},{"Container":"ts","Type":"Video","Protocol":"hls","AudioCodec":"aac","VideoCodec":"h264,hevc","MaxAudioChannels":"6"},{"Container":"jpeg","Type":"Photo"}],"SubtitleProfiles":[{"Format":"subrip","Method":"Embed"},{"Format":"subrip","Method":"External"},{"Format":"srt","Method":"Embed"},{"Format":"srt","Method":"External"}],"ResponseProfiles":[],"ContainerProfiles":[],"CodecProfiles":[]}"#;
 
-    const FORCED_TRANSCODE_PROFILE_JSON: &str = r#"{"Name":"dev","MaxStaticBitrate":1000000000,"MusicStreamingTranscodingBitrate":1280000,"TimelineOffsetSeconds":5,"DirectPlayProfiles":[{"Container":"matroska,mkv","Type":"Video","VideoCodec":"","AudioCodec":""},{"Container":"matroska,mkv","Type":"Audio","AudioCodec":""},{"Type":"Photo"}],"TranscodingProfiles":[{"Type":"Audio"},{"Container":"ts","Type":"Video","Protocol":"hls","AudioCodec":"aac","VideoCodec":"h264,hevc","MaxAudioChannels":"6"},{"Container":"jpeg","Type":"Photo"}],"SubtitleProfiles":[{"Format":"subrip","Method":"Embed"},{"Format":"subrip","Method":"External"},{"Format":"srt","Method":"Embed"},{"Format":"srt","Method":"External"}],"ResponseProfiles":[],"ContainerProfiles":[],"CodecProfiles":[]}"#;
+    const FORCED_TRANSCODE_PROFILE_JSON: &str = r#"{"Name":"dev","MaxStaticBitrate":1000000000,"MusicStreamingTranscodingBitrate":1280000,"TimelineOffsetSeconds":5,"DirectPlayProfiles":[],"TranscodingProfiles":[{"Type":"Audio"},{"Container":"ts","Type":"Video","Protocol":"hls","AudioCodec":"aac","VideoCodec":"h264,hevc","MaxAudioChannels":"6"},{"Container":"jpeg","Type":"Photo"}],"SubtitleProfiles":[{"Format":"subrip","Method":"Embed"},{"Format":"subrip","Method":"External"},{"Format":"srt","Method":"Embed"},{"Format":"srt","Method":"External"}],"ResponseProfiles":[],"ContainerProfiles":[],"CodecProfiles":[]}"#;
 
     fn byte_exact_decoders() -> Vec<Codec> {
         vec![
