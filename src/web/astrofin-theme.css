@@ -818,15 +818,25 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-text-primary);
 }
 
-/* Frosted bar: semi-transparent wash + blur, never a solid fill. The
- * brightness() in the backdrop filter is what buys 4.5:1 for 16px text over
- * a bright frame without making the surface opaque. */
+/* Frosted bar: semi-transparent wash + blur, never a solid fill.
+ *
+ * The wash is what carries the contrast, not the blur. mpv renders in its own
+ * window UNDER the CEF surface, so backdrop-filter here never samples a single
+ * video pixel — during playback the web layer behind this bar is transparent
+ * and the brightness(.62) has nothing to act on. It is kept because the bar
+ * also appears over web content, but the alphas below are what have to hold
+ * the 4.5:1 floor (design-brief.md:43).
+ *
+ * Measured off a composited capture of the brightest frame to hand: at
+ * .40/.48 the bar sat at 4.6-6.3:1 for --af-text-primary and 2.2-3.0:1 for
+ * --af-text-muted. At .58/.66 both clear 4.5:1 and the picture still reads
+ * through. */
 .videoOsdBottom .osdControls {
   border-radius: var(--af-radius-panel);
   background: linear-gradient(
     180deg,
-    rgba(var(--af-surface-raised-rgb), .40),
-    rgba(var(--af-bg-base-rgb), .48));
+    rgba(var(--af-surface-raised-rgb), .58),
+    rgba(var(--af-bg-base-rgb), .66));
   -webkit-backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
   backdrop-filter: blur(var(--af-glass-blur)) brightness(.62) saturate(1.05);
   border: 1px solid var(--af-edge-luminous);
@@ -864,8 +874,11 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-text-primary);
   font-variant-numeric: tabular-nums;
 }
+/* The "ends at" label was --af-text-muted, which measured 2.2-3.0:1 over a
+ * bright frame. It is a real reading, not decoration, so it takes the primary
+ * colour; its lower rank is carried by the mono face and tracking instead. */
 .videoOsdBottom .osdTimeText {
-  color: var(--af-text-muted);
+  color: var(--af-text-primary);
 }
 
 .videoOsdBottom .osdTitle,
@@ -873,10 +886,6 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   font: var(--af-type-tile);
   font-family: var(--af-font-display);
 }
-.videoOsdBottom .osdMediaInfo .mediaInfoText {
-  background: var(--af-glass-fill-soft);
-}
-
 /* Scrubber. Track / buffered / played, in three distinguishable steps. */
 .videoOsdBottom .mdl-slider-background-flex {
   background-color: var(--af-progress-track-soft);
@@ -902,19 +911,59 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   box-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .55);
 }
 
-/* Chapter markers keep jf-web's shape — thin vertical ticks spanning the
- * track (2x12px, positioned with `left: calc(N% - 1px)`). Colour only:
- * accent on the part already played, a bright neutral ahead of it. */
-.videoOsdBottom .sliderMarker.watched {
-  background-color: var(--af-accent-primary);
+/* Constellation chapter markers (design-brief.md:25, "chapter markers as
+ * stars"). jf-web ships 2x12px vertical ticks; each one becomes a small
+ * four-point star instead.
+ *
+ * Two elements, deliberately: CSS applies `filter` BEFORE `clip-path`, so a
+ * drop-shadow on the clipped element would itself be clipped away and there
+ * would be no outer glow. The ::before carries the clip, the marker carries
+ * the glow.
+ *
+ * The width matters to jf-web: emby-slider.js:243 centres each marker with
+ * `left: calc(N% - <measured width>/2 px)`, so a wider glyph still lands on
+ * its chapter. `pointer-events: none` keeps the glyphs out of the scrubber's
+ * hit area now that they are 11px wide rather than 2px.
+ *
+ * Ahead of the playhead (.unwatched) the star is accent and lit; behind it
+ * (.watched) it dims to a pale neutral, which also keeps it legible where it
+ * sits on top of the bright cyan played bar. */
+.videoOsdBottom .sliderMarker {
+  width: 11px;
+  height: 11px;
+  background-color: transparent;
+  pointer-events: none;
+  transition: filter var(--af-dur-tile) var(--af-ease-out);
+}
+.videoOsdBottom .sliderMarker::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--af-accent-primary);
+  clip-path: polygon(
+    50% 0%, 59% 41%, 100% 50%, 59% 59%,
+    50% 100%, 41% 59%, 0% 50%, 41% 41%);
 }
 .videoOsdBottom .sliderMarker.unwatched {
-  background-color: rgba(var(--af-text-primary-rgb), .6);
+  filter: drop-shadow(0 0 4px rgba(var(--af-accent-primary-rgb), .8));
+}
+.videoOsdBottom .sliderMarker.unwatched::before {
+  background: var(--af-accent-primary);
+}
+.videoOsdBottom .sliderMarker.watched {
+  filter: drop-shadow(0 0 3px rgba(var(--af-text-primary-rgb), .3));
+}
+.videoOsdBottom .sliderMarker.watched::before {
+  background: rgba(var(--af-text-primary-rgb), .62);
 }
 
-/* Minimal icon buttons: muted at rest, primary on hover/focus. */
+/* Minimal icon buttons: one step below primary at rest, full primary on
+ * hover/focus. The token set has no rung between --af-text-muted and
+ * --af-text-primary, and muted measured 2.2-3.0:1 over a bright frame, so the
+ * resting state is primary held back with alpha instead. Focus and active are
+ * untouched. */
 .videoOsdBottom .paper-icon-button-light {
-  color: var(--af-text-muted);
+  color: rgba(var(--af-text-primary-rgb), .78);
   padding: 6px;
   transition:
     color var(--af-dur-tile) var(--af-ease-out),
@@ -941,10 +990,15 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-accent-primary);
 }
 
+/* Scrub readout. Two renderers land in here: the plain time bubble, and the
+ * trickplay / chapter-image frame (see .chapterThumb* below), which fills the
+ * bubble edge to edge — hence `overflow: hidden`, so the frame is clipped to
+ * the same corner radius the border draws. */
 .sliderBubble {
   background: var(--af-glass-fill);
   border: 1px solid var(--af-edge-chip);
   border-radius: var(--af-radius-sm);
+  overflow: hidden;
   color: var(--af-text-primary);
   font: var(--af-type-meta-sm);
 }
@@ -974,6 +1028,404 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   font-family: var(--af-font-display);
   letter-spacing: var(--af-tracking-display);
   color: var(--af-text-primary);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.1) Show / hide motion                                               */
+/*                                                                        */
+/* jf-web keeps the mechanism: a 3 s idle timer (index.js:296, which is    */
+/* exactly --af-overlay-idle), the two `-hidden` classes, and the          */
+/* transitionend that finally sets `display: none`. Only the timing curve  */
+/* and the travel are ours — the bottom bar drops away, the banner lifts.  */
+/*                                                                        */
+/* --af-overlay-offset collapses to 0px under prefers-reduced-motion in    */
+/* astrofin-tokens.css:180, which turns both of these into the plain fade  */
+/* the brief asks for (design-brief.md:26) with no second rule here.       */
+/* --------------------------------------------------------------------- */
+
+.videoOsdBottom {
+  will-change: opacity, transform;
+  transform: translate3d(0, 0, 0);
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus);
+}
+.videoOsdBottom.videoOsdBottom-hidden {
+  opacity: 0;
+  transform: translate3d(0, var(--af-overlay-offset), 0);
+  transition-duration: var(--af-dur-overlay-out);
+}
+
+.skinHeader.osdHeader,
+.skinHeader.osdHeader.skinHeader-withBackground {
+  will-change: opacity, transform;
+  transform: translate3d(0, 0, 0);
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus);
+}
+.skinHeader.osdHeader.osdHeader-hidden {
+  opacity: 0;
+  transform: translate3d(0, calc(-1 * var(--af-overlay-offset)), 0);
+  transition-duration: var(--af-dur-overlay-out);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.2) Volume slider                                                    */
+/*                                                                        */
+/* The volume control is a second emby-slider inside the same band, so the */
+/* scrubber rules above already give it the accent track and thumb. What   */
+/* neither slider had is a focus state, and focus — not hover — is the     */
+/* primary state (design-brief.md:10); a controller user moving onto the   */
+/* volume slider previously got no feedback at all.                        */
+/* --------------------------------------------------------------------- */
+
+.videoOsdBottom .osdVolumeSlider,
+.videoOsdBottom .osdPositionSlider {
+  color: var(--af-accent-primary);
+}
+.videoOsdBottom .osdVolumeSlider::-webkit-slider-thumb {
+  background: var(--af-accent-primary);
+  border-color: var(--af-accent-primary);
+  box-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .55);
+}
+.videoOsdBottom .mdl-slider:focus-visible::-webkit-slider-thumb,
+.videoOsdBottom .mdl-slider.show-focus:focus::-webkit-slider-thumb {
+  box-shadow: var(--af-focus-ring);
+}
+.videoOsdBottom .mdl-slider:focus-visible,
+.videoOsdBottom .mdl-slider.show-focus:focus {
+  outline: none;
+}
+/* The mute button sits directly against the slider; keep the pair reading
+ * as one control rather than two. */
+.videoOsdBottom .volumeButtons .osdVolumeSliderContainer {
+  margin-left: var(--af-space-1);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.3) Volume / brightness popups (.iconOsd)                            */
+/*                                                                        */
+/* Body-level chips built by components/playback/volumeosd.js:32 and its   */
+/* brightness twin; jf-web paints them rgba(0,0,0,.8) with a 0.25em        */
+/* corner. mpv renders in its own window UNDER the CEF surface, so         */
+/* backdrop-filter here can never sample the picture — the fill alone has  */
+/* to carry the contrast. At .74/.80 over a white frame --af-text-primary  */
+/* measures 6.2:1, comfortably past the 4.5:1 floor (design-brief.md:43).  */
+/* --------------------------------------------------------------------- */
+
+.iconOsd {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-surface-raised-rgb), .74),
+    rgba(var(--af-bg-base-rgb), .80));
+  -webkit-backdrop-filter: blur(var(--af-glass-blur)) saturate(1.05);
+  backdrop-filter: blur(var(--af-glass-blur)) saturate(1.05);
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-sm);
+  padding: var(--af-space-4) var(--af-space-4) var(--af-space-3);
+  color: var(--af-text-primary);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus);
+  transform: translate3d(0, 0, 0);
+}
+.iconOsd-hidden {
+  opacity: 0;
+  transform: translate3d(0, calc(-1 * var(--af-overlay-offset)), 0);
+  transition-duration: var(--af-dur-overlay-out);
+}
+.iconOsdIcon {
+  font-size: 44px;
+  margin: 0 var(--af-space-4);
+  color: var(--af-text-primary);
+}
+.iconOsdProgressOuter {
+  margin: var(--af-space-4) 0 var(--af-space-1);
+  height: 4px;
+  background: var(--af-progress-track-soft);
+  border-radius: var(--af-radius-pill);
+  overflow: hidden;
+}
+.iconOsdProgressInner {
+  background: var(--af-accent-primary);
+  border-radius: var(--af-radius-pill);
+  box-shadow: 0 0 10px rgba(var(--af-accent-primary-rgb), .5);
+}
+.brightnessOsdProgressInner {
+  background: var(--af-accent-warm);
+  box-shadow: 0 0 10px rgba(var(--af-accent-warm-rgb), .5);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.4) Skip-segment button                                              */
+/*                                                                        */
+/* components/playback/skipsegment.ts:54 appends it to <body>, so section  */
+/* (f)'s "plain buttons are glass pills" rule already claims it — and that */
+/* selector carries eleven :not() classes, i.e. specificity (0,11,0), so   */
+/* nothing short of !important can take the fill back off it here. The     */
+/* soft glass fill it hands over measures 3.3:1 on a white frame; the      */
+/* deeper one below measures 6.2:1.                                        */
+/* --------------------------------------------------------------------- */
+
+.skip-button-container .skip-button {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-surface-raised-rgb), .74),
+    rgba(var(--af-bg-base-rgb), .80)) !important;
+  -webkit-backdrop-filter: blur(var(--af-glass-blur)) saturate(1.05);
+  backdrop-filter: blur(var(--af-glass-blur)) saturate(1.05);
+  border: 1px solid var(--af-edge-chip) !important;
+  border-radius: var(--af-radius-pill) !important;
+  color: var(--af-text-primary) !important;
+  font: var(--af-type-button);
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 12px 22px;
+  gap: var(--af-space-2);
+  margin-right: clamp(16px, 4vw, var(--af-gutter));
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out),
+    border-color var(--af-dur-ring-out) var(--af-ease-out);
+  transform: translate3d(0, 0, 0);
+}
+.skip-button-container .skip-button .material-icons {
+  font-size: 22px;
+}
+/* Focus is the primary state: a controller lands here, it does not hover. */
+.skip-button-container .skip-button:focus-visible,
+.skip-button-container .skip-button.show-focus:focus,
+.skip-button-container .skip-button:focus {
+  outline: none;
+  border-color: var(--af-accent-primary) !important;
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+@media (hover: hover) and (pointer: fine) {
+  .skip-button-container .skip-button:hover {
+    border-color: var(--af-edge-strong) !important;
+  }
+}
+.skip-button-container .skip-button.skip-button-hidden {
+  opacity: 0;
+  transform: translate3d(0, var(--af-overlay-offset), 0);
+  transition-duration: var(--af-dur-overlay-out);
+}
+/* jf-web's bare, unscoped `.no-transition` (skipbutton.scss:29) is used to
+ * pop the button in without animating; honour it for the transform too. */
+.skip-button-container .skip-button.no-transition {
+  transition: none;
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.5) Up next                                                          */
+/*                                                                        */
+/* .upNextContainer is the mount point in the video template; the dialog   */
+/* renders into it (components/upnextdialog). This one carries small       */
+/* --af-text-muted labels, so its floor has to be deeper than the chips    */
+/* above: .88/.92 puts muted text at 4.8:1 over a white frame, primary at  */
+/* 11:1. Still sub-1 alpha, so the video-safety invariant holds.           */
+/* --------------------------------------------------------------------- */
+
+.upNextContainer {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-surface-raised-rgb), .88),
+    rgba(var(--af-bg-base-rgb), .92));
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel)) saturate(1.05);
+  backdrop-filter: blur(var(--af-glass-blur-panel)) saturate(1.05);
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-panel);
+  color: var(--af-text-primary);
+  padding: var(--af-space-6);
+  transition:
+    opacity var(--af-dur-overlay-in) var(--af-ease-focus),
+    transform var(--af-dur-overlay-in) var(--af-ease-focus);
+  transform: translate3d(0, 0, 0);
+}
+.upNextContainer.upNextDialog-hidden,
+.upNextContainer .upNextDialog-hidden {
+  opacity: 0;
+  transform: translate3d(0, var(--af-overlay-offset), 0);
+  transition-duration: var(--af-dur-overlay-out);
+}
+.upNextDialog-nextVideoText {
+  font: var(--af-type-eyebrow);
+  font-family: var(--af-font-body);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-text-muted);
+}
+.upNextDialog-title {
+  font: var(--af-type-tile);
+  font-family: var(--af-font-display);
+  letter-spacing: var(--af-tracking-display);
+  color: var(--af-text-primary);
+}
+.upNextDialog-mediainfo {
+  font: var(--af-type-body);
+  color: var(--af-text-muted);
+}
+.upNextDialog-countdownText {
+  font: var(--af-type-meta);
+  font-size: 16px;
+  letter-spacing: var(--af-tracking-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--af-accent-primary);
+}
+/* Two buttons, one decision: "start now" is the accent, "hide" is glass.
+ * Both arrive as .emby-button.raised, which section (f) fills with the
+ * accent — (0,2,0), so these (0,3,0) rules take the secondary one back. */
+.upNextContainer .upNextDialog-button {
+  border-radius: var(--af-radius-pill);
+  font: var(--af-type-button-secondary);
+  letter-spacing: 0;
+  text-transform: none;
+  transition:
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out),
+    border-color var(--af-dur-ring-out) var(--af-ease-out);
+}
+.upNextContainer .upNextDialog-button.btnStartNow {
+  background: var(--af-accent-primary);
+  border: 1px solid var(--af-accent-primary);
+  color: var(--af-on-accent);
+  font: var(--af-type-button);
+}
+.upNextContainer .upNextDialog-button.btnHide {
+  background: var(--af-glass-fill-soft);
+  border: 1px solid var(--af-edge-strong);
+  color: var(--af-text-primary);
+  box-shadow: none;
+}
+.upNextContainer .upNextDialog-button:focus-visible,
+.upNextContainer .upNextDialog-button.show-focus:focus,
+.upNextContainer .upNextDialog-button:focus {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.6) Playback Info overlay (.playerStats)                             */
+/*                                                                        */
+/* Opened from the OSD settings sheet. Our mpv plugin still returns no     */
+/* player categories (mpv-video-player.js getStats), so today the panel is */
+/* the server-session half only — the container and the rows are what is   */
+/* styled here, and they will hold whenever the mpv side is filled in.     */
+/* Same .88/.92 floor as up-next, for the same muted-label reason.         */
+/* --------------------------------------------------------------------- */
+
+.playerStats {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--af-surface-raised-rgb), .88),
+    rgba(var(--af-bg-base-rgb), .92));
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel)) saturate(1.05);
+  backdrop-filter: blur(var(--af-glass-blur-panel)) saturate(1.05);
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-panel);
+  color: var(--af-text-primary);
+}
+/* jf-web shrinks the whole panel to 84% (playerstats.scss:23), which lands
+ * the rows under the 16px floor. */
+.playerStats .playerStats-content {
+  font-size: 100%;
+}
+.playerStats .playerStats-stats {
+  padding: var(--af-space-2) var(--af-space-8) var(--af-space-4) var(--af-space-4);
+}
+.playerStats .playerStats-stat {
+  font: var(--af-type-meta);
+  font-size: 16px;
+  line-height: 24px;
+  letter-spacing: var(--af-tracking-meta);
+  margin-left: 0;
+}
+.playerStats .playerStats-stat-label {
+  color: var(--af-text-muted);
+  font-weight: 500;
+}
+.playerStats .playerStats-stat-value {
+  color: var(--af-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+/* Category headers ("Player", "Original media", ...) read as eyebrows. */
+.playerStats .playerStats-stat-header .playerStats-stat-label {
+  font: var(--af-type-eyebrow);
+  font-family: var(--af-font-body);
+  font-size: 16px;
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+.playerStats .playerStats-closeButton {
+  color: var(--af-text-muted);
+}
+.playerStats .playerStats-closeButton:focus-visible,
+.playerStats .playerStats-closeButton.show-focus:focus {
+  outline: none;
+  color: var(--af-text-primary);
+  box-shadow: var(--af-focus-ring);
+}
+
+/* --------------------------------------------------------------------- */
+/* (h.7) Scrub preview frame                                              */
+/*                                                                        */
+/* Two renderers land in .sliderBubble: the trickplay tile, a plain div    */
+/* .chapterThumbWrapper sized by inline style with NO stylesheet anywhere  */
+/* in jf-web (video/index.js:1483), and the older chapter-image path,      */
+/* img.chapterThumb (videoosd.scss:60). On a server with trickplay data    */
+/* the wrapper is what a user actually sees, so both get the same frame.   */
+/* The container's 1.9vh black box-shadow goes: the brief has hairlines    */
+/* and glows, not drop shadows (design-brief.md:16).                       */
+/* --------------------------------------------------------------------- */
+
+.sliderBubble .chapterThumbContainer {
+  box-shadow: none;
+  border-radius: calc(var(--af-radius-sm) - 1px);
+  overflow: hidden;
+}
+.sliderBubble .chapterThumbWrapper,
+.sliderBubble .chapterThumb {
+  border-radius: calc(var(--af-radius-sm) - 1px);
+  box-shadow: inset 0 0 0 1px var(--af-edge-luminous);
+}
+/* The caption sits on the frame itself, so it needs its own floor rather
+ * than the glass behind it — a bottom-up scrim, not the text-shadow stack
+ * jf-web uses. */
+.sliderBubble .chapterThumbTextContainer {
+  background: linear-gradient(
+    0deg,
+    rgba(var(--af-bg-base-rgb), .94) 0%,
+    rgba(var(--af-bg-base-rgb), .70) 55%,
+    rgba(var(--af-bg-base-rgb), 0) 100%);
+  padding: var(--af-space-6) var(--af-space-3) var(--af-space-2);
+}
+.sliderBubble .chapterThumbText {
+  font: var(--af-type-meta);
+  font-size: 16px;
+  line-height: 22px;
+  letter-spacing: var(--af-tracking-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--af-text-primary);
+  text-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+.sliderBubble .chapterThumbText.chapterThumbText-dim {
+  font: var(--af-type-body);
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0;
+  opacity: 1;
+  color: var(--af-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===================================================================== */
