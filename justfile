@@ -49,7 +49,7 @@ test: build
 # Run the JS unit tests (node only; not part of `just test`, which is cargo)
 [group('test')]
 test-js:
-    node --test src/web/video-mode-resolver.test.js src/web/input-plugin.test.js src/web/playback-source.test.js
+    node --test src/web/video-mode-resolver.test.js src/web/input-plugin.test.js src/web/playback-source.test.js src/web/mpv-stats.test.js
 
 # Format workspace
 [group('lint')]
