@@ -52,6 +52,14 @@
         window._bufferedRanges = ranges || [];
     };
 
+    // Latest mpv statistics snapshot, pushed at most once a second while
+    // jellyfin-web's Playback Info panel is open. Null when the native side
+    // is not observing (see mpv-stats.js).
+    window._mpvStats = null;
+    window._nativeUpdateStats = function(stats) {
+        window._mpvStats = stats || null;
+    };
+
     // Signal emulation (Qt-style connect/disconnect)
     function createSignal(name) {
         const callbacks = [];

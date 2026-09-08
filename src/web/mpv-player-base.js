@@ -74,6 +74,16 @@
 
         currentSrc() { return this._currentSrc; }
 
+        // jellyfin-web's Playback Info panel. Polling this is also what keeps
+        // the native mpv stats observations alive; mpv-stats.js turns them off
+        // again once the panel stops asking.
+        getStats() {
+            const stats = window.AstrofinMpvStats;
+            if (!stats) return Promise.resolve({ categories: [] });
+            stats.requestStats();
+            return Promise.resolve({ categories: stats.buildCategories(window._mpvStats) });
+        }
+
         getDeviceProfile(item, options) {
             return this.appHost?.getDeviceProfile
                 ? this.appHost.getDeviceProfile(item, options)

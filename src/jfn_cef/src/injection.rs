@@ -35,6 +35,7 @@ pub(crate) enum NativeFunction {
     PlayerSetSubtitleDelay,
     PlayerSetAspectMode,
     PlayerOsdActive,
+    PlayerStatsActive,
     SetPlaybackVideoMode,
     OpenConfigDir,
     SaveServerUrl,
@@ -84,6 +85,7 @@ impl NativeFunction {
             "playerSetSubtitleDelay" => Self::PlayerSetSubtitleDelay,
             "playerSetAspectMode" => Self::PlayerSetAspectMode,
             "playerOsdActive" => Self::PlayerOsdActive,
+            "playerStatsActive" => Self::PlayerStatsActive,
             "setPlaybackVideoMode" => Self::SetPlaybackVideoMode,
             "openConfigDir" => Self::OpenConfigDir,
             "saveServerUrl" => Self::SaveServerUrl,
@@ -134,6 +136,7 @@ impl NativeFunction {
             Self::PlayerSetSubtitleDelay => "playerSetSubtitleDelay",
             Self::PlayerSetAspectMode => "playerSetAspectMode",
             Self::PlayerOsdActive => "playerOsdActive",
+            Self::PlayerStatsActive => "playerStatsActive",
             Self::SetPlaybackVideoMode => "setPlaybackVideoMode",
             Self::OpenConfigDir => "openConfigDir",
             Self::SaveServerUrl => "saveServerUrl",
@@ -170,6 +173,7 @@ impl NativeFunction {
 pub(crate) enum InjectedScript {
     NativeShim,
     VideoModeResolver,
+    MpvStats,
     MpvPlayerBase,
     MpvVideoPlayer,
     MpvAudioPlayer,
@@ -186,6 +190,7 @@ impl InjectedScript {
         Some(match name {
             "native-shim.js" => Self::NativeShim,
             "video-mode-resolver.js" => Self::VideoModeResolver,
+            "mpv-stats.js" => Self::MpvStats,
             "mpv-player-base.js" => Self::MpvPlayerBase,
             "mpv-video-player.js" => Self::MpvVideoPlayer,
             "mpv-audio-player.js" => Self::MpvAudioPlayer,
@@ -203,6 +208,7 @@ impl InjectedScript {
         match self {
             Self::NativeShim => "native-shim.js",
             Self::VideoModeResolver => "video-mode-resolver.js",
+            Self::MpvStats => "mpv-stats.js",
             Self::MpvPlayerBase => "mpv-player-base.js",
             Self::MpvVideoPlayer => "mpv-video-player.js",
             Self::MpvAudioPlayer => "mpv-audio-player.js",
@@ -269,6 +275,7 @@ const WEB_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::PlayerSetSubtitleDelay,
     NativeFunction::PlayerSetAspectMode,
     NativeFunction::PlayerOsdActive,
+    NativeFunction::PlayerStatsActive,
     NativeFunction::SetPlaybackVideoMode,
     NativeFunction::OpenConfigDir,
     NativeFunction::SaveServerUrl,
@@ -290,6 +297,8 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::NativeShim,
     // Before the video player: it reads `window.AstrofinVideoMode` on play.
     InjectedScript::VideoModeResolver,
+    // Before the player classes: their shared `getStats()` calls into it.
+    InjectedScript::MpvStats,
     InjectedScript::MpvPlayerBase,
     InjectedScript::MpvVideoPlayer,
     InjectedScript::MpvAudioPlayer,
