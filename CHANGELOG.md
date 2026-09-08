@@ -3,6 +3,8 @@
 All notable changes to Astrofin. The format follows Keep a Changelog; the
 project uses semantic versioning.
 
+## [Unreleased]
+
 ## [0.2.0] - 2026-09-08
 
 First versioned Astrofin release. Everything below is relative to the
