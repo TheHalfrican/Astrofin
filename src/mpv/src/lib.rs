@@ -24,6 +24,7 @@ pub mod api;
 pub mod boot;
 pub mod capabilities;
 pub mod color;
+pub mod memprobe;
 pub mod probe;
 pub mod video_mode;
 

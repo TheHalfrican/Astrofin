@@ -164,6 +164,40 @@ INFO mpv: video mode animation applied: scale=<mpv default> dscale=<mpv default>
 INFO mpv: video mode animation: mpv reports glsl-shaders=…
 ```
 
+  Both lines spell the chain the way mpv does — forward slashes on Windows —
+  so they can be diffed against each other directly.
+
+### Nothing is written twice
+
+`apply_inner` memoises the last `(glsl-shaders, scale, dscale)` it wrote and
+writes nothing when a resolution lands on the same three values. That is the
+common case: under Auto — the default — every item start resolves a mode, and
+every episode of one show resolves to the same one, so a binge would otherwise
+re-write the whole chain once per episode.
+
+```
+INFO mpv: video mode animation unchanged, not re-applied: scale=… dscale=… shaders=[…]
+```
+
+The memo is only latched once all three writes were accepted, and `init`
+clears it, so a fresh mpv handle — back on `mpv.conf`'s values — is always
+written to. The three values are compared as a unit, because Animation's
+scalers come from the [baseline](#baseline), which lands *after* the boot
+apply: the first per-title resolution legitimately re-applies the same chain
+with different scalers.
+
+Be clear about what this does and does not buy. mpv absorbs a redundant write
+by itself: `glsl-shaders` is an `OPT_PATHLIST` with no `force_update`, so
+`m_config_cache_write_opt` compares the list with `str_list_equal`, an
+identical write never bumps the config timestamp `vo_gpu_next`'s
+`update_options` gates on, and no shader chain is rebuilt. That was measured,
+not assumed — suppressing nine of eleven chain writes across ten item starts
+left mpv's rebuild count exactly unchanged at 23
+(`docs/memory-growth-findings.md` §5). So the memo is hygiene: the behaviour is
+ours rather than borrowed from an mpv implementation detail, the log says what
+actually happened, and each item start costs one fewer round trip through
+libmpv's dispatch queue.
+
 Boot order (`src/jfn_rust/src/app.rs::run_app`): the baseline reads and the
 first apply are queued straight after `mpv_initialize`, before any file is
 loaded and before the VO wait — mpv holds the chain as plain options, so it is

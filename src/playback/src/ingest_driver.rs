@@ -382,7 +382,8 @@ pub fn jfn_playback_stop_mpv_event_thread() {
 }
 
 fn ingest_events(rx: Receiver<Event>) {
-    for event in rx {
+    while let Ok(event) = rx.recv() {
+        jfn_mpv::memprobe::note_mpv_event_qlen(rx.len());
         // Video-mode baseline reads and chain read-backs: theirs alone, and
         // nothing downstream has a use for them.
         if let Event::GetPropertyReply {

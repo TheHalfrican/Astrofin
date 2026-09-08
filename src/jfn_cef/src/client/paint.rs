@@ -56,6 +56,7 @@ impl Inner {
         w: i32,
         h: i32,
     ) {
+        jfn_mpv::memprobe::note_paint(false);
         let surface = self.surface_handle();
         if surface.is_none() {
             return;
@@ -80,10 +81,12 @@ impl Inner {
         let Some(frame) = software_frame(buffer, w, h, dirty) else {
             return;
         };
+        jfn_mpv::memprobe::note_paint_presented(false);
         p.surface_present(surface, frame);
     }
 
     pub(crate) fn on_accelerated_paint(&self, is_popup: bool, info: &cef::AcceleratedPaintInfo) {
+        jfn_mpv::memprobe::note_paint(true);
         let surface = self.surface_handle();
         if surface.is_none() {
             return;
@@ -115,6 +118,7 @@ impl Inner {
         let Some(tex) = super::accel::acquire(info) else {
             return;
         };
+        jfn_mpv::memprobe::note_paint_presented(true);
         p.surface_present(surface, PaintFrame::Accelerated(tex));
     }
 
