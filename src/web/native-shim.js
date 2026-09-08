@@ -92,7 +92,8 @@
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
                 hwdec: _savedSettings.hwdec || 'auto',
-                videoMode: _savedSettings.videoMode || 'auto'
+                videoMode: _savedSettings.videoMode || 'auto',
+                transcodeNotice: _savedSettings.transcodeNotice || 'cpu'
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -121,6 +122,11 @@
                     { value: 'live-action', title: 'Live-Action — FSRCNNX x2 + sharp scalers' },
                     { value: 'animation', title: 'Animation — Anime4K Mode A (HQ)' },
                     { value: 'off', title: 'Off — no shaders, mpv default scalers' }
+                ]},
+                { key: 'transcodeNotice', displayName: 'Transcode warning', help: 'Show a short message when playback starts and the server is converting the video instead of sending it as-is. Converting in software uses the whole server’s processor and slows everything else down, so that case is warned about by default. The badge in the player header always shows what is happening.', options: [
+                    { value: 'off', title: 'Off — never warn' },
+                    { value: 'cpu', title: 'Software transcodes only (default)' },
+                    { value: 'any', title: 'Any transcode' }
                 ]}
             ],
             audio: [

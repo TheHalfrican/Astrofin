@@ -60,6 +60,10 @@ struct SettingsData {
     /// Per-library video-mode overrides, `<library item id> -> wire value`.
     /// Hand-edited only; the app reads it and writes it back untouched.
     video_mode_libraries: BTreeMap<String, String>,
+    /// Which transcodes raise the one-time warning at playback start
+    /// (`off` | `cpu` | `any`). Empty means "never chosen"; the web UI
+    /// resolves that to `cpu`.
+    transcode_notice: String,
     audio_passthrough: String,
     audio_channels: String,
     log_level: String,
@@ -81,6 +85,7 @@ impl Default for SettingsData {
             video_mode: String::new(),
             video_mode_migrated: false,
             video_mode_libraries: BTreeMap::new(),
+            transcode_notice: String::new(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
             log_level: String::new(),
@@ -144,6 +149,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     video_mode_libraries: Option<BTreeMap<String, String>>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    transcode_notice: Option<String>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<String>,
@@ -231,6 +239,9 @@ struct CliSettings<'a> {
     video_mode_libraries: Option<&'a BTreeMap<String, String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    transcode_notice: Option<&'a str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,6 +287,9 @@ impl SettingsData {
         }
         if let Some(v) = file.video_mode_libraries {
             self.video_mode_libraries = v;
+        }
+        if let Some(v) = file.transcode_notice {
+            self.transcode_notice = v;
         }
         if let Some(v) = file.audio_passthrough {
             self.audio_passthrough = v;
@@ -356,6 +370,8 @@ impl SettingsData {
             video_mode_migrated: Some(true),
             video_mode_libraries: (!self.video_mode_libraries.is_empty())
                 .then(|| self.video_mode_libraries.clone()),
+            transcode_notice: (!self.transcode_notice.is_empty())
+                .then(|| self.transcode_notice.clone()),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -376,6 +392,8 @@ impl SettingsData {
             video_mode: (!self.video_mode.is_empty()).then_some(self.video_mode.as_str()),
             video_mode_libraries: (!self.video_mode_libraries.is_empty())
                 .then_some(&self.video_mode_libraries),
+            transcode_notice: (!self.transcode_notice.is_empty())
+                .then_some(self.transcode_notice.as_str()),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then_some(self.audio_passthrough.as_str()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -581,6 +599,10 @@ string_accessors!(video_mode, set_video_mode, video_mode);
 pub fn video_mode_migrated() -> bool {
     state().lock().data.video_mode_migrated
 }
+// transcode_notice: which transcodes raise the warning toast at playback
+// start (`off` | `cpu` | `any`). Empty means "never chosen"; the web UI
+// resolves that to `cpu`.
+string_accessors!(transcode_notice, set_transcode_notice, transcode_notice);
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
@@ -773,6 +795,7 @@ mod tests {
             video_mode: "animation".into(),
             video_mode_migrated: true,
             video_mode_libraries: BTreeMap::from([("lib1".into(), "animation".into())]),
+            transcode_notice: "any".into(),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
             log_level: "debug".into(),
@@ -811,6 +834,7 @@ mod tests {
                 "videoMode",
                 "videoModeMigrated",
                 "videoModeLibraries",
+                "transcodeNotice",
                 "audioPassthrough",
                 "audioExclusive",
                 "audioChannels",
@@ -899,6 +923,7 @@ mod tests {
             hwdec: "vaapi".into(),
             video_mode: "live-action".into(),
             video_mode_libraries: BTreeMap::from([("lib1".into(), "animation".into())]),
+            transcode_notice: "any".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
@@ -910,6 +935,7 @@ mod tests {
                 "hwdec",
                 "videoMode",
                 "videoModeLibraries",
+                "transcodeNotice",
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
@@ -920,6 +946,7 @@ mod tests {
         );
         assert!(text.contains(r#""videoMode":"live-action""#));
         assert!(text.contains(r#""videoModeLibraries":{"lib1":"animation"}"#));
+        assert!(text.contains(r#""transcodeNotice":"any""#));
         assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,
