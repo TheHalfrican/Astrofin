@@ -277,15 +277,9 @@ several episodes — and:
 - the GPU evidence that suggested otherwise was a counter Microsoft documents as
   wrong for precisely this workload (§6).
 
-What has **not** been tested, and is what a follow-up should do if the report
-persists: a run long enough to match the report's ~80 minutes of uptime. The
-longest run here is 21 minutes. The cheapest next experiment is a single
-90-minute Auto run on the fixed build with the same three GPU signals plus
-`--log-level 'warn,memprobe=debug'`, and a renderer heap snapshot at t=0 and
-t=90 min; session 1's harness already does all of that (`runs\A\` in the
-session-1 scratchpad) and was only stopped because the machine was needed.
-CEF/Chromium's own allocator and the 401 MB helper in the upstream report remain
-the untested candidates.
+The one thing sessions 1 and 2 could not say anything about was uptime: their
+longest run was 21 minutes against the report's ~80. **§11 is that run**, and it
+does not grow either.
 
 ## 10. Raw data
 
@@ -304,3 +298,168 @@ Session 2, under
 Session 1's data and harness are under `…\scratchpad\mem\runs\A\`; that
 session's own writeup is commit `0b8269f` on `exp/memory-harness`, superseded by
 this file.
+
+## 11. Long run (90/30/10) — the uptime experiment
+
+Run **L1**, 2026-09-08 04:24–06:35 local, on `main` @ `6829ded`
+(`build\astrofin.exe`, `0.1.0-dev+578c5c5-dirty` — the memo build of §8, not
+rebuilt for this run). Auto mode, isolated profile, port 9225, sampling every
+30 s, `--log-level 'warn,memprobe=debug,mpv=info'`. `mpv=info` is added to the
+level the plan asked for because the `video mode … applied` /
+`unchanged, not re-applied` lines this section counts are `info` on target
+`mpv`; the memprobe line is `debug` on target `memprobe` and the JS console's
+`ERROR` lines pass `warn`, so nothing else is turned up.
+
+Workload: Dragon Ball Z Kai, 1440×1080 HEVC 10-bit, ~23 min/episode, played by
+**jellyfin-web's own auto-play** — 5 `loadfile`s over the 90 minutes, at t = 0,
+22, 45, 69 and 92 min, only the first of which the driver issued. Then 30
+minutes paused, then the player closed and 10 minutes idle on Home. 1 566
+process-sample rows.
+
+### Growth rate per phase (MB/min, least squares, first 60 s of each phase dropped)
+
+| process | play (90 min) | paused (30 min, clean window) | closed (10 min) | whole run |
+| --- | ---: | ---: | ---: | ---: |
+| **main (29808)** | **−0.03** | **+0.03** | **−1.43** | −1.10 |
+| gpu-process (31564) | −5.51 | +0.04 | +0.40 | −0.44 |
+| renderer#1 (5412) — the player page | +0.05 | +0.02 | −0.09 | −0.25 |
+| renderer#2 (7444) | +0.00 | +0.03 | +0.07 | −0.00 |
+| utility (20352, storage) | +0.00 | +0.00 | −0.00 | +0.00 |
+| utility (22468, network) | −0.00 | −0.02 | −0.01 | −0.00 |
+| (machine-wide) adapter dedicated | −5.08 | +0.02 | −0.01 | −0.62 |
+| (machine-wide) nvidia-smi board | −5.15 | +0.03 | +0.00 | −0.63 |
+
+The gpu-process/adapter −5 MB/min in the play column is not a decay of anything
+we did: it is one step down (901 → 414 MB) as CEF's GPU process releases its
+startup allocations around t = 25 min, then flat for the remaining hour. Read
+the play phase as two windows instead:
+
+| window | main private MB/min | first → last |
+| --- | ---: | --- |
+| play 0–10 min (warm-up) | **+4.88** | 1 622 → 1 685 MB |
+| play 10–91 min | **−0.03** | 1 685 → 1 698 MB |
+
+That is the §4 "converging warm-up", now confirmed over 80 minutes rather than
+inferred from 5: the ramp is spent inside the first ten minutes and the next
+eighty are flat to within ±0.03 MB/min. No process anywhere in the tree exceeds
+±0.06 MB/min while paused, against the report's ~19 MB/min.
+
+### Absolute numbers, against the report
+
+| | upstream #643 | run L1 (peak over 131 min) |
+| --- | ---: | ---: |
+| main process, private | 2 612 MB | **1 701 MB** |
+| whole tree, private | 3 485 MB | **3 073 MB** (at t = 0; 2 608 MB at play-end) |
+| largest helper, private | 401 MB | 209 → 213 MB (renderer#1) |
+| growth while paused | +4.7 MB / 15 s | **+2 MB / 27 min** |
+
+The tree's private total *falls* across the run — 3 011 MB at t = 0, 2 608 MB
+at play-end, 2 775 MB after the player is closed. Main handles fall too: 2 624
+at t = 0, never higher, 2 498 at the end.
+
+### The paint counter kills hypothesis §2.1 outright
+
+`memprobe`, per phase (`paints_sw` is 0 for the entire run — this build never
+takes the software path):
+
+| phase | minutes | accelerated paints | per minute |
+| --- | ---: | ---: | ---: |
+| play | 90 | 2 022 | 22.5 |
+| paused (clean window) | 27 | 54 | **2.0** |
+| closed, idle on Home | 10 | 68 138 | **6 814** |
+
+Plan §2.1 predicted the leak was the overlay upload path and that it would show
+while paused *because CEF keeps painting the OSD and the animated theme*. The
+opposite is true on both halves. A paused player paints **two frames a minute**,
+so there is nothing to leak; and the Home screen — which does paint, at 114
+frames a second, 68 000 paints in ten minutes — is the phase in which main
+private **falls** 1.43 MB/min and then sits flat (1 334 → 1 319, then 1 317,
+1 317, 1 318, 1 318, 1 318, 1 319 MB). 68 000 uploads with no accumulation is a
+direct falsification, not an absence of evidence.
+
+The other two probes agree with sessions 1–2: the mpv event queue peaked at 8
+and the coordinator queue at 4 across 130 minutes (§2.3 dead), and
+`demuxer_fw_bytes` never exceeded the configured 150 MB cap (§2.2's cache
+sub-mechanism dead).
+
+### Renderer heap (§2.6, the 401 MB helper)
+
+`HeapProfiler.takeHeapSnapshot` at t = 0 and t = 90 min, plus
+`Runtime.getHeapUsage` every 5 minutes:
+
+| | t = 0 | t = 90 min |
+| --- | ---: | ---: |
+| nodes | 461 898 | **415 123** |
+| edges | 1 514 105 | **1 342 117** |
+| snapshot size | 31.7 MB | 28.5 MB |
+| `usedSize` | 15.3 MB | 13.8 MB |
+
+The player page's heap is 10 % *smaller* after 90 minutes and five episodes.
+`usedSize` oscillates 11.1–15.4 MB for the whole run with no trend, and the
+renderer's private bytes move 209 → 213 MB. There is no 401 MB helper here to
+explain.
+
+### Video-mode memo, over five real item starts
+
+6 applies: **2 `applied`, 4 `unchanged, not re-applied`**. The two that ran are
+the boot apply (live-action, before any title is known) and the first
+resolution to `animation`; every subsequent episode of the same series hits the
+memo. That is §8.1 doing exactly what it was written to do on the binge case,
+and — as §5 established — costing nothing either way. 0 `ERROR` lines in the
+whole run.
+
+### Verdict
+
+**Converging warm-up, not sustained growth.** Against the plan's §4 thresholds:
+the play phase is −0.03 MB/min in the main process (threshold: > 2 MB/min
+sustained) and every process is within ±0.06 MB/min while paused (threshold:
+any slope at all). Both fail by two orders of magnitude, and they fail on the
+one axis sessions 1 and 2 could not test. #643 does not reproduce on this build
+at the report's uptime, with the report's codec, at the report's episode count.
+
+### Harness note: the pause guard was wrong for the first 3.4 minutes
+
+`window.api.player.paused` is not a state getter. `native-shim.js`'s
+`createSignal` makes it a callable *signal emitter* that returns nothing, so the
+driver's `!!p.paused()` read `false` even while paused and it re-clicked
+`.btnPause` every 30 s — which toggles. Between 09:55:03 and 09:57:34 UTC the
+player therefore alternated play/pause and auto-play advanced one more episode
+(the t = 92 min `loadfile`, and the five `re-pause` rows in `events.csv`). It
+was corrected live over a second CDP connection: the signal was wrapped so it
+still emits but returns `true`, and `window.jmpNative.playerPause()` was called
+directly; position then held at 1:44 across four 15 s polls. **The paused column
+above is fitted over the clean window only, t = 93.7 → 121 min, 54 samples**,
+and the phase-column fit that includes the toggling (+0.81 MB/min for main) is
+the toggling, not a pause. `runs\L1\intervention.md` has the detail.
+
+Worth keeping separately: *calling* `window.api.player.paused()` emits the
+`paused` signal into jellyfin-web. That is where the
+`ERROR [JS] [Media] [Signal] paused error: Error: player cannot be null` lines
+in the session-2 logs come from whenever anything polls it (memory
+`bug-player-cannot-be-null`).
+
+### The next experiment, if the report persists
+
+Not another run on this machine — three sessions and 131 minutes of uptime have
+now failed to reproduce it, and the remaining candidates are all *differences
+from the reporter*, not hypotheses about our code. The cheapest discriminating
+experiment is to run this same harness against **upstream jellium-desktop's own
+release**, the version the report was filed on, on this hardware. That is one
+bit and it is the useful one: if upstream grows here, the fork's CEF 151.3.24
+and mpv-fork bumps fixed it by accident and the issue can be closed with the
+plot attached; if upstream is flat here too, the variable is the reporter's
+environment (GPU driver, `mpv.conf`, `hwdec`, display scale) and the next move
+is to ask them for `--log-level 'warn,memprobe=debug'` plus the two
+*adapter-level* GPU signals — because §6 makes it likely they are reading the
+same fabricating per-process counter Task Manager's Details pane shows.
+
+### Raw data
+
+`…\scratchpad\mem3\runs\L1\`: `samples.csv` (30 s, six processes ×
+private/WS/handles/threads + all three GPU signals), `events.csv`, `phases.csv`,
+`heapusage.csv`, `heap-t0.heapsnapshot`, `heap-play-end.heapsnapshot`,
+`app.log`, `driver.log`, `intervention.md`, `summary.md`, and the plots
+`private_bytes.png`, `gpu.png`, `handles.png`. Harness alongside in
+`…\scratchpad\mem3\`: `run-long.ps1`, `setup-run.ps1`, `sampler.ps1`,
+`driver.mjs`, `afm.mjs`, `fix-pause.mjs`, `analyze.py` (the paused-window fit
+takes the clean-window start as `argv[2]`, here 5623).
