@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Astrofin — WiX 5 MSI.
+
+  Built by dev\windows\package.ps1:
+
+    wix build -arch x64 -ext WixToolset.UI.wixext `
+      -d PayloadDir=<abs staged tree> -d IconFile=<abs .ico> `
+      -d ProductVersion=a.b.c -d DisplayVersion=<full> `
+      -o dist\Astrofin-<version>-x64.msi dev\windows\installer\astrofin.wxs
+
+  Design notes:
+    * Per-user by default (MSIINSTALLPERUSER=1 with ALLUSERS=2), installing to
+      %LOCALAPPDATA%\Programs\Astrofin without elevation. An elevated
+      `msiexec /i ... ALLUSERS=1 MSIINSTALLPERUSER=""` installs per-machine into
+      %ProgramFiles%\Astrofin instead.
+    * The staged tree is harvested wholesale with <Files Include="**"> because
+      the CEF runtime is ~130 DLLs plus locales\ and .pak/.dat resources.
+    * UpgradeCode is fixed forever; MajorUpgrade (AllowSameVersionUpgrades)
+      replaces any previously installed Astrofin in place.
+    * Nothing here references %APPDATA%\astrofin or %LOCALAPPDATA%\astrofin, so
+      the user profile survives uninstall.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <?ifndef PayloadDir ?><?error PayloadDir must be defined (-d PayloadDir=...) ?><?endif?>
+  <?ifndef IconFile ?><?error IconFile must be defined (-d IconFile=...) ?><?endif?>
+  <?ifndef ProductVersion ?><?error ProductVersion must be defined (-d ProductVersion=a.b.c) ?><?endif?>
+  <?ifndef DisplayVersion ?><?define DisplayVersion = "$(ProductVersion)" ?><?endif?>
+  <?ifndef LicenseRtf ?><?error LicenseRtf must be defined (-d LicenseRtf=...) ?><?endif?>
+  <?ifndef CompressionLevel ?><?define CompressionLevel = "high" ?><?endif?>
+
+  <?define ProductName = "Astrofin" ?>
+  <?define Manufacturer = "TheHalfrican" ?>
+  <!-- Must match APP_USER_MODEL_ID in src/windows/src/platform.rs. -->
+  <?define AppUserModelId = "io.github.thehalfrican.Astrofin" ?>
+
+  <Package Name="$(ProductName)"
+           Manufacturer="$(Manufacturer)"
+           Version="$(ProductVersion)"
+           UpgradeCode="7d2f4c61-9a3e-4b8d-9c1f-2e6a5b0d7431"
+           Scope="perUser"
+           InstallerVersion="500"
+           Compressed="yes"
+           Language="1033"
+           Codepage="1252">
+
+    <SummaryInformation Description="$(ProductName) $(DisplayVersion)"
+                        Manufacturer="$(Manufacturer)" />
+
+    <!-- Dual-purpose package: ALLUSERS=2 plus MSIINSTALLPERUSER=1 means a
+         per-user install (no elevation) by default, while an elevated
+         `msiexec /i ... ALLUSERS=1 MSIINSTALLPERUSER=""` installs per-machine. -->
+    <Property Id="ALLUSERS" Value="2" Secure="yes" />
+    <Property Id="MSIINSTALLPERUSER" Value="1" Secure="yes" />
+    <Property Id="ARPPRODUCTICON" Value="astrofin.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/TheHalfrican/Astrofin" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <!-- Set INSTALLDESKTOPSHORTCUT=1 to also drop a desktop shortcut. -->
+    <Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" />
+    <Property Id="DISABLEADVTSHORTCUTS" Value="1" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="$(CompressionLevel)" />
+
+    <Icon Id="astrofin.ico" SourceFile="$(IconFile)" />
+
+    <!-- Per-user default location. -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="$(ProductName)" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramFiles6432Folder" />
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Per-machine installs land in %ProgramFiles%\Astrofin instead. This runs
+         before CostFinalize, so it is equivalent to passing INSTALLFOLDER= on
+         the command line and the whole subtree resolves under it. The
+         "NOT INSTALLFOLDER" guard leaves an explicit INSTALLFOLDER= (command
+         line, or the InstallDir dialog's choice handed to the execute sequence)
+         alone. -->
+    <SetProperty Id="INSTALLFOLDER"
+                 Value="[ProgramFiles6432Folder]$(ProductName)"
+                 Condition="(ALLUSERS=&quot;1&quot; OR NOT MSIINSTALLPERUSER) AND NOT INSTALLFOLDER"
+                 Sequence="both"
+                 Before="CostFinalize" />
+
+    <!-- Add/Remove Programs "InstallLocation"; per-user MSI registrations
+         otherwise leave it blank. -->
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+
+    <!-- Coexistence with the NSIS build (astrofin.nsi). It registers under
+         HKCU\...\Uninstall\Astrofin and installs into the same directory, so
+         an NSIS install is uninstalled silently first — deferred and
+         impersonated, i.e. as the user, which is all a per-user uninstaller
+         needs. `_?=` keeps uninstall.exe in place so the call waits; the
+         RemoveFile below then clears that leftover before the payload lands.
+         (The reverse direction lives in astrofin.nsi: MsiEnumRelatedProducts
+         on our UpgradeCode, then msiexec /x.) -->
+    <Property Id="NSISINSTALLDIR">
+      <RegistrySearch Id="NsisInstallDir" Root="HKCU"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\$(ProductName)"
+                      Name="InstallLocation" Type="raw" />
+    </Property>
+    <CustomAction Id="RemoveNsisInstall"
+                  Directory="TempFolder"
+                  ExeCommand="&quot;[NSISINSTALLDIR]\uninstall.exe&quot; /S _?=[NSISINSTALLDIR]"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="RemoveNsisInstall" After="InstallInitialize"
+              Condition="NSISINSTALLDIR AND NOT Installed AND NOT REMOVE" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="$(ProductName)" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="PayloadFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+      <ComponentRef Id="NsisLeftovers" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+  </Package>
+
+  <Fragment>
+    <!-- The whole staged tree, recursively: astrofin.exe, ~130 CEF/mpv DLLs,
+         locales\ and the .pak/.dat/.bin/.json resources. WiX derives stable
+         component GUIDs from the install path, so upgrades line up.
+         The shortcuts below point at [INSTALLFOLDER]astrofin.exe rather than a
+         [#fileId] because harvested files have generated ids. That is fine:
+         DISABLEADVTSHORTCUTS=1 and the shortcut components are keypathed on a
+         registry value, so the shortcuts are never advertised. -->
+    <ComponentGroup Id="PayloadFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(PayloadDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts">
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder"
+                 Guid="3c6a9e21-77b4-4d0f-b5c8-9a1e4f2d6037">
+        <Shortcut Id="StartMenuAstrofin"
+                  Name="$(ProductName)"
+                  Description="$(ProductName) — Jellyfin desktop client"
+                  Target="[INSTALLFOLDER]astrofin.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="astrofin.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="$(AppUserModelId)" />
+        </Shortcut>
+        <RegistryValue Root="HKCU" Key="Software\$(Manufacturer)\$(ProductName)"
+                       Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="DesktopShortcut" Directory="DesktopFolder"
+                 Guid="8b41d75c-2e9a-4c63-90d7-51f8ab3c6d24"
+                 Condition="INSTALLDESKTOPSHORTCUT">
+        <Shortcut Id="DesktopAstrofin"
+                  Name="$(ProductName)"
+                  Description="$(ProductName) — Jellyfin desktop client"
+                  Target="[INSTALLFOLDER]astrofin.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="astrofin.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="$(AppUserModelId)" />
+        </Shortcut>
+        <RegistryValue Root="HKCU" Key="Software\$(Manufacturer)\$(ProductName)"
+                       Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Housekeeping for the install directory. The NSIS uninstaller cannot
+         delete itself when run with `_?=`, so its uninstall.exe is dropped
+         before the payload lands. And when the directory already existed —
+         because that uninstaller was still running inside it — Windows
+         Installer does not count it as its own and leaves the empty folder
+         behind on uninstall; RemoveFolder covers that. -->
+    <Component Id="NsisLeftovers" Directory="INSTALLFOLDER"
+               Guid="5e0c2b7a-4d61-4f3e-9a8b-0c7d1e2f3a45">
+      <RemoveFile Id="StaleNsisUninstaller" Name="uninstall.exe" On="install" />
+      <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\$(Manufacturer)\$(ProductName)"
+                     Name="Installer" Type="string" Value="msi" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

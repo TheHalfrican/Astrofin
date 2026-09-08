@@ -75,12 +75,32 @@ jobs:
           cargo test --manifest-path src/Cargo.toml --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Installer tooling (WiX as a user-scope dotnet tool; NSIS into the linked .cache)
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\.dotnet\tools;$env:Path"
+          if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+            dotnet tool install --global wix --version 5.*
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not (wix extension list --global | Select-String -SimpleMatch WixToolset.UI.wixext)) {
+            wix extension add --global WixToolset.UI.wixext/5.0.2
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          wix --version
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dev\windows\fetch-nsis.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build and package
         shell: pwsh
         run: |
-          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:USERPROFILE\.dotnet\tools;$env:Path"
           . dev\windows\env.ps1
           cargo xtask package --external-mpv "$PWD\third_party\mpv-install" --prefix build/install --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Wrap the tree cargo xtask staged in build\ into the NSIS and MSI
+          # installers (package.ps1 re-mirrors build\ into its own payload dir).
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dev\windows\package.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist
 
@@ -88,4 +108,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+            dist/*.msi

@@ -26,3 +26,10 @@ run *args: build
 [windows]
 run-mpv *args: build
     & 'build/mpv-build/mpv.exe' {{args}}
+
+# Wrap the staged build/ tree into dist/Astrofin-<ver>-x64-setup.exe (NSIS) and
+# dist/Astrofin-<ver>-x64.msi (WiX 5). Forwards args, e.g. `just package -Only nsis -Compressor zlib`.
+[group('package')]
+[windows]
+package *args: build
+    & 'dev/windows/package.ps1' {{args}}

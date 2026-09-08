@@ -111,6 +111,104 @@ Zero `ERROR` lines in the session.
 Note: `$proc.CloseMainWindow()` does NOT terminate it (CEF owns the top-level
 window); `Stop-Process -Force` was required. Nothing was left running afterwards.
 
+## Step 5 — installers (NSIS setup.exe + WiX MSI)
+
+`dev\windows\package.ps1` wraps whatever `build.ps1` staged in `build\` into two
+per-user installers. It does not build anything itself; run it after step 3.
+
+```
+pwsh -NoProfile -ExecutionPolicy Bypass -File dev\windows\package.ps1
+just package                      # same thing, after `just build`
+```
+
+Outputs, in `dist\`:
+
+```
+Astrofin-<version>-x64-setup.exe   NSIS 3.12, RequestExecutionLevel user
+Astrofin-<version>-x64.msi         WiX 5, Scope=perUser (ALLUSERS=2 + MSIINSTALLPERUSER=1)
+```
+
+Both install to `%LOCALAPPDATA%\Programs\Astrofin`, write only HKCU, never
+prompt for UAC, and never touch `%APPDATA%\astrofin` / `%LOCALAPPDATA%\astrofin`
+— the profile survives uninstall by design, and is not even offered as an
+option. Sources: `dev\windows\installer\astrofin.nsi` and `astrofin.wxs`; the
+script passes the payload dir, version strings and output path in as defines.
+
+Tooling (user scope, no admin):
+
+- **NSIS** — `dev\windows\fetch-nsis.ps1` downloads the portable
+  `nsis-3.12.zip` from SourceForge (needs a non-browser User-Agent, otherwise
+  SourceForge serves its "your download will start shortly" page), verifies the
+  SHA-256 and unpacks it to `.cache\nsis\nsis-3.12\makensis.exe`. `.cache` is
+  the same directory CI junction-links to the persistent runner cache, so this
+  is a one-off.
+- **WiX 5** — `dotnet tool install --global wix --version 5.*` plus
+  `wix extension add --global WixToolset.UI.wixext/5.0.2`. `package.ps1` finds
+  `wix` on PATH or at `%USERPROFILE%\.dotnet\tools\wix.exe`.
+
+**Version.** The display version is read from the staged `astrofin.exe`'s
+VERSIONINFO (`ProductVersion`, written by `src/jfn_rust/build.rs`), so the
+installer names exactly the binary it contains, git suffix included:
+`0.1.0-dev+818271b`, `-dirty` and all. Windows Installer's `ProductVersion` has
+to be numeric `a.b.c` (a,b ≤ 255, c ≤ 65535), so the MSI gets the leading
+`0.1.0` and keeps the full string in the file name and the ARP DisplayVersion.
+NSIS gets `a.b.c.0` for `VIProductVersion` and the full string everywhere else.
+
+**Timings** (571 MB / 357-file payload, i9-14900K), as measured here:
+
+```
+makensis /SOLID zlib     54 s     (-Compressor zlib; the local-iteration setting)
+wix build, low cabs       7 s     (-MsiCompression low)
+```
+
+The defaults (`lzma` / `high`) take considerably longer — makensis alone runs
+for minutes over this payload. Do not expect much back for it: the payload is
+mostly already-compressed CEF resources. For scale, the first installers built
+from 818271b (compressor setting not recorded) were 249 MB each; the zlib/low
+pair measured here is 238 MB each. `-SkipPayloadRefresh` reuses
+`build\installer-payload` from the previous run instead of robocopy-mirroring
+`build\` again; `-Only nsis|msi` builds one of the two.
+
+**Add/Remove Programs for a per-user MSI** does *not* live under
+`HKCU\...\CurrentVersion\Uninstall\{ProductCode}` — Windows Installer keeps it in
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\<SID>\Products\<hash>\InstallProperties`,
+and the product only shows up through `Installer.ProductsEx(..., context=2)`,
+not the legacy `Installer.Products` collection. Looking in the HKCU key and
+concluding the entry is missing is an easy mistake to make; it is there.
+The NSIS build writes the conventional `HKCU\...\Uninstall\Astrofin` key.
+
+**Coexistence.** Both packages use the same directory, so each one removes the
+other before installing:
+
+- `astrofin.nsi` `.onInit` → `MsiEnumRelatedProductsW` on the MSI's
+  UpgradeCode (`7d2f4c61-…`, kept in sync by hand) → `msiexec /x {ProductCode}
+  /qn`, then the previous NSIS install's own `uninstall.exe /S _?=<dir>`.
+- `astrofin.wxs` → a `RegistrySearch` for the NSIS key's `InstallLocation` and a
+  deferred, impersonated `RemoveNsisInstall` custom action right after
+  `InstallInitialize` that runs `uninstall.exe /S _?=<dir>`; a `RemoveFile`
+  drops the uninstaller it cannot delete itself, and a `RemoveFolder` covers
+  the directory Windows Installer then does not consider its own.
+- MSI over MSI is `MajorUpgrade` (`AllowSameVersionUpgrades`), NSIS over NSIS
+  is the `_?=` path above. Verified matrix (all silent, 2026-09-07): MSI `/x`;
+  NSIS `/S` install → shortcut carries `System.AppUserModel.ID =
+  io.github.thehalfrican.Astrofin`, HKCU uninstall key present; NSIS over NSIS
+  (a planted stale file was removed); `uninstall.exe /S` leaves nothing; MSI
+  `/qn` → ARP entry with `InstallLocation`, same AUMID on the shortcut; NSIS
+  over MSI → MSI registration gone; MSI over NSIS → NSIS key and
+  `uninstall.exe` gone; final `msiexec /x` → nothing left, profile dirs
+  byte-count unchanged throughout.
+
+**Code signing** is a hook only: `-SignTool <signtool.exe>` (or
+`ASTROFIN_SIGNTOOL`) plus `-SignArgs` / `ASTROFIN_SIGNTOOL_ARGS` signs
+`astrofin.exe` before packaging and both installers afterwards. With nothing
+set the script prints `signing: skipped` and carries on — there is no
+certificate for this project yet, so SmartScreen will warn on first run.
+
+Silent-install switches, for the record: NSIS `/S [/DESKTOP=1]`; MSI
+`msiexec /i <msi> /qn [INSTALLDESKTOPSHORTCUT=1]`, or an elevated
+`ALLUSERS=1 MSIINSTALLPERUSER=""` for a per-machine install into
+`%ProgramFiles%\Astrofin`.
+
 ## Script edit made — `dev\windows\env.ps1` (REVIEW / UPSTREAM CANDIDATE)
 
 Symptom — `cargo xtask build` failed in `jfn-mpv`'s `build.rs` with:
