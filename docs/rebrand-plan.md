@@ -5,7 +5,7 @@
 > `c5846d3` (resources + packaging) and the commit that adds this note (CI, README, NOTICE,
 > About-panel attribution). Of §6d step 6 the ObjC/window-class hygiene renames, the memfd
 > name and the AppUserModelID hardening are **done** on branch `chore/hygiene-renames`;
-> **artwork pixels remain open** — see §6b.
+> artwork pixels landed as fe9b7f1 (`feat/ui-assets`). Everything is merged to `main`; see §6b.
 
 Repo surveyed: `C:\Users\NoahM\Documents\RustProjects\jellium-desktop` (read-only survey, nothing modified).
 Search scope: everything except `third_party/`, `.cache/`, `target/`, `build/`, `dist/`, `.git/`.
