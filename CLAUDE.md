@@ -53,4 +53,6 @@ Windows build on this machine (no `just`; PowerShell 7 is the Store build at `%L
 
 CI: `.gitea/workflows/build-windows.yml` runs on the self-hosted host-mode act_runner on the developer PC (label `windows-latest`), with `.cache/`, `build/` and `third_party/mpv-install` junction-linked to a persistent cache under `C:\Users\NoahM\act_runner\cache\astrofin`. When `.gitea/workflows` exists Gitea ignores `.github/workflows`. On the GitHub fork, push-triggered runs did not fire; `workflow_dispatch` works (`gh workflow run build-windows.yml -R TheHalfrican/Astrofin --ref main`).
 
+Memory growth during long playback (upstream #643) is still open; hypotheses, ranked, plus the measurement harness to run before touching code are in `docs/memory-growth-plan.md`.
+
 Known upstream issues worth reporting/PRing: the OSR file-dialog handler + ipc fix above; CI `build-windows.yml` appends msys64 to PATH (latent libclang shadowing); both macOS workflows call a non-existent `dev/tools/version.sh`; the Flatpak bundles GPL-3 text for a GPL-2 project; Windows memory growth during long playback (upstream #643) is still open and untouched here.

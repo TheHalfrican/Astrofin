@@ -159,13 +159,14 @@ NSIS gets `a.b.c.0` for `VIProductVersion` and the full string everywhere else.
 ```
 makensis /SOLID zlib     54 s     (-Compressor zlib; the local-iteration setting)
 wix build, low cabs       7 s     (-MsiCompression low)
+makensis /SOLID lzma    171 s     (default; measured with a CI job competing for the CPU)
+wix build, high cabs     44 s     (default; same caveat)
 ```
 
-The defaults (`lzma` / `high`) take considerably longer — makensis alone runs
-for minutes over this payload. Do not expect much back for it: the payload is
-mostly already-compressed CEF resources. For scale, the first installers built
-from 818271b (compressor setting not recorded) were 249 MB each; the zlib/low
-pair measured here is 238 MB each. `-SkipPayloadRefresh` reuses
+The defaults (`lzma` / `high`) are worth it for anything you keep: from
+d18712c the zlib/low pair was 238 MB each, the lzma/high pair 174 MB (NSIS)
+and 219 MB (MSI) — 27 % and 8 % smaller. Use zlib/low only while iterating on
+the installer scripts. `-SkipPayloadRefresh` reuses
 `build\installer-payload` from the previous run instead of robocopy-mirroring
 `build\` again; `-Only nsis|msi` builds one of the two.
 
