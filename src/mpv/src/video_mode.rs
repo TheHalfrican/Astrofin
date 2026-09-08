@@ -221,25 +221,36 @@ impl VideoMode {
     }
 }
 
-/// mpv's path-list syntax for `chain`: separator-joined, with Windows paths
-/// spelled in forward slashes (mpv accepts them and it keeps `\` out of a
-/// value whose parser treats `\` as an escape), and any literal separator
-/// inside an entry escaped the way `get_nextsep` in `options/m_option.c`
-/// expects.
+/// One chain entry as mpv spells it: Windows paths in forward slashes (mpv
+/// accepts them, it keeps `\` out of a value whose parser treats `\` as an
+/// escape, and it is the form mpv echoes back when `glsl-shaders` is read).
+///
+/// Unescaped, so this is also what a log line should print: the escaping in
+/// [`chain_to_property`] belongs to the list syntax, not to the path.
+#[must_use]
+fn normalise_entry(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    // Only on Windows: elsewhere `\` is an ordinary filename byte.
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
+}
+
+/// mpv's path-list syntax for `chain`: [`normalise_entry`] per path, joined on
+/// the platform separator, with any literal separator inside an entry escaped
+/// the way `get_nextsep` in `options/m_option.c` expects.
+///
+/// The result is byte-identical to what mpv reports back when `glsl-shaders`
+/// is read again (the read-back logged by [`consume_reply`]), which is what
+/// makes the memo in [`apply_inner`] — and any future compare against mpv's
+/// own value — a comparison of chains rather than of two spellings.
 #[must_use]
 pub fn chain_to_property(chain: &[PathBuf]) -> String {
     chain
         .iter()
-        .map(|p| {
-            let text = p.to_string_lossy();
-            // Only on Windows: elsewhere `\` is an ordinary filename byte.
-            let text = if cfg!(windows) {
-                text.replace('\\', "/")
-            } else {
-                text.into_owned()
-            };
-            text.replace(PATH_SEP, &format!("\\{PATH_SEP}"))
-        })
+        .map(|p| normalise_entry(p).replace(PATH_SEP, &format!("\\{PATH_SEP}")))
         .collect::<Vec<_>>()
         .join(&PATH_SEP.to_string())
 }
@@ -258,6 +269,57 @@ impl Baseline {
     }
 }
 
+/// The three property values last written to mpv, in mpv's own spelling.
+///
+/// Compared as a unit: two modes can share a scaler pair and differ only in
+/// the chain, and Animation's scalers come from the [`Baseline`], which lands
+/// asynchronously *after* the boot apply — so the first resolution under Auto
+/// legitimately re-applies the same chain with different scalers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Applied {
+    chain: String,
+    scale: String,
+    dscale: String,
+}
+
+/// Memo of the last *successful* write, so an apply that resolves to what mpv
+/// is already running writes nothing.
+///
+/// Under Auto — the default — [`apply_resolved`] runs on every item start, and
+/// every episode of one show resolves to the same mode, so without this the
+/// whole chain is re-written once per episode.
+///
+/// This is hygiene, not a leak fix: mpv absorbs a redundant write by itself.
+/// `glsl-shaders` is an `OPT_PATHLIST` with no `force_update`, so
+/// `m_config_cache_write_opt` compares the list with `str_list_equal`, an
+/// identical write never bumps the config timestamp `vo_gpu_next`'s
+/// `update_options` gates on, and nothing is rebuilt — measured, not assumed
+/// (`docs/memory-growth-findings.md` §5). What the memo buys is that the
+/// behaviour is ours rather than borrowed from an mpv implementation detail,
+/// that the log says what actually happened, and one fewer round trip through
+/// libmpv's dispatch queue per item start.
+#[derive(Default)]
+struct Memo(Option<Applied>);
+
+impl Memo {
+    /// Whether `next` has to be written at all.
+    fn should_apply(&self, next: &Applied) -> bool {
+        self.0.as_ref() != Some(next)
+    }
+
+    /// Latch what mpv accepted. Only called once every write has succeeded: a
+    /// failed write leaves the memo alone so the next apply retries.
+    fn record(&mut self, next: Applied) {
+        self.0 = Some(next);
+    }
+
+    /// Forget what mpv is running — for a fresh handle, whose properties are
+    /// back at whatever `mpv.conf` said.
+    fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
 struct State {
     /// What the user chose for this run: the stored setting, or the
     /// `--video-mode` override. Only [`apply`] moves it.
@@ -266,6 +328,8 @@ struct State {
     /// [`VideoMode::Auto`] — the mode last resolved for a title.
     mode: VideoMode,
     baseline: Baseline,
+    /// What was last written for that mode; see [`Memo`].
+    applied: Memo,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -275,6 +339,7 @@ fn state() -> &'static Mutex<State> {
             selected: VideoMode::default(),
             mode: VideoMode::default(),
             baseline: Baseline::default(),
+            applied: Memo::default(),
         })
     })
 }
@@ -296,6 +361,9 @@ pub fn selected() -> VideoMode {
 /// `mpv_initialize`, and *before* the first [`apply`] — see the module docs
 /// for why the ordering is what makes the baseline correct.
 pub fn init(handle: &Handle) {
+    // A fresh handle is back on `mpv.conf`'s values, whatever we last wrote
+    // to the previous one.
+    state().lock().applied.clear();
     for (reply, name) in [
         (BASELINE_GLSL_REPLY, GLSL_SHADERS),
         (BASELINE_SCALE_REPLY, SCALE),
@@ -379,6 +447,9 @@ pub fn apply(handle: &Handle, mode: VideoMode) {
 
 /// [`apply`] without moving `selected`: the shared tail for a user's choice
 /// and for a per-title resolution under Auto.
+///
+/// Writes nothing when the resolved `(chain, scale, dscale)` is what mpv is
+/// already running — see [`Memo`] for what that is and is not worth.
 fn apply_inner(handle: &Handle, mode: VideoMode) {
     state().lock().mode = mode;
     let effective = mode.effective();
@@ -411,28 +482,55 @@ fn apply_inner(handle: &Handle, mode: VideoMode) {
         ),
     };
 
-    set_string(handle, GLSL_SHADERS, &chain_value);
-    set_string(handle, SCALE, &scale);
-    set_string(handle, DSCALE, &dscale);
-    request_string(handle, READBACK_REPLY, GLSL_SHADERS);
-
     let label = if mode == VideoMode::Auto {
         "auto (live-action until a title is resolved)"
     } else {
         mode.as_str()
     };
+    let shown = |value: &str| {
+        if value.is_empty() {
+            "<mpv default>".to_string()
+        } else {
+            value.to_string()
+        }
+    };
+    let next = Applied {
+        chain: chain_value,
+        scale,
+        dscale,
+    };
+
+    if !state().lock().applied.should_apply(&next) {
+        tracing::info!(
+            target: "mpv",
+            "video mode {} unchanged, not re-applied: scale={} dscale={} shaders=[{}]",
+            label,
+            shown(&next.scale),
+            shown(&next.dscale),
+            chain.iter().map(|p| normalise_entry(p)).collect::<Vec<_>>().join(", ")
+        );
+        return;
+    }
+
+    let ok = set_string(handle, GLSL_SHADERS, &next.chain)
+        & set_string(handle, SCALE, &next.scale)
+        & set_string(handle, DSCALE, &next.dscale);
+    request_string(handle, READBACK_REPLY, GLSL_SHADERS);
+
     tracing::info!(
         target: "mpv",
         "video mode {} applied: scale={} dscale={} shaders=[{}]",
         label,
-        if scale.is_empty() { "<mpv default>" } else { &scale },
-        if dscale.is_empty() { "<mpv default>" } else { &dscale },
-        chain
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+        shown(&next.scale),
+        shown(&next.dscale),
+        chain.iter().map(|p| normalise_entry(p)).collect::<Vec<_>>().join(", ")
     );
+
+    // Only latch a write mpv took: a rejected one leaves the property at its
+    // old value, and memoising it would make every later apply a no-op.
+    if ok {
+        state().lock().applied.record(next);
+    }
 }
 
 /// Apply `mode` to the process-global handle. No-op before
@@ -509,10 +607,14 @@ fn baseline_field(pick: impl Fn(&Baseline) -> Option<String>) -> String {
     pick(&state().lock().baseline).unwrap_or_default()
 }
 
-fn set_string(handle: &Handle, name: &str, value: &str) {
+/// Queue one property write. Returns whether libmpv accepted the request —
+/// the memo in [`apply_inner`] must not latch a value mpv refused.
+fn set_string(handle: &Handle, name: &str, value: &str) -> bool {
     if let Err(e) = handle.set_property_string_async(0, name, value) {
         tracing::warn!(target: "mpv", "video mode: setting {name}={value:?} failed: {e:?}");
+        return false;
     }
+    true
 }
 
 #[cfg(test)]
@@ -649,5 +751,77 @@ mod tests {
     fn windows_paths_are_spelled_with_forward_slashes() {
         let chain = vec![PathBuf::from(r"C:\shaders\a.glsl")];
         assert_eq!(chain_to_property(&chain), "C:/shaders/a.glsl");
+    }
+
+    /// The wire value is exactly the normalised entries joined on the
+    /// separator, which is also what mpv echoes back from `glsl-shaders` — so
+    /// a memo (or a future compare against mpv's own value) compares chains,
+    /// not spellings.
+    #[test]
+    fn the_wire_value_is_the_normalised_entries_joined() {
+        let chain = vec![
+            PathBuf::from(if cfg!(windows) {
+                r"C:\shaders\a.glsl"
+            } else {
+                "/shaders/a.glsl"
+            }),
+            PathBuf::from(if cfg!(windows) {
+                r"C:\shaders\b.glsl"
+            } else {
+                "/shaders/b.glsl"
+            }),
+        ];
+        let joined = chain
+            .iter()
+            .map(|p| normalise_entry(p))
+            .collect::<Vec<_>>()
+            .join(&PATH_SEP.to_string());
+        assert_eq!(chain_to_property(&chain), joined);
+        assert!(!joined.contains('\\'));
+    }
+
+    fn applied(chain: &str, scale: &str, dscale: &str) -> Applied {
+        Applied {
+            chain: chain.to_string(),
+            scale: scale.to_string(),
+            dscale: dscale.to_string(),
+        }
+    }
+
+    /// A resolution that lands on what mpv is already running must not
+    /// re-write `glsl-shaders`; anything else must.
+    #[test]
+    fn the_memo_skips_an_unchanged_chain_and_notices_every_change() {
+        let anime = applied("a.glsl;b.glsl", "", "");
+        let mut memo = Memo::default();
+
+        // Nothing applied yet: the first write always goes out.
+        assert!(memo.should_apply(&anime));
+        memo.record(anime.clone());
+
+        // The binge case — every later episode of the same show.
+        assert!(!memo.should_apply(&anime));
+        assert!(!memo.should_apply(&applied("a.glsl;b.glsl", "", "")));
+
+        // Any one of the three fields differing is a real switch.
+        assert!(memo.should_apply(&applied("c.glsl", "", "")));
+        assert!(memo.should_apply(&applied("a.glsl;b.glsl", "ewa_lanczossharp", "")));
+        assert!(memo.should_apply(&applied("a.glsl;b.glsl", "", "mitchell")));
+
+        // Order matters: the same files in a different order is a different
+        // chain, and mpv would render it differently.
+        assert!(memo.should_apply(&applied("b.glsl;a.glsl", "", "")));
+
+        // Off, then back to the same chain.
+        let off = applied("", "lanczos", "hermite");
+        assert!(memo.should_apply(&off));
+        memo.record(off);
+        assert!(memo.should_apply(&anime));
+
+        // A fresh handle is back on mpv.conf's values.
+        memo.record(anime.clone());
+        assert!(!memo.should_apply(&anime));
+        memo.clear();
+        assert!(memo.should_apply(&anime));
     }
 }
