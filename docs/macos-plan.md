@@ -169,3 +169,79 @@ Tailscale up or the Gitea half of the push fails; GitHub works regardless.
   `build-macos.yml`, line 37 in `build-macos-legacy.yml`). The §1i table in
   `docs/rebrand-plan.md` still lists it as a pre-existing bug; that row is
   historical.
+
+## Verified on the MacBook — 2026-09-09
+
+Machine: Apple M3 Max, macOS 26.6.2, Xcode 26.5 SDK, Apple Silicon Homebrew at
+`/opt/homebrew`. An Intel Homebrew at `/usr/local` was dismantled first: it came
+first on `PATH`, so `dev/macos/setup.sh` and `bundle_macos::brew_prefix` would
+have used x86_64 libraries. Build with `/opt/homebrew/bin` ahead of
+`/usr/local/bin` on any Mac that has both.
+
+### Start here, as it went
+
+1. Clean `main` at 14a5a81.
+2. `just deps` failed twice before passing. Rust stable was 1.92 and the
+   lockfile's `kstring 2.0.4` (via `gix`) needs 1.96, so nothing resolved:
+   `rustup update stable` (now 1.98.1). Then every formula was present but
+   `libplacebo` was 7.360.0 and the mpv fork's `meson.build` wants
+   `>= 7.360.1`; `setup.sh` only checked membership, so it now also upgrades
+   stale formulas from its own list (and nothing else). `cargo xtask fetch-cef`
+   pulled `cef_binary_151.3.24+g2384915+chromium-151.0.7922.174_macosarm64_minimal`.
+3. `just lint`: exactly one error, `clippy::collapsible_if` in the macOS-only
+   branch of `jfn_paths::resource_dir`, never compiled on Windows. Collapsed
+   into a let-chain. Everything else in `src/macos` and `src/macos_sink` was
+   clean on the first compile since the rebrand.
+4. `just build`: 98 s cold, 35 s warm. Checklist items 2–5 pass: main binary,
+   CEF framework, libmpv and all 44 bundled dylibs are thin arm64; MoltenVK is
+   bundled from the brew keg; both shader subdirectories land; `otool -L` shows
+   no `/opt/homebrew` or `/usr/local` path anywhere in the bundle. No helper
+   apps by design: `browser_subprocess_path` is the main executable and CEF
+   runs single-process here.
+5. `just test` 309 passed / 0 failed; `just test-js` 113 / 0.
+6. The staged app launches to the connect screen in about 1 s warm. Item 7:
+   `Signature=adhoc`, `codesign --verify --deep --strict` passes, `spctl`
+   rejects. Item 8: a clean no-op import; profile at `~/.config/astrofin`
+   (`settings.json`, `instance.json`, `mpv/`), cache at
+   `~/Library/Caches/astrofin`, socket under `/tmp/astrofin-<uid>/`. Item 13:
+   a second launch logs `Signaled existing instance, exiting` and exits 0 in
+   ~0.2 s; the first logs `received Ping`. Item 14: `just dmg` writes
+   `dist/Astrofin-<version>-macos-arm64.dmg` (version from `git describe`, so
+   `-dirty` on an uncommitted tree); `hdiutil verify` passes and the volume
+   holds the app plus the Applications symlink.
+
+### Fixed along the way
+
+- **Two MoltenVKs in one process.** The bundled loader is Homebrew's build and
+  scans `/opt/homebrew/etc/vulkan/icd.d` next to the bundle's own manifest, so
+  on a developer Mac it enumerated both and the ObjC runtime warned about
+  duplicate `MVK*` classes. `MacosMpvHost::prepare` now sets `VK_DRIVER_FILES`
+  to `Contents/Resources/vulkan/icd.d/MoltenVK_icd.json` unless the user set
+  `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` themselves (`src/macos/src/mpv_host.rs`).
+  `lsof` on the running app shows only the bundled dylib.
+- **Startup deadlock on warm launches.** With saved geometry the window is up
+  in ~100 ms and `run_with_cef` reaches `publish_device_profile` while mpv's
+  core thread is still applying the startup `background-color` write. That
+  write needs the VO thread, the VO thread does `DispatchQueue.main.sync`, and
+  main is parked in the profile's sync `mpv_get_property`: a three-way cycle,
+  and SIGTERM is ignored. `mpv_read_off_main` (`src/jfn_rust/src/app.rs`) runs
+  the boot-time sync reads (version log, demuxer list) through
+  `Platform::run_blocking`, so main keeps pumping. Five consecutive warm
+  launches reached the connect screen afterwards; before, zero of four did.
+
+### Still open
+
+- Items 9–12 (server login, 1080p HEVC playback, the four video modes, OSD and
+  fullscreen, Now Playing), 15 (install the DMG and launch from
+  `/Applications`), 16–18 (the GitHub macOS workflows have still never run),
+  19 (NSOpenPanel), and the Retina visual checks. All need a server and eyes.
+- Intermittent `EXC_BAD_ACCESS` on shutdown in CEF's `Chrome_InProcGpuThread`,
+  one of six SIGTERM shutdowns, every frame inside the CEF binary. The
+  truncated teardown leaves the instance socket behind; the next launch
+  removes it. Report: `~/Library/Logs/DiagnosticReports/astrofin-2026-09-09-110441.ips`.
+- `boot_mpv_reconcile` still does sync reads on the main thread after CEF
+  init. Not seen to deadlock, but it is the same hazard class as above.
+- The runtime checks above are log-based; nothing was looked at. `screencapture -x`
+  failed with "could not create image from display" inside the subagent that
+  ran them, but works from the main session's shell (verified at the end of
+  the session, 3456x2234), so take screenshots from the main session.
