@@ -2478,6 +2478,7 @@ dependencies = [
  "jfn-logging",
  "jfn-macos-sink",
  "jfn-mpv",
+ "jfn-paths",
  "jfn-platform-abi",
  "jfn-playback",
  "libc",

@@ -16,6 +16,7 @@ jfn-input = { path = "../input" }
 jfn-logging = { path = "../logging" }
 jfn-macos-sink = { path = "../macos_sink" }
 jfn-mpv = { path = "../mpv" }
+jfn-paths = { path = "../paths" }
 jfn-platform-abi = { path = "../platform_abi" }
 jfn-playback = { path = "../playback" }
 cef.workspace = true

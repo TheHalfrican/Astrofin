@@ -2,7 +2,8 @@
 //! heap workaround) and a VO wait loop that keeps the main CFRunLoop
 //! serviced while mpv brings its window up.
 
-use std::ffi::c_int;
+use std::ffi::{CString, c_int};
+use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
 use jfn_platform_abi::{MpvHost, VO_WAIT_TICK, WindowDecorations};
@@ -29,10 +30,50 @@ fn metal_has_mac2_family() -> bool {
     }
 }
 
+/// Pin the Vulkan loader to the MoltenVK we ship.
+///
+/// The bundled loader is Homebrew's build and keeps scanning the system ICD
+/// directories (`/opt/homebrew/etc/vulkan/icd.d` among them) next to the
+/// manifest in `Contents/Resources/vulkan/icd.d`. Every MoltenVK it finds is
+/// loaded to enumerate devices, so a developer Mac with the `molten-vk`
+/// formula installed ends up with two copies of MoltenVK's ObjC classes in
+/// one process, which the runtime reports as a source of "spurious casting
+/// failures and mysterious crashes". `VK_DRIVER_FILES` restricts the loader
+/// to the listed manifests. An explicit `VK_DRIVER_FILES` or legacy
+/// `VK_ICD_FILENAMES` from the environment wins, and a flat staged tree (no
+/// bundle, no manifest) is left to the loader's normal search.
+fn pin_bundled_vulkan_driver() {
+    if std::env::var_os("VK_DRIVER_FILES").is_some()
+        || std::env::var_os("VK_ICD_FILENAMES").is_some()
+    {
+        return;
+    }
+    let manifest = jfn_paths::resource_dir()
+        .join("vulkan")
+        .join("icd.d")
+        .join("MoltenVK_icd.json");
+    if !manifest.is_file() {
+        return;
+    }
+    let Ok(value) = CString::new(manifest.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: same window as the exports in `prepare` below, on the main
+    // thread before mpv exists; the loader only reads this when mpv's VO
+    // creates the Vulkan instance, after `prepare` has returned.
+    unsafe { libc::setenv(c"VK_DRIVER_FILES".as_ptr(), value.as_ptr(), 1) };
+    tracing::debug!(
+        target: "Platform",
+        "pinned Vulkan loader to the bundled MoltenVK manifest: {}",
+        manifest.display()
+    );
+}
+
 pub struct MacosMpvHost;
 
 impl MpvHost for MacosMpvHost {
     fn prepare(&self, _configured: Option<WindowDecorations>) {
+        pin_bundled_vulkan_driver();
         unsafe {
             // Used by mpv's macOS Cocoa Common to locate the bundle.
             let key = c"MPVBUNDLE";
