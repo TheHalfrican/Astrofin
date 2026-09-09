@@ -207,6 +207,20 @@ pub fn jfn_playback_observe_mpv_properties(backend: u8) -> bool {
             c"video-frame-info",
             mpv_format::MPV_FORMAT_NODE,
         ),
+        // A-B loop points. Observed as nodes because the value is either a
+        // time or the string "no" (see `crate::ab_loop`), and process-wide
+        // because mpv carries the points across files — the OSD has to learn
+        // about the clear on the next `playerLoad` as well as about the set.
+        (
+            crate::ab_loop::AB_LOOP_OBSERVE_ID,
+            c"ab-loop-a",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
+        (
+            crate::ab_loop::AB_LOOP_OBSERVE_ID,
+            c"ab-loop-b",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
     ];
 
     for &(id, name, fmt) in pairs {
@@ -405,6 +419,18 @@ fn ingest_events(rx: Receiver<Event>) {
             && id == crate::stats::STATS_OBSERVE_ID
         {
             crate::stats::on_property(name, value);
+            continue;
+        }
+        // A-B loop points: their own channel for the same reason as stats.
+        // They are drawn by the OSD and mean nothing to the state machine.
+        if let Event::PropertyChange {
+            id,
+            ref name,
+            ref value,
+        } = event
+            && id == crate::ab_loop::AB_LOOP_OBSERVE_ID
+        {
+            crate::ab_loop::on_property(name, value);
             continue;
         }
         if let Event::PropertyChange { id, ref value, .. } = event
