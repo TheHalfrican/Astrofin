@@ -136,14 +136,17 @@ CLI from `build/mpv-build/mpv` for mpv-only debugging.
 
 ### Follow-up features
 
-19. **Native file dialog (NSOpenPanel).** `Platform::open_file_dialog`
-    (`src/platform_abi/src/lib.rs` ~line 657) defaults to returning `false`,
-    which the CEF glue (`src/jfn_cef/src/client_impl/dialog.rs`) treats as a
-    graceful cancel. `impl Platform for MacosPlatform` (`src/macos/src/lib.rs`
-    ~line 455) does not override it; Windows does, in
-    `src/windows/src/file_dialog.rs`. Implementing NSOpenPanel is the follow-up.
-    The upstream OSR file-chooser *crash* is already fixed by the CEF 151.3.24
-    pin, so this is a missing feature, not a crash.
+19. **Native file dialog (NSOpenPanel).** Done 2026-09-09:
+    `src/macos/src/file_dialog.rs` implements `Platform::open_file_dialog` with
+    NSOpenPanel / NSSavePanel begun as a sheet on mpv's window
+    (`beginSheetModalForWindow:`), never `runModal`, since a nested run loop
+    inside CEF's dialog callback would re-enter the external pump; `on_done`
+    fires once from the completion handler. Type filters use the extension
+    form of `allowedFileTypes` (macOS 11 baseline). Verified over CDP with a
+    trusted click on an `<input type=file>`: single with `image/*` (non-images
+    greyed out), cancel, and `multiple`, each open matched by one
+    `file dialog: … chosen/cancelled` log line. The `message` text path is
+    untested because CEF passes an empty title for a plain input.
 20. Web assets (`src/web/astrofin-theme.css`, `.js`) are embedded with
     `include_str!` in `src/jfn_cef/src/embedded_css.rs`, so any UI tweak needs a
     rebuild — there is no live reload.
@@ -296,8 +299,8 @@ the composited screen. Title: Dragon Ball Z Kai S5E99, HEVC Main 10
 
 - Item 15 (install the DMG to `/Applications` and launch from there; a locally
   built DMG carries no quarantine flag, so the real Gatekeeper path needs a
-  downloaded copy and a person for the right-click > Open), 17 (the legacy
-  Intel workflow: ran on the tag) and 19 (NSOpenPanel). Item 16: `build-macos.yml`
+  downloaded copy and a person for the right-click > Open). Item 17 (legacy
+  Intel workflow) ran on the tag; item 19 (NSOpenPanel) is done. Item 16: `build-macos.yml`
   passes on GitHub; the run on the macOS fixes themselves (7d88015) was
   started 2026-09-09 after the remote was corrected. Items 9–12 are done,
   see above.

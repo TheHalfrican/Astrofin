@@ -650,10 +650,10 @@ pub trait Platform: Send + Sync {
     /// without `on_done` ever running, and the caller must resolve its own
     /// side. The default returns `false`.
     ///
-    /// Only the Windows backend implements this today. macOS and Linux keep
-    /// the default on purpose — CEF's own chooser cannot run for a windowless
-    /// browser, so the caller cancels the dialog instead of crashing; native
-    /// choosers for those backends are follow-up work.
+    /// Windows (Common Item Dialog) and macOS (NSOpenPanel / NSSavePanel as a
+    /// sheet) implement this. Linux keeps the default on purpose — CEF's own
+    /// chooser cannot run for a windowless browser, so the caller cancels the
+    /// dialog instead of crashing; a native chooser there is follow-up work.
     fn open_file_dialog(&self, req: FileDialogRequest) -> bool {
         let _ = req;
         false
