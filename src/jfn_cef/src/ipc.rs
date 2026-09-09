@@ -392,4 +392,52 @@ mod tests {
         // tests above stop proving anything.
         TestArgs::empty().string_at(0);
     }
+
+    #[test]
+    fn a_browser_message_reports_the_name_it_was_built_with() {
+        let m = BrowserMessage::new("playerLoad".into(), None, None);
+        assert_eq!(m.name(), "playerLoad");
+    }
+
+    #[test]
+    fn a_browser_message_with_no_argument_list_reports_none() {
+        // `jmpNative.playerStop()` produces a message the relay never fills.
+        let m = BrowserMessage::new("playerStop".into(), None, None);
+        assert!(m.args().is_none());
+    }
+
+    #[test]
+    fn a_browser_message_from_a_dead_browser_has_no_browser_or_main_frame() {
+        // Messages are dispatched after the browser may already be gone.
+        let m = BrowserMessage::new("csdReady".into(), None, None);
+        assert!(m.browser().is_none());
+        assert!(m.main_frame().is_none());
+    }
+
+    #[test]
+    fn an_empty_message_name_is_preserved_rather_than_normalised() {
+        // The name is page-controlled; the dispatcher, not the constructor,
+        // decides that nothing claims it.
+        let m = BrowserMessage::new(String::new(), None, None);
+        assert_eq!(m.name(), "");
+    }
+
+    #[test]
+    fn list_string_is_empty_for_a_missing_or_wrong_typed_slot() {
+        // CEF does not coerce and neither do we: a page that passes a number
+        // where a string is expected gets "" rather than "1".
+        let args = TestArgs::new(vec![ArgValue::Int(1), ArgValue::Unset]);
+        assert_eq!(list_string(&args, 0), "");
+        assert_eq!(list_string(&args, 1), "");
+        assert_eq!(list_string(&args, 2), "", "past the end of the list");
+        assert_eq!(list_string(&TestArgs::empty(), 0), "");
+    }
+
+    #[test]
+    fn list_string_returns_a_string_slot_verbatim() {
+        // The value is page-controlled; nothing is trimmed or normalised here,
+        // including a right-to-left override that could disguise a URL.
+        let args = TestArgs::new(vec![ArgValue::Str("  http://x/\u{202e}  ".into())]);
+        assert_eq!(list_string(&args, 0), "  http://x/\u{202e}  ");
+    }
 }

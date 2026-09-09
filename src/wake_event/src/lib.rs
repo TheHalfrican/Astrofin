@@ -51,3 +51,57 @@ pub fn signal_raw_fd(fd: std::ffi::c_int) {
     let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
     let _ = nix::unistd::write(fd, &val.to_ne_bytes());
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::ffi::c_int;
+    use std::os::fd::BorrowedFd;
+
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+    use super::*;
+
+    /// Does a `poll` see the wake fd as readable right now?
+    fn readable(fd: c_int) -> bool {
+        // SAFETY: `fd` is owned by the caller's live `WakeEvent`.
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        let mut fds = [PollFd::new(borrowed, PollFlags::POLLIN)];
+        poll(&mut fds, PollTimeout::ZERO).unwrap_or(0) > 0
+    }
+
+    #[test]
+    fn signal_raw_fd_makes_the_wake_fd_readable() {
+        let ev = WakeEvent::new().expect("wake event");
+        assert!(!readable(ev.fd()), "a fresh wake fd must not be readable");
+        signal_raw_fd(ev.fd());
+        assert!(readable(ev.fd()));
+    }
+
+    #[test]
+    fn drain_raw_fd_empties_a_signaled_fd() {
+        let ev = WakeEvent::new().expect("wake event");
+        signal_raw_fd(ev.fd());
+        drain_raw_fd(ev.fd());
+        assert!(!readable(ev.fd()));
+    }
+
+    #[test]
+    fn repeated_signals_drain_in_one_pass() {
+        let ev = WakeEvent::new().expect("wake event");
+        for _ in 0..4 {
+            signal_raw_fd(ev.fd());
+        }
+        drain_raw_fd(ev.fd());
+        assert!(!readable(ev.fd()), "one drain must clear every signal");
+    }
+
+    #[test]
+    fn draining_an_unsignaled_fd_returns_without_blocking() {
+        let ev = WakeEvent::new().expect("wake event");
+        drain_raw_fd(ev.fd());
+        assert!(!readable(ev.fd()));
+        // Still usable afterwards.
+        signal_raw_fd(ev.fd());
+        assert!(readable(ev.fd()));
+    }
+}

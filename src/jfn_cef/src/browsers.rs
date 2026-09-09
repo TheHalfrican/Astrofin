@@ -453,4 +453,101 @@ mod tests {
         assert_eq!(round_frame_rate(f64::INFINITY), i32::MAX);
         assert_eq!(round_frame_rate(1e300), i32::MAX);
     }
+
+    /// The registry is `None` until `jfn_browsers_init` runs on the browser
+    /// process, and it is taken again by `jfn_browsers_shutdown`. Every entry
+    /// point is reachable in that window — a platform callback that fires
+    /// before init, or a late input event after shutdown — and must be inert
+    /// rather than panic or dereference a layer. `jfn_browsers_init` itself
+    /// needs a live CEF and a real window, so these tests never call it.
+    #[test]
+    fn shutdown_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_shutdown();
+    }
+
+    #[test]
+    fn create_yields_a_null_layer_on_an_uninitialised_registry() {
+        let layer = unsafe { jfn_browsers_create(std::ptr::null()) };
+        assert!(layer.is_null());
+    }
+
+    #[test]
+    fn remove_ignores_a_null_layer() {
+        jfn_browsers_remove(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn remove_on_an_uninitialised_registry_is_a_no_op() {
+        // A non-null pointer must not be dereferenced before the registry
+        // lookup rejects it.
+        jfn_browsers_remove(std::ptr::dangling_mut::<JfnCefLayer>());
+    }
+
+    #[test]
+    fn set_active_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_set_active(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn active_is_null_on_an_uninitialised_registry() {
+        assert!(jfn_browsers_active().is_null());
+    }
+
+    #[test]
+    fn set_size_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_set_size(1280, 720, 2560, 1440);
+    }
+
+    #[test]
+    fn set_refresh_rate_rejects_a_non_positive_rate_before_touching_the_registry() {
+        jfn_browsers_set_refresh_rate(0.0);
+        jfn_browsers_set_refresh_rate(-60.0);
+        jfn_browsers_set_refresh_rate(f64::NAN);
+    }
+
+    #[test]
+    fn set_refresh_rate_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_set_refresh_rate(59.94);
+    }
+
+    #[test]
+    fn close_and_snapshot_yields_nothing_on_an_uninitialised_registry() {
+        assert!(jfn_browsers_close_and_snapshot().is_empty());
+    }
+
+    #[test]
+    fn apply_hidden_all_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_apply_hidden_all(true);
+        jfn_browsers_apply_hidden_all(false);
+    }
+
+    #[test]
+    fn apply_csd_state_all_on_an_uninitialised_registry_is_a_no_op() {
+        crate::test_support::install_platform();
+        jfn_browsers_apply_csd_state_all();
+    }
+
+    #[test]
+    fn send_external_begin_frame_all_on_an_uninitialised_registry_is_a_no_op() {
+        jfn_browsers_send_external_begin_frame_all();
+    }
+
+    #[test]
+    fn the_menu_slot_is_unavailable_on_an_uninitialised_registry() {
+        assert!(jfn_browsers_menu_open().is_none());
+    }
+
+    #[test]
+    fn resolving_a_menu_handle_fails_on_an_uninitialised_registry() {
+        let mut router = Router::<CursorShape, CursorSink>::new(CursorSink);
+        let stale = router.add_level();
+        assert!(!jfn_browsers_menu_resolve(stale));
+    }
+
+    #[test]
+    fn routing_a_cursor_shape_on_an_uninitialised_registry_is_a_no_op() {
+        let mut router = Router::<CursorShape, CursorSink>::new(CursorSink);
+        let stale = router.add_level();
+        route_cursor(stale, CursorShape::Pointer);
+    }
 }

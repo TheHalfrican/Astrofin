@@ -273,17 +273,82 @@ pub fn jfn_mpv_clear_wakeup_callback() {
 // =============================================================================
 
 unsafe fn set_flag(name: &CStr, v: bool) {
+    #[cfg(test)]
+    recorder::note(recorder::Op::Flag(name.to_string_lossy().into_owned(), v));
     unsafe { jfn_mpv_set_property_flag_async(name.as_ptr(), v) };
 }
 unsafe fn set_double(name: &CStr, v: f64) {
+    #[cfg(test)]
+    recorder::note(recorder::Op::Double(name.to_string_lossy().into_owned(), v));
     unsafe { jfn_mpv_set_property_double_async(name.as_ptr(), v) };
 }
 unsafe fn set_str(name: &CStr, v: &CStr) {
+    #[cfg(test)]
+    recorder::note(recorder::Op::Str(
+        name.to_string_lossy().into_owned(),
+        v.to_string_lossy().into_owned(),
+    ));
     unsafe { jfn_mpv_set_property_string_async(name.as_ptr(), v.as_ptr()) };
 }
 fn cmd(args: &[&CStr]) {
+    #[cfg(test)]
+    recorder::note(recorder::Op::Cmd(
+        args.iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect(),
+    ));
     let ptrs: Vec<*const c_char> = args.iter().map(|s| s.as_ptr()).collect();
     unsafe { jfn_mpv_command_async(ptrs.as_ptr(), ptrs.len()) };
+}
+
+/// Test-only tap on the four helpers every player entry point funnels
+/// through, so the exact property write or command each one produces can be
+/// asserted without a live mpv core. Compiled out of every other build; the
+/// helpers themselves are unchanged.
+#[cfg(test)]
+mod recorder {
+    use parking_lot::{Mutex, MutexGuard};
+
+    /// What was asked of libmpv, in the order it was asked.
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Op {
+        Flag(String, bool),
+        Double(String, f64),
+        Str(String, String),
+        Cmd(Vec<String>),
+    }
+
+    static OPS: Mutex<Vec<Op>> = Mutex::new(Vec::new());
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    pub fn note(op: Op) {
+        OPS.lock().push(op);
+    }
+
+    /// Take the api tests' turn and start it with an empty log.
+    pub fn start() -> MutexGuard<'static, ()> {
+        let guard = SERIAL.lock();
+        OPS.lock().clear();
+        guard
+    }
+
+    /// Everything recorded since the last call, clearing the log.
+    pub fn taken() -> Vec<Op> {
+        std::mem::take(&mut OPS.lock())
+    }
+
+    pub fn flag(name: &str, v: bool) -> Op {
+        Op::Flag(name.to_string(), v)
+    }
+    pub fn double(name: &str, v: f64) -> Op {
+        Op::Double(name.to_string(), v)
+    }
+    pub fn string(name: &str, v: &str) -> Op {
+        Op::Str(name.to_string(), v.to_string())
+    }
+    pub fn command(args: &[&str]) -> Op {
+        Op::Cmd(args.iter().map(|s| (*s).to_string()).collect())
+    }
 }
 
 pub fn jfn_mpv_play() {
@@ -438,6 +503,36 @@ unsafe fn cstr_to_string(p: *const c_char) -> String {
         .unwrap_or_default()
 }
 
+/// Whether mpv, not Jellyfin, picks the audio track for this load.
+///
+/// Only for an unprobed live stream that carries no explicit choice and no
+/// external audio file: there, jellyfin-web had no track list to choose from,
+/// while mpv's demuxer knows the container's own default (HLS `DEFAULT=YES`,
+/// the first MPEG-TS PMT entry, and so on).
+fn should_defer_audio(
+    is_infinite_stream: bool,
+    audio_track: i64,
+    external_audio_url: &str,
+) -> bool {
+    is_infinite_stream && audio_track == TRACK_DISABLE && external_audio_url.is_empty()
+}
+
+/// The per-file option string handed to mpv's `loadfile`.
+///
+/// Always paused: the intended track ids are applied by property write after
+/// FILE_LOADED (mpv drops loadfile's own selectors under
+/// `track-auto-selection=no`), and playback starts once those have landed.
+fn load_file_options(start_secs: f64, defer_audio: bool) -> String {
+    let mut opts = format!("start={start_secs},pause=yes");
+    if defer_audio {
+        // Per-file enable so mpv's demuxer picks the format-correct
+        // audio track. We explicitly write `sid=no` after FILE_LOADED
+        // to keep subs off.
+        opts.push_str(",track-auto-selection=yes");
+    }
+    opts
+}
+
 pub unsafe fn jfn_mpv_load_file(path: *const c_char, opts: *const JfnMpvLoadOptions) {
     let Some(path_c) = (unsafe { cstr(path) }) else {
         return;
@@ -448,8 +543,7 @@ pub unsafe fn jfn_mpv_load_file(path: *const c_char, opts: *const JfnMpvLoadOpti
 
     let ext_audio = unsafe { cstr_to_string(o.external_audio_url) };
     let ext_sub = unsafe { cstr_to_string(o.external_sub_url) };
-    let defer_audio =
-        o.is_infinite_stream && o.audio_track == TRACK_DISABLE && ext_audio.is_empty();
+    let defer_audio = should_defer_audio(o.is_infinite_stream, o.audio_track, &ext_audio);
 
     // Track selection is owned by Jellyfin. With track-auto-selection=no,
     // mpv silently drops aid/vid/sid in loadfile options (loadfile.c
@@ -469,14 +563,7 @@ pub unsafe fn jfn_mpv_load_file(path: *const c_char, opts: *const JfnMpvLoadOpti
         s.valid = true;
     }
 
-    let mut opts_str = format!("start={},pause=yes", o.start_secs);
-    if defer_audio {
-        // Per-file enable so mpv's demuxer picks the format-correct
-        // audio track (HLS DEFAULT=YES, MPEG-TS first PMT, etc.). We
-        // explicitly write `sid=no` after FILE_LOADED to keep subs off.
-        opts_str.push_str(",track-auto-selection=yes");
-    }
-    let opts_c = CString::new(opts_str).unwrap_or_default();
+    let opts_c = CString::new(load_file_options(o.start_secs, defer_audio)).unwrap_or_default();
     cmd(&[c"loadfile", path_c, c"replace", c"-1", &opts_c]);
 }
 
@@ -530,18 +617,24 @@ pub fn jfn_mpv_apply_pending_track_selection_and_play() {
 // Aspect-mode helper
 // =============================================================================
 
+/// mpv's two knobs for an aspect mode: `keepaspect` and `panscan`.
+/// `None` for a mode this build does not know, which the caller ignores
+/// silently (matching the legacy log-and-skip).
+fn aspect_mode_options(mode: &[u8]) -> Option<(bool, f64)> {
+    match mode {
+        b"auto" => Some((true, 0.0)),
+        b"cover" => Some((true, 1.0)),
+        b"fill" => Some((false, 0.0)),
+        _ => None,
+    }
+}
+
 pub unsafe fn jfn_mpv_set_aspect_mode(mode: *const c_char) {
     let Some(m) = (unsafe { cstr(mode) }) else {
         return;
     };
-    let (keepaspect, panscan) = match m.to_bytes() {
-        b"auto" => (true, 0.0),
-        b"cover" => (true, 1.0),
-        b"fill" => (false, 0.0),
-        _ => {
-            // Unknown mode — silently ignore (matches legacy log-and-skip).
-            return;
-        }
+    let Some((keepaspect, panscan)) = aspect_mode_options(m.to_bytes()) else {
+        return;
     };
     unsafe { set_flag(c"keepaspect", keepaspect) };
     unsafe { set_double(c"panscan", panscan) };
@@ -633,4 +726,598 @@ pub unsafe fn jfn_mpv_set_background_color_hex(hex: *const c_char) {
     }
     unsafe { set_str(c"background-color", h) };
     *last = Some(h.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use recorder::{command, double, flag, string};
+    use std::ptr;
+
+    fn ops() -> Vec<recorder::Op> {
+        recorder::taken()
+    }
+
+    fn load_options(start_secs: f64, audio_track: i64, sub_track: i64) -> JfnMpvLoadOptions {
+        JfnMpvLoadOptions {
+            start_secs,
+            video_track: 1,
+            audio_track,
+            sub_track,
+            external_audio_url: ptr::null(),
+            external_sub_url: ptr::null(),
+            is_infinite_stream: false,
+        }
+    }
+
+    // =====================================================================
+    // Generic property writes and commands: the guards, since the payload
+    // needs a live core to go anywhere.
+    // =====================================================================
+
+    /// Every entry point is reachable before `jfn_mpv_handle_init` and after
+    /// terminate; the null-handle guard is what keeps that from being a
+    /// null-pointer call into libmpv. (The recorder taps the helper layer
+    /// above these four, so a direct call is expected to log nothing.)
+    #[test]
+    fn a_flag_write_without_a_handle_or_with_a_null_name_reaches_libmpv_never() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_property_flag_async(c"pause".as_ptr(), true) };
+        unsafe { jfn_mpv_set_property_flag_async(ptr::null(), true) };
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn a_double_write_without_a_handle_or_with_a_null_name_reaches_libmpv_never() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_property_double_async(c"speed".as_ptr(), 1.5) };
+        unsafe { jfn_mpv_set_property_double_async(ptr::null(), 1.5) };
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn an_int_write_without_a_handle_or_with_a_null_name_reaches_libmpv_never() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_property_int_async(c"chapter".as_ptr(), 3) };
+        unsafe { jfn_mpv_set_property_int_async(ptr::null(), 3) };
+        assert!(ops().is_empty());
+    }
+
+    /// A string write needs both halves; a null value must not reach libmpv
+    /// as an empty string, which is a legal value there.
+    #[test]
+    fn a_string_write_needs_both_a_name_and_a_value() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_property_string_async(c"aid".as_ptr(), c"2".as_ptr()) };
+        unsafe { jfn_mpv_set_property_string_async(ptr::null(), c"2".as_ptr()) };
+        unsafe { jfn_mpv_set_property_string_async(c"aid".as_ptr(), ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    /// The wrapper appends the NULL terminator libmpv wants, so an argv that
+    /// already holds one would truncate the command; it is dropped instead.
+    #[test]
+    fn a_command_with_no_arguments_or_a_null_entry_is_refused() {
+        let _g = recorder::start();
+        let argv: Vec<*const c_char> = vec![c"stop".as_ptr()];
+        unsafe { jfn_mpv_command_async(argv.as_ptr(), argv.len()) };
+        unsafe { jfn_mpv_command_async(argv.as_ptr(), 0) };
+        unsafe { jfn_mpv_command_async(ptr::null(), 1) };
+        let holey: Vec<*const c_char> = vec![c"seek".as_ptr(), ptr::null()];
+        unsafe { jfn_mpv_command_async(holey.as_ptr(), holey.len()) };
+        assert!(ops().is_empty());
+    }
+
+    /// libmpv's own "invalid parameter"; the caller cannot tell a missing
+    /// handle from a bad argument, and does not need to.
+    #[test]
+    fn reading_an_int_property_without_a_handle_reports_invalid_parameter() {
+        let mut out: i64 = 7;
+        assert_eq!(
+            unsafe { jfn_mpv_get_property_int(c"chapter".as_ptr(), &mut out) },
+            -4
+        );
+        assert_eq!(out, 7, "the out parameter must be left alone");
+    }
+
+    #[test]
+    fn reading_an_int_property_into_a_null_out_or_from_a_null_name_is_refused() {
+        assert_eq!(
+            unsafe { jfn_mpv_get_property_int(c"chapter".as_ptr(), ptr::null_mut()) },
+            -4
+        );
+        let mut out: i64 = 0;
+        assert_eq!(
+            unsafe { jfn_mpv_get_property_int(ptr::null(), &mut out) },
+            -4
+        );
+    }
+
+    #[test]
+    fn reading_a_string_property_without_a_handle_returns_null() {
+        assert!(unsafe { jfn_mpv_get_property_string(c"mpv-version".as_ptr()) }.is_null());
+        assert!(unsafe { jfn_mpv_get_property_string(ptr::null()) }.is_null());
+    }
+
+    /// The string handed back is Rust-allocated, so freeing it has to pair
+    /// with `CString::from_raw` and not with libmpv's `mpv_free`.
+    #[test]
+    fn freeing_a_string_accepts_null_and_a_rust_allocated_pointer() {
+        unsafe { jfn_mpv_free_string(ptr::null_mut()) };
+        let owned = CString::new("mpv 0.40.0").expect("cstring").into_raw();
+        unsafe { jfn_mpv_free_string(owned) };
+    }
+
+    // =====================================================================
+    // Event drain
+    // =====================================================================
+
+    #[test]
+    fn waiting_for_an_event_without_a_handle_returns_null_at_once() {
+        assert!(jfn_mpv_wait_event(0.0).is_null());
+        assert!(jfn_mpv_wait_event(10.0).is_null(), "must not park");
+    }
+
+    /// A missing handle and an idle mpv are the same thing to the caller.
+    #[test]
+    fn the_owned_event_drain_collapses_a_missing_handle_to_none() {
+        assert_eq!(wait_event_owned(0.0), WaitEvent::None);
+    }
+
+    #[test]
+    fn waking_the_event_loop_without_a_handle_does_nothing() {
+        jfn_mpv_wakeup();
+    }
+
+    #[test]
+    fn installing_and_clearing_a_wakeup_callback_without_a_handle_does_nothing() {
+        unsafe extern "C" fn noop(_: *mut std::ffi::c_void) {}
+        unsafe { jfn_mpv_set_wakeup_callback(noop, ptr::null_mut()) };
+        jfn_mpv_clear_wakeup_callback();
+    }
+
+    // =====================================================================
+    // Player API — the property write or command each entry point produces
+    // =====================================================================
+
+    #[test]
+    fn play_and_pause_write_the_pause_flag() {
+        let _g = recorder::start();
+        jfn_mpv_play();
+        assert_eq!(ops(), [flag("pause", false)]);
+        jfn_mpv_pause();
+        assert_eq!(ops(), [flag("pause", true)]);
+    }
+
+    /// `cycle pause` and not a read-then-write: mpv is the authority on the
+    /// current state, so it does the flipping.
+    #[test]
+    fn toggling_pause_asks_mpv_to_cycle_the_property() {
+        let _g = recorder::start();
+        jfn_mpv_toggle_pause();
+        assert_eq!(ops(), [command(&["cycle", "pause"])]);
+    }
+
+    #[test]
+    fn stop_sends_mpvs_stop_command() {
+        let _g = recorder::start();
+        jfn_mpv_stop();
+        assert_eq!(ops(), [command(&["stop"])]);
+    }
+
+    #[test]
+    fn an_absolute_seek_carries_the_position_as_mpv_spells_it() {
+        let _g = recorder::start();
+        jfn_mpv_seek_absolute(12.5);
+        assert_eq!(ops(), [command(&["seek", "12.5", "absolute"])]);
+        // A whole number loses the fraction, which mpv accepts either way.
+        jfn_mpv_seek_absolute(90.0);
+        assert_eq!(ops(), [command(&["seek", "90", "absolute"])]);
+        // Rewind past the start is mpv's problem to clamp, not ours.
+        jfn_mpv_seek_absolute(-3.0);
+        assert_eq!(ops(), [command(&["seek", "-3", "absolute"])]);
+    }
+
+    #[test]
+    fn volume_speed_and_the_two_delays_are_double_properties() {
+        let _g = recorder::start();
+        jfn_mpv_set_volume(85.0);
+        assert_eq!(ops(), [double("volume", 85.0)]);
+        jfn_mpv_set_speed(1.25);
+        assert_eq!(ops(), [double("speed", 1.25)]);
+        jfn_mpv_set_audio_delay(-0.125);
+        assert_eq!(ops(), [double("audio-delay", -0.125)]);
+        jfn_mpv_set_subtitle_delay(0.5);
+        assert_eq!(ops(), [double("sub-delay", 0.5)]);
+    }
+
+    #[test]
+    fn muting_writes_the_mute_flag() {
+        let _g = recorder::start();
+        jfn_mpv_set_muted(true);
+        assert_eq!(ops(), [flag("mute", true)]);
+        jfn_mpv_set_muted(false);
+        assert_eq!(ops(), [flag("mute", false)]);
+    }
+
+    /// `start` is an option mpv applies to the next loaded file, so setting
+    /// it is not a seek of the current one.
+    #[test]
+    fn the_start_position_is_a_double_property_not_a_seek() {
+        let _g = recorder::start();
+        jfn_mpv_set_start_position(300.0);
+        assert_eq!(ops(), [double("start", 300.0)]);
+    }
+
+    /// mpv stamps the point from its own pts; a time sampled in the UI lags
+    /// the core and would disarm the loop on the spot.
+    #[test]
+    fn the_ab_loop_step_is_mpvs_own_command_with_its_osd_suppressed() {
+        let _g = recorder::start();
+        jfn_mpv_ab_loop_cycle();
+        assert_eq!(ops(), [command(&["no-osd", "ab-loop"])]);
+    }
+
+    /// A first, deliberately: both writes are observed separately, and
+    /// `(no, b)` already draws as "no loop" where `(a, no)` would flash the
+    /// A-only state.
+    #[test]
+    fn clearing_the_ab_loop_writes_the_sentinel_to_a_before_b() {
+        let _g = recorder::start();
+        jfn_mpv_clear_ab_loop();
+        assert_eq!(
+            ops(),
+            [string("ab-loop-a", "no"), string("ab-loop-b", "no")]
+        );
+    }
+
+    /// Track id 0 is the "disabled" sentinel and has to reach mpv as its
+    /// string `no`, not as the number zero (which is a real track id there).
+    #[test]
+    fn track_zero_becomes_mpvs_no_and_every_other_id_its_number() {
+        assert_eq!(track_to_mpv_str(0).to_bytes(), b"no");
+        assert_eq!(track_to_mpv_str(1).to_bytes(), b"1");
+        assert_eq!(track_to_mpv_str(17).to_bytes(), b"17");
+    }
+
+    #[test]
+    fn selecting_an_audio_track_writes_aid() {
+        let _g = recorder::start();
+        jfn_mpv_set_audio_track(2);
+        assert_eq!(ops(), [string("aid", "2")]);
+        jfn_mpv_set_audio_track(0);
+        assert_eq!(ops(), [string("aid", "no")]);
+    }
+
+    #[test]
+    fn selecting_a_subtitle_track_writes_sid() {
+        let _g = recorder::start();
+        jfn_mpv_set_subtitle_track(3);
+        assert_eq!(ops(), [string("sid", "3")]);
+        jfn_mpv_set_subtitle_track(0);
+        assert_eq!(ops(), [string("sid", "no")]);
+    }
+
+    #[test]
+    fn adding_an_external_subtitle_selects_it_and_a_null_url_is_refused() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_sub_add(c"http://host/a.srt".as_ptr()) };
+        assert_eq!(
+            ops(),
+            [command(&["sub-add", "http://host/a.srt", "select"])]
+        );
+        unsafe { jfn_mpv_sub_add(ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn adding_an_external_audio_track_selects_it_and_a_null_url_is_refused() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_audio_add(c"http://host/a.mka".as_ptr()) };
+        assert_eq!(
+            ops(),
+            [command(&["audio-add", "http://host/a.mka", "select"])]
+        );
+        unsafe { jfn_mpv_audio_add(ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    // =====================================================================
+    // LoadFile and the deferred track selection
+    // =====================================================================
+
+    /// Loaded paused with no track selectors: with `track-auto-selection=no`
+    /// mpv drops aid/vid/sid out of loadfile options, so they are written
+    /// afterwards instead.
+    #[test]
+    fn load_file_asks_for_a_paused_replace_at_the_start_position() {
+        let _g = recorder::start();
+        let path = CString::new("http://host/a.mkv").expect("cstring");
+        let opts = load_options(12.5, 2, 3);
+        unsafe { jfn_mpv_load_file(path.as_ptr(), &opts) };
+        assert_eq!(
+            ops(),
+            [command(&[
+                "loadfile",
+                "http://host/a.mkv",
+                "replace",
+                "-1",
+                "start=12.5,pause=yes",
+            ])]
+        );
+    }
+
+    #[test]
+    fn load_file_needs_both_a_path_and_an_options_struct() {
+        let _g = recorder::start();
+        let path = CString::new("http://host/a.mkv").expect("cstring");
+        let opts = load_options(0.0, 1, 1);
+        unsafe { jfn_mpv_load_file(ptr::null(), &opts) };
+        unsafe { jfn_mpv_load_file(path.as_ptr(), ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn the_load_option_string_starts_at_the_requested_second_and_pauses() {
+        assert_eq!(load_file_options(0.0, false), "start=0,pause=yes");
+        assert_eq!(load_file_options(61.25, false), "start=61.25,pause=yes");
+        assert_eq!(
+            load_file_options(0.0, true),
+            "start=0,pause=yes,track-auto-selection=yes"
+        );
+    }
+
+    /// The one case jellyfin-web cannot answer: an unprobed live stream with
+    /// no chosen track and no external file.
+    #[test]
+    fn only_an_unprobed_live_stream_hands_the_audio_choice_back_to_mpv() {
+        assert!(should_defer_audio(true, 0, ""));
+        // A chosen track, an external file, or a normal file: ours to pick.
+        assert!(!should_defer_audio(true, 2, ""));
+        assert!(!should_defer_audio(true, 0, "http://host/a.mka"));
+        assert!(!should_defer_audio(false, 0, ""));
+    }
+
+    /// The writes are FIFO on mpv's core thread, so `pause=false` last is
+    /// what makes playback begin only once the track switches have landed.
+    #[test]
+    fn the_pending_tracks_are_written_before_playback_starts() {
+        let _g = recorder::start();
+        let path = CString::new("http://host/a.mkv").expect("cstring");
+        let opts = load_options(0.0, 2, 3);
+        unsafe { jfn_mpv_load_file(path.as_ptr(), &opts) };
+        ops();
+
+        jfn_mpv_apply_pending_track_selection_and_play();
+        assert_eq!(
+            ops(),
+            [
+                string("vid", "1"),
+                string("aid", "2"),
+                string("sid", "3"),
+                flag("pause", false),
+            ]
+        );
+    }
+
+    /// FILE_LOADED can arrive for a file we did not load (a redirect, a
+    /// leftover from the previous item); applying stale ids then would switch
+    /// tracks under the running one.
+    #[test]
+    fn pending_tracks_are_applied_once_and_only_after_a_load() {
+        let _g = recorder::start();
+        // Consume whatever state is pending, then assert the second run is
+        // silent.
+        jfn_mpv_apply_pending_track_selection_and_play();
+        ops();
+        jfn_mpv_apply_pending_track_selection_and_play();
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn external_audio_and_subtitle_files_are_added_after_the_track_writes() {
+        let _g = recorder::start();
+        let path = CString::new("http://host/a.mkv").expect("cstring");
+        let audio = CString::new("http://host/a.mka").expect("cstring");
+        let sub = CString::new("http://host/a.srt").expect("cstring");
+        let opts = JfnMpvLoadOptions {
+            start_secs: 0.0,
+            video_track: 1,
+            audio_track: 0,
+            sub_track: 0,
+            external_audio_url: audio.as_ptr(),
+            external_sub_url: sub.as_ptr(),
+            is_infinite_stream: false,
+        };
+        unsafe { jfn_mpv_load_file(path.as_ptr(), &opts) };
+        ops();
+
+        jfn_mpv_apply_pending_track_selection_and_play();
+        assert_eq!(
+            ops(),
+            [
+                string("vid", "1"),
+                string("aid", "no"),
+                string("sid", "no"),
+                command(&["audio-add", "http://host/a.mka", "select"]),
+                command(&["sub-add", "http://host/a.srt", "select"]),
+                flag("pause", false),
+            ]
+        );
+    }
+
+    /// mpv's demuxer already picked the audio track for this one, so writing
+    /// `aid` would undo it; subtitles are still forced off.
+    #[test]
+    fn a_deferred_audio_load_skips_the_aid_write_but_still_disables_subs() {
+        let _g = recorder::start();
+        let path = CString::new("http://host/live.m3u8").expect("cstring");
+        let opts = JfnMpvLoadOptions {
+            start_secs: 0.0,
+            video_track: 1,
+            audio_track: 0,
+            sub_track: 0,
+            external_audio_url: ptr::null(),
+            external_sub_url: ptr::null(),
+            is_infinite_stream: true,
+        };
+        unsafe { jfn_mpv_load_file(path.as_ptr(), &opts) };
+        assert_eq!(
+            ops(),
+            [command(&[
+                "loadfile",
+                "http://host/live.m3u8",
+                "replace",
+                "-1",
+                "start=0,pause=yes,track-auto-selection=yes",
+            ])]
+        );
+
+        jfn_mpv_apply_pending_track_selection_and_play();
+        assert_eq!(
+            ops(),
+            [
+                string("vid", "1"),
+                string("sid", "no"),
+                flag("pause", false)
+            ]
+        );
+    }
+
+    // =====================================================================
+    // Aspect mode
+    // =====================================================================
+
+    #[test]
+    fn each_aspect_mode_maps_to_a_keepaspect_and_panscan_pair() {
+        assert_eq!(aspect_mode_options(b"auto"), Some((true, 0.0)));
+        assert_eq!(aspect_mode_options(b"cover"), Some((true, 1.0)));
+        assert_eq!(aspect_mode_options(b"fill"), Some((false, 0.0)));
+    }
+
+    #[test]
+    fn an_unknown_aspect_mode_writes_nothing_at_all() {
+        let _g = recorder::start();
+        assert_eq!(aspect_mode_options(b""), None);
+        assert_eq!(aspect_mode_options(b"Cover"), None);
+        assert_eq!(aspect_mode_options(b"stretch"), None);
+        unsafe { jfn_mpv_set_aspect_mode(c"stretch".as_ptr()) };
+        unsafe { jfn_mpv_set_aspect_mode(ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    #[test]
+    fn setting_the_aspect_mode_writes_both_properties() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_aspect_mode(c"cover".as_ptr()) };
+        assert_eq!(ops(), [flag("keepaspect", true), double("panscan", 1.0)]);
+        unsafe { jfn_mpv_set_aspect_mode(c"fill".as_ptr()) };
+        assert_eq!(ops(), [flag("keepaspect", false), double("panscan", 0.0)]);
+    }
+
+    // =====================================================================
+    // Window and display
+    // =====================================================================
+
+    #[test]
+    fn fullscreen_is_a_flag_and_toggling_it_cycles_the_property() {
+        let _g = recorder::start();
+        jfn_mpv_set_fullscreen(true);
+        assert_eq!(ops(), [flag("fullscreen", true)]);
+        jfn_mpv_toggle_fullscreen();
+        assert_eq!(ops(), [command(&["cycle", "fullscreen"])]);
+    }
+
+    #[test]
+    fn minimising_and_maximising_write_their_window_flags() {
+        let _g = recorder::start();
+        jfn_mpv_set_window_minimized(true);
+        assert_eq!(ops(), [flag("window-minimized", true)]);
+        jfn_mpv_set_window_maximized(false);
+        assert_eq!(ops(), [flag("window-maximized", false)]);
+    }
+
+    #[test]
+    fn forcing_the_window_position_writes_its_flag() {
+        let _g = recorder::start();
+        jfn_mpv_set_force_window_position(true);
+        assert_eq!(ops(), [flag("force-window-position", true)]);
+    }
+
+    #[test]
+    fn the_geometry_string_is_passed_through_and_a_null_one_is_refused() {
+        let _g = recorder::start();
+        unsafe { jfn_mpv_set_geometry(c"1280x720+10+20".as_ptr()) };
+        assert_eq!(ops(), [string("geometry", "1280x720+10+20")]);
+        unsafe { jfn_mpv_set_geometry(ptr::null()) };
+        assert!(ops().is_empty());
+    }
+
+    // =====================================================================
+    // Background colour
+    // =====================================================================
+
+    #[test]
+    fn a_background_colour_reply_is_parsed_and_anything_else_is_ignored() {
+        let parsed = background_color_from_reply(&crate::PropertyValue::String("#010203".into()));
+        assert_eq!(parsed, Some(crate::color::parse("#010203")));
+        assert_ne!(parsed, Some(0), "a real colour must not parse as black");
+
+        for other in [
+            crate::PropertyValue::None,
+            crate::PropertyValue::Int(1),
+            crate::PropertyValue::Flag(true),
+            crate::PropertyValue::Double(1.0),
+        ] {
+            assert_eq!(background_color_from_reply(&other), None, "{other:?}");
+        }
+    }
+
+    /// mpv keeps `background-color` in the very option group `vo_gpu_next`
+    /// watches, so an identical re-write costs a walk of the whole shader
+    /// chain for nothing.
+    #[test]
+    fn the_same_background_colour_is_not_written_twice_in_a_row() {
+        let _g = recorder::start();
+        let first = c"#FF102030";
+        let second = c"#FF405060";
+        unsafe { jfn_mpv_set_background_color_hex(first.as_ptr()) };
+        unsafe { jfn_mpv_set_background_color_hex(first.as_ptr()) };
+        unsafe { jfn_mpv_set_background_color_hex(second.as_ptr()) };
+        unsafe { jfn_mpv_set_background_color_hex(first.as_ptr()) };
+        assert_eq!(
+            ops(),
+            [
+                string("background-color", "#FF102030"),
+                string("background-color", "#FF405060"),
+                string("background-color", "#FF102030"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_null_background_colour_is_refused_and_leaves_the_memo_alone() {
+        let _g = recorder::start();
+        let colour = c"#FF0A0B0C";
+        unsafe { jfn_mpv_set_background_color_hex(colour.as_ptr()) };
+        ops();
+        unsafe { jfn_mpv_set_background_color_hex(ptr::null()) };
+        assert!(ops().is_empty());
+        unsafe { jfn_mpv_set_background_color_hex(colour.as_ptr()) };
+        assert!(ops().is_empty(), "the memo still holds the last colour");
+    }
+
+    /// Without a handle there is nothing to read, and the memo of what mpv is
+    /// running must survive: clearing it here would make the next write of
+    /// the same colour a needless round trip.
+    #[test]
+    fn requesting_the_background_colour_without_a_handle_forgets_nothing() {
+        let _g = recorder::start();
+        let colour = c"#FF0D0E0F";
+        unsafe { jfn_mpv_set_background_color_hex(colour.as_ptr()) };
+        assert_eq!(ops(), [string("background-color", "#FF0D0E0F")]);
+        jfn_mpv_request_background_color();
+        unsafe { jfn_mpv_set_background_color_hex(colour.as_ptr()) };
+        assert!(ops().is_empty());
+    }
 }

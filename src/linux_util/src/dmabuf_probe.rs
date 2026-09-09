@@ -84,13 +84,7 @@ pub unsafe fn jfn_wl_dmabuf_probe(
     ozone_platform: *const c_char,
     wayland_egl_dpy: *mut c_void,
 ) -> bool {
-    let ozone = if ozone_platform.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(ozone_platform) }
-            .to_str()
-            .unwrap_or_default()
-    };
+    let ozone = unsafe { ozone_str(ozone_platform) };
     match probe(ozone, wayland_egl_dpy) {
         Ok(b) => b,
         Err(msg) => {
@@ -98,6 +92,23 @@ pub unsafe fn jfn_wl_dmabuf_probe(
             false
         }
     }
+}
+
+/// The `ozone_platform` argument as a `&str`. A null pointer and bytes that
+/// are not UTF-8 both read as empty, which selects the X11 branch of
+/// [`acquire_display`] — the safe choice, since only the literal `"wayland"`
+/// may consume the caller's `wayland_egl_dpy`.
+///
+/// # Safety
+/// `ozone_platform` must be null or point at a NUL-terminated string that
+/// outlives the returned borrow.
+unsafe fn ozone_str<'a>(ozone_platform: *const c_char) -> &'a str {
+    if ozone_platform.is_null() {
+        return "";
+    }
+    unsafe { CStr::from_ptr(ozone_platform) }
+        .to_str()
+        .unwrap_or_default()
 }
 
 fn probe(ozone: &str, wayland_egl_dpy: *mut c_void) -> Result<bool, String> {
@@ -425,13 +436,7 @@ pub unsafe fn cef_render_node(
     ozone_platform: *const c_char,
     wayland_egl_dpy: *mut c_void,
 ) -> Option<(i64, i64)> {
-    let ozone = if ozone_platform.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(ozone_platform) }
-            .to_str()
-            .unwrap_or_default()
-    };
+    let ozone = unsafe { ozone_str(ozone_platform) };
     match render_node(ozone, wayland_egl_dpy) {
         Ok(node) => node,
         Err(msg) => {
@@ -475,4 +480,35 @@ fn get_gl<T>(egl: &egl::Egl, name: &str) -> Result<T, String> {
     egl.get_proc_address(name)
         .map(|p| unsafe { std::mem::transmute_copy::<extern "system" fn(), T>(&p) })
         .ok_or_else(|| format!("missing {}", name))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    // Only the argument decoding is unit-testable here: everything below
+    // `probe` needs a live EGL/GBM stack and a DRM render node.
+
+    #[test]
+    fn a_null_ozone_platform_reads_as_the_empty_string() {
+        assert_eq!(unsafe { ozone_str(ptr::null()) }, "");
+    }
+
+    #[test]
+    fn an_ozone_platform_string_is_read_back_verbatim() {
+        for name in ["wayland", "x11", ""] {
+            let c = CString::new(name).expect("no interior NUL");
+            assert_eq!(unsafe { ozone_str(c.as_ptr()) }, name);
+        }
+    }
+
+    #[test]
+    fn a_non_utf8_ozone_platform_reads_as_the_empty_string() {
+        // Never as "wayland": a garbled argument must not make the probe use
+        // the caller's Wayland display pointer.
+        let c = CString::new(vec![0xffu8, 0xfe, b'x']).expect("no interior NUL");
+        assert_eq!(unsafe { ozone_str(c.as_ptr()) }, "");
+    }
 }

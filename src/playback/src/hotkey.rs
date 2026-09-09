@@ -53,3 +53,106 @@ pub fn jfn_hotkey_classify_keydown(windows_key_code: i32, modifiers: u32) -> u8 
     }
     HotkeyAction::None as u8
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::test_support;
+
+    const NO_MODIFIERS: u32 = 0;
+    const VK_A: i32 = 0x41;
+    const VK_ESCAPE: i32 = 0x1B;
+
+    /// Runs `body` with a coordinator whose snapshot says a video is
+    /// playing, then takes it back out again.
+    fn with_video_player(body: impl FnOnce()) {
+        let coord = test_support::video_playing_coordinator();
+        *coord_slot().lock() = Some(coord);
+        body();
+        let taken = coord_slot().lock().take();
+        if let Some(mut c) = taken {
+            c.stop();
+        }
+    }
+
+    #[test]
+    fn alt_f4_asks_for_shutdown_whatever_is_playing() {
+        let _g = test_support::lock();
+        assert_eq!(
+            jfn_hotkey_classify_keydown(VK_F4, EVENTFLAG_ALT_DOWN),
+            HotkeyAction::Shutdown as u8
+        );
+        with_video_player(|| {
+            assert_eq!(
+                jfn_hotkey_classify_keydown(VK_F4, EVENTFLAG_ALT_DOWN),
+                HotkeyAction::Shutdown as u8
+            );
+        });
+    }
+
+    #[test]
+    fn f4_without_alt_is_forwarded_to_the_browser() {
+        let _g = test_support::lock();
+        assert_eq!(
+            jfn_hotkey_classify_keydown(VK_F4, NO_MODIFIERS),
+            HotkeyAction::None as u8
+        );
+    }
+
+    #[test]
+    fn f_and_f11_toggle_fullscreen_while_a_video_player_is_active() {
+        let _g = test_support::lock();
+        with_video_player(|| {
+            for key in [VK_F, VK_F11] {
+                assert_eq!(
+                    jfn_hotkey_classify_keydown(key, NO_MODIFIERS),
+                    HotkeyAction::ToggleFullscreen as u8
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn fullscreen_keys_are_forwarded_when_nothing_is_playing() {
+        let _g = test_support::lock();
+        // No coordinator at all: the classifier must not assume one.
+        let saved = coord_slot().lock().take();
+        for key in [VK_F, VK_F11] {
+            assert_eq!(
+                jfn_hotkey_classify_keydown(key, NO_MODIFIERS),
+                HotkeyAction::None as u8
+            );
+        }
+        *coord_slot().lock() = saved;
+    }
+
+    #[test]
+    fn an_unbound_key_is_always_forwarded() {
+        let _g = test_support::lock();
+        with_video_player(|| {
+            for key in [VK_A, VK_ESCAPE] {
+                assert_eq!(
+                    jfn_hotkey_classify_keydown(key, NO_MODIFIERS),
+                    HotkeyAction::None as u8
+                );
+                assert_eq!(
+                    jfn_hotkey_classify_keydown(key, EVENTFLAG_ALT_DOWN),
+                    HotkeyAction::None as u8
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_modifier_does_not_stop_the_fullscreen_keys() {
+        let _g = test_support::lock();
+        with_video_player(|| {
+            assert_eq!(
+                jfn_hotkey_classify_keydown(VK_F11, EVENTFLAG_ALT_DOWN),
+                HotkeyAction::ToggleFullscreen as u8
+            );
+        });
+    }
+}

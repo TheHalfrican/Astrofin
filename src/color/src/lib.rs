@@ -165,6 +165,8 @@ pub unsafe fn jfn_mpv_parse_color(s: *const c_char) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     fn cef(s: &str) -> u32 {
@@ -287,5 +289,37 @@ mod tests {
     fn mpv_no_slash_is_error() {
         assert_eq!(mpv("garbage"), 0);
         assert_eq!(mpv("123"), 0);
+    }
+
+    // ---- C entry points ---------------------------------------------
+
+    #[test]
+    fn cef_c_entry_point_parses_a_nul_terminated_value() {
+        let s = std::ffi::CString::new("#abcdef").unwrap();
+        assert_eq!(unsafe { jfn_cef_parse_color(s.as_ptr()) }, 0xAB_CDEF);
+        let short = std::ffi::CString::new("#f0f").unwrap();
+        assert_eq!(unsafe { jfn_cef_parse_color(short.as_ptr()) }, 0xFF_00FF);
+    }
+
+    #[test]
+    fn cef_c_entry_point_treats_null_and_empty_as_black() {
+        assert_eq!(unsafe { jfn_cef_parse_color(std::ptr::null()) }, 0);
+        let empty = std::ffi::CString::new("").unwrap();
+        assert_eq!(unsafe { jfn_cef_parse_color(empty.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn mpv_c_entry_point_parses_both_mpv_forms() {
+        let hex = std::ffi::CString::new("#80FF00FF").unwrap();
+        assert_eq!(unsafe { jfn_mpv_parse_color(hex.as_ptr()) }, 0xFF_00FF);
+        let slashes = std::ffi::CString::new("1/0/0").unwrap();
+        assert_eq!(unsafe { jfn_mpv_parse_color(slashes.as_ptr()) }, 0xFF_0000);
+    }
+
+    #[test]
+    fn mpv_c_entry_point_treats_null_and_empty_as_black() {
+        assert_eq!(unsafe { jfn_mpv_parse_color(std::ptr::null()) }, 0);
+        let empty = std::ffi::CString::new("").unwrap();
+        assert_eq!(unsafe { jfn_mpv_parse_color(empty.as_ptr()) }, 0);
     }
 }

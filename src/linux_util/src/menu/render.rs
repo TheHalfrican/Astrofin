@@ -342,10 +342,239 @@ fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Pat
 /// Writes premultiplied BGRA (wl_shm ARGB8888 little-endian, X11 ARGB32), and
 /// copies `min(dst.len(), pm.width() * pm.height() * 4)` bytes.
 pub fn blit_bgra(pm: &Pixmap, dst: &mut [u8]) {
-    for (out, src) in dst.chunks_exact_mut(4).zip(pm.data().chunks_exact(4)) {
+    let (out_px, _) = dst.as_chunks_mut::<4>();
+    let (src_px, _) = pm.data().as_chunks::<4>();
+    for (out, src) in out_px.iter_mut().zip(src_px) {
         out[0] = src[2];
         out[1] = src[1];
         out[2] = src[0];
         out[3] = src[3];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    fn item(label: &str) -> MenuItem {
+        MenuItem {
+            id: 1,
+            label: label.into(),
+            enabled: true,
+            separator: false,
+        }
+    }
+
+    fn disabled(label: &str) -> MenuItem {
+        MenuItem {
+            id: 2,
+            label: label.into(),
+            enabled: false,
+            separator: false,
+        }
+    }
+
+    fn separator() -> MenuItem {
+        MenuItem {
+            id: 0,
+            label: String::new(),
+            enabled: false,
+            separator: true,
+        }
+    }
+
+    fn row(item: usize, y: i32, h: i32, separator: bool, enabled: bool) -> Row {
+        Row {
+            item,
+            y,
+            h,
+            separator,
+            enabled,
+        }
+    }
+
+    /// 100x60: a selectable row, a separator, a disabled row, then a padding
+    /// band with no row at all.
+    fn fixture() -> Layout {
+        Layout::for_test(
+            100,
+            60,
+            vec![
+                row(0, 0, 20, false, true),
+                row(1, 20, 10, true, false),
+                row(2, 30, 20, false, false),
+            ],
+            vec![0],
+        )
+    }
+
+    #[test]
+    fn contains_covers_the_menu_rectangle_and_nothing_outside_it() {
+        let l = fixture();
+        assert!(l.contains(0, 0));
+        assert!(l.contains(99, 59));
+        assert!(!l.contains(100, 59), "right edge is exclusive");
+        assert!(!l.contains(99, 60), "bottom edge is exclusive");
+        assert!(!l.contains(-1, 0));
+        assert!(!l.contains(0, -1));
+    }
+
+    #[test]
+    fn row_at_finds_the_row_under_the_pointer() {
+        let l = fixture();
+        assert_eq!(l.row_at(10, 0), Some(0));
+        assert_eq!(l.row_at(10, 19), Some(0));
+    }
+
+    #[test]
+    fn row_at_skips_separators_disabled_rows_and_the_padding_band() {
+        let l = fixture();
+        assert_eq!(l.row_at(10, 25), None, "separator");
+        assert_eq!(l.row_at(10, 35), None, "disabled row");
+        assert_eq!(l.row_at(10, 55), None, "padding below the last row");
+    }
+
+    #[test]
+    fn row_at_rejects_points_outside_the_menu() {
+        let l = fixture();
+        assert_eq!(l.row_at(-1, 10), None);
+        assert_eq!(l.row_at(100, 10), None);
+        assert_eq!(l.row_at(10, -1), None);
+        assert_eq!(l.row_at(10, 60), None);
+    }
+
+    #[test]
+    fn step_walks_the_selectable_rows_and_wraps_around() {
+        let l = Layout::for_test(100, 100, Vec::new(), vec![0, 2, 3]);
+        assert_eq!(l.step(0, true), 2);
+        assert_eq!(l.step(2, true), 3);
+        assert_eq!(l.step(3, true), 0, "wraps forward");
+        assert_eq!(l.step(3, false), 2);
+        assert_eq!(l.step(0, false), 3, "wraps backward");
+    }
+
+    #[test]
+    fn step_enters_the_list_at_the_end_it_is_walking_towards() {
+        let l = Layout::for_test(100, 100, Vec::new(), vec![0, 2, 3]);
+        // -1 is "nothing highlighted", the state a keyboard-opened menu starts
+        // in; a row that is no longer selectable behaves the same way.
+        assert_eq!(l.step(-1, true), 0);
+        assert_eq!(l.step(-1, false), 3);
+        assert_eq!(l.step(1, true), 0);
+        assert_eq!(l.step(1, false), 3);
+    }
+
+    #[test]
+    fn step_reports_no_row_when_nothing_is_selectable() {
+        let l = Layout::for_test(100, 100, Vec::new(), Vec::new());
+        assert_eq!(l.step(-1, true), -1);
+        assert_eq!(l.step(0, false), -1);
+    }
+
+    #[test]
+    fn layout_stacks_the_rows_between_equal_pads_and_keeps_a_minimum_width() {
+        let mut fonts = Fonts::new();
+        let items = vec![item("One"), separator(), disabled("Two")];
+        let l = layout(&mut fonts, &items, 1.0);
+
+        let geometry: Vec<(i32, i32, bool)> =
+            l.rows.iter().map(|r| (r.y, r.h, r.separator)).collect();
+        assert_eq!(
+            geometry,
+            vec![(4, 28, false), (32, 9, true), (41, 28, false)]
+        );
+        assert_eq!(l.height, 4 + 28 + 9 + 28 + 4);
+        assert!(
+            l.width >= 160,
+            "narrow labels still fill MIN_W: {}",
+            l.width
+        );
+        // Separators and disabled rows are never keyboard-reachable.
+        assert_eq!(l.selectable, vec![0]);
+    }
+
+    #[test]
+    fn layout_multiplies_every_metric_by_the_display_scale() {
+        let mut fonts = Fonts::new();
+        let items = vec![item("One"), separator(), item("Two")];
+        let l = layout(&mut fonts, &items, 2.0);
+
+        let geometry: Vec<(i32, i32)> = l.rows.iter().map(|r| (r.y, r.h)).collect();
+        assert_eq!(geometry, vec![(8, 56), (64, 18), (82, 56)]);
+        assert_eq!(l.height, 8 + 56 + 18 + 56 + 8);
+        assert!(l.width >= 320, "{}", l.width);
+        assert_eq!(l.selectable, vec![0, 2]);
+    }
+
+    #[test]
+    fn a_non_positive_scale_is_treated_as_one() {
+        let mut fonts = Fonts::new();
+        let items = vec![item("One"), item("Two")];
+        let one = layout(&mut fonts, &items, 1.0);
+        for scale in [0.0, -2.0] {
+            let l = layout(&mut fonts, &items, scale);
+            assert_eq!((l.width, l.height), (one.width, one.height), "{scale}");
+        }
+    }
+
+    #[test]
+    fn an_empty_menu_is_just_the_two_pads() {
+        let mut fonts = Fonts::default();
+        let l = layout(&mut fonts, &[], 1.0);
+        assert!(l.rows.is_empty());
+        assert!(l.selectable.is_empty());
+        assert_eq!(l.height, 8);
+        assert!(l.width >= 160);
+    }
+
+    #[test]
+    fn paint_fills_a_pixmap_the_size_of_the_layout() {
+        let mut fonts = Fonts::new();
+        let items = vec![item("One"), separator(), item("Two")];
+        let l = layout(&mut fonts, &items, 1.0);
+        let pm = paint(&mut fonts, &l, &items, 0).expect("a pixmap");
+        assert_eq!(pm.width(), l.width as u32);
+        assert_eq!(pm.height(), l.height as u32);
+        // The rounded background covers the interior: no transparent hole.
+        let middle = pm.pixels()[(l.height as usize / 2) * l.width as usize + l.width as usize / 2];
+        assert_eq!(middle.alpha(), 255);
+    }
+
+    #[test]
+    fn a_zero_sized_layout_paints_nothing() {
+        let mut fonts = Fonts::new();
+        let l = Layout::for_test(0, 0, Vec::new(), Vec::new());
+        assert!(paint(&mut fonts, &l, &[], -1).is_none());
+    }
+
+    #[test]
+    fn blit_bgra_swaps_red_and_blue_and_keeps_alpha() {
+        let mut pm = Pixmap::new(2, 1).expect("a pixmap");
+        let pixels = pm.pixels_mut();
+        pixels[0] = tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 255).expect("a color");
+        pixels[1] = tiny_skia::PremultipliedColorU8::from_rgba(1, 2, 3, 255).expect("a color");
+        let mut dst = [0u8; 8];
+        blit_bgra(&pm, &mut dst);
+        assert_eq!(dst, [30, 20, 10, 255, 3, 2, 1, 255]);
+    }
+
+    #[test]
+    fn blit_bgra_copies_only_the_pixels_both_buffers_hold() {
+        let mut pm = Pixmap::new(2, 1).expect("a pixmap");
+        pm.pixels_mut()[0] =
+            tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 255).expect("a color");
+
+        // A destination shorter than the pixmap keeps its own length.
+        let mut short = [0u8; 4];
+        blit_bgra(&pm, &mut short);
+        assert_eq!(short, [30, 20, 10, 255]);
+
+        // A longer destination keeps whatever was past the last pixel.
+        let mut long = [9u8; 12];
+        blit_bgra(&pm, &mut long);
+        assert_eq!(long[0..4], [30, 20, 10, 255]);
+        assert_eq!(long[8..12], [9, 9, 9, 9]);
     }
 }

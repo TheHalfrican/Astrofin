@@ -44,6 +44,7 @@ src/jfn_cef/src/cef_string.rs  | cef_string_t marshalling; needs the CEF allocat
 src/mpv/src/sys.rs        | bindgen output for libmpv.
 src/mpv/src/handle.rs     | libmpv handle lifetime; needs a real mpv core.
 src/mpv/src/event_loop.rs | libmpv event pump; needs a real mpv core.
+src/mpv/src/probe.rs      | creates a live mpv core to read its version properties.
 
 # --- Linux/OS ABI ----------------------------------------------------------
 src/linux_util/src/egl.rs           | EGL entry points; needs a GPU driver.
@@ -61,6 +62,8 @@ src/platform_abi/src/process_other.rs | non-Unix process stub.
 
 # --- Entry points and tooling ---------------------------------------------
 src/jfn_rust/src/main.rs       | process entry point; covered by the E2E suite.
+src/jfn_rust/src/platform_install.rs | composition root; installs the real Platform backend.
+src/mpris/src/lib.rs           | MediaSink shim over the zbus sink; needs a session bus.
 src/xtask/src/main.rs          | CLI dispatch only.
 src/xtask/src/bundle_macos.rs  | drives codesign/plutil on macOS.
 src/xtask/src/platform_*.rs    | per-OS shell-outs (cmake, ninja, msbuild).

@@ -358,6 +358,8 @@ fn as_double(v: &PropertyValue) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
     use jfn_mpv::Node;
 
@@ -629,5 +631,194 @@ mod tests {
         let state = IngestState::new();
         let out = ingest(&Event::FileLoaded, &state, &ctx(1.0));
         assert!(matches!(out[0], IngestOut::Input(Input::FileLoaded)));
+    }
+
+    #[test]
+    fn a_new_state_knows_nothing_about_the_window() {
+        let state = IngestState::new();
+        assert!(!state.fullscreen());
+        assert!(!state.window_maximized());
+        assert_eq!(state.window_extent(), None);
+        assert_eq!(state.window_id(), None);
+        assert_eq!(state.display_scale(), 0.0);
+        assert_eq!(state.display_hz(), 0.0);
+    }
+
+    #[test]
+    fn the_maximized_mirror_follows_the_property_and_emits_nothing() {
+        let state = IngestState::new();
+        let out = ingest(
+            &prop(observe_id::WINDOW_MAX, PropertyValue::Flag(true)),
+            &state,
+            &ctx(1.0),
+        );
+        // The window mode reaches the coordinator through `fullscreen`; on
+        // its own, maximized is only a mirror the next fullscreen read uses.
+        assert!(out.is_empty());
+        assert!(state.window_maximized());
+        let _ = ingest(
+            &prop(observe_id::WINDOW_MAX, PropertyValue::Flag(false)),
+            &state,
+            &ctx(1.0),
+        );
+        assert!(!state.window_maximized());
+    }
+
+    #[test]
+    fn a_zero_window_id_reads_as_no_window() {
+        let state = IngestState::new();
+        let _ = ingest(
+            &prop(observe_id::WINDOW_ID, PropertyValue::Int(0)),
+            &state,
+            &ctx(1.0),
+        );
+        assert_eq!(state.window_id(), None);
+        let _ = ingest(
+            &prop(observe_id::WINDOW_ID, PropertyValue::Int(4_242)),
+            &state,
+            &ctx(1.0),
+        );
+        assert_eq!(state.window_id(), Some(4_242));
+    }
+
+    #[test]
+    fn seeding_the_display_hz_overwrites_the_observed_value() {
+        let state = IngestState::new();
+        let _ = ingest(
+            &prop(observe_id::DISPLAY_FPS, PropertyValue::Double(60.0)),
+            &state,
+            &ctx(1.0),
+        );
+        assert_eq!(state.display_hz(), 60.0);
+        state.set_display_hz(23.976);
+        assert_eq!(state.display_hz(), 23.976);
+    }
+
+    #[test]
+    fn the_ffi_wrappers_run_the_same_digest_as_the_event_loop() {
+        let state = IngestState::new();
+        let out = ingest_event_for_ffi(
+            &prop(observe_id::SPEED, PropertyValue::Double(1.25)),
+            &state,
+            &ctx(1.0),
+        );
+        let IngestOut::Input(Input::Speed(rate)) = &out[0] else {
+            panic!("expected Speed");
+        };
+        assert_eq!(*rate, 1.25);
+
+        // The property-only entry point is what the window-mode reconcile
+        // and the Wayland fast path use; same digest, no event wrapper.
+        let out = ingest_property_for_ffi(
+            observe_id::SPEED,
+            &PropertyValue::Double(0.5),
+            &state,
+            &ctx(1.0),
+        );
+        let IngestOut::Input(Input::Speed(rate)) = &out[0] else {
+            panic!("expected Speed");
+        };
+        assert_eq!(*rate, 0.5);
+    }
+
+    #[test]
+    fn a_property_of_the_wrong_type_is_ignored() {
+        let state = IngestState::new();
+        for id in [
+            observe_id::PAUSE,
+            observe_id::TIME_POS,
+            observe_id::SPEED,
+            observe_id::SEEKING,
+            observe_id::CORE_IDLE,
+            observe_id::DURATION,
+        ] {
+            let out = ingest(
+                &prop(id, PropertyValue::String("nonsense".into())),
+                &state,
+                &ctx(1.0),
+            );
+            assert!(out.is_empty(), "id {id} accepted a string");
+        }
+    }
+
+    #[test]
+    fn an_unobserved_id_and_an_uninteresting_event_produce_nothing() {
+        let state = IngestState::new();
+        assert!(ingest(&prop(9_999, PropertyValue::Flag(true)), &state, &ctx(1.0)).is_empty());
+        assert!(ingest(&Event::None, &state, &ctx(1.0)).is_empty());
+        assert!(ingest(&Event::VideoReconfig, &state, &ctx(1.0)).is_empty());
+    }
+
+    #[test]
+    fn every_end_file_reason_maps_to_a_playback_end() {
+        use jfn_mpv::EndFileReason as R;
+        let state = IngestState::new();
+        let cases: Vec<(R, EndReason)> = vec![
+            (R::Eof, EndReason::Eof),
+            (R::Redirect, EndReason::Eof),
+            (R::Stop, EndReason::Canceled),
+            (R::Quit, EndReason::Canceled),
+            (R::Unknown(7), EndReason::Canceled),
+        ];
+        for (reason, want) in cases {
+            let out = ingest(&Event::EndFile(reason), &state, &ctx(1.0));
+            let IngestOut::Input(Input::EndFile {
+                reason,
+                ref error_message,
+            }) = out[0]
+            else {
+                panic!("expected EndFile");
+            };
+            assert_eq!(reason, want);
+            assert!(error_message.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_the_first_eight_buffered_ranges_are_forwarded() {
+        let state = IngestState::new();
+        let range = Node::Map(vec![
+            ("start".into(), Node::Double(0.0)),
+            ("end".into(), Node::Double(1.0)),
+        ]);
+        let root = Node::Map(vec![(
+            "seekable-ranges".into(),
+            Node::Array(vec![range; MAX_BUFFERED_RANGES + 4]),
+        )]);
+        let out = ingest(
+            &prop(observe_id::CACHE_STATE, PropertyValue::Node(root)),
+            &state,
+            &ctx(1.0),
+        );
+        let IngestOut::Input(Input::BufferedRanges(ref r)) = out[0] else {
+            panic!("expected BufferedRanges");
+        };
+        assert_eq!(r.len(), MAX_BUFFERED_RANGES);
+    }
+
+    #[test]
+    fn a_missing_video_frame_reports_the_frame_as_gone() {
+        let state = IngestState::new();
+        let out = ingest(
+            &prop(observe_id::VIDEO_FRAME_INFO, PropertyValue::None),
+            &state,
+            &ctx(1.0),
+        );
+        assert!(matches!(
+            out[0],
+            IngestOut::Input(Input::VideoFrameAvailable(false))
+        ));
+        let out = ingest(
+            &prop(
+                observe_id::VIDEO_FRAME_INFO,
+                PropertyValue::Node(Node::Map(Vec::new())),
+            ),
+            &state,
+            &ctx(1.0),
+        );
+        assert!(matches!(
+            out[0],
+            IngestOut::Input(Input::VideoFrameAvailable(true))
+        ));
     }
 }

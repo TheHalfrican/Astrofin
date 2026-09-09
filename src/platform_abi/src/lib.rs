@@ -783,3 +783,615 @@ pub fn notify_decorations_changed() {
         f();
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Once};
+    use std::time::Duration;
+
+    use super::*;
+
+    // -----------------------------------------------------------------
+    // A backend that implements only the mandatory methods, so every
+    // other assertion below is about the trait's own defaults.
+    // -----------------------------------------------------------------
+
+    pub(crate) struct FakeMediaSink;
+
+    impl MediaSink for FakeMediaSink {
+        fn start(&self, _instance: &Instance) {}
+        fn stop(&self) {}
+    }
+
+    pub(crate) struct FakeWindowSource;
+
+    impl WindowSource for FakeWindowSource {
+        fn snapshot(&self) -> WindowSnapshot {
+            WindowSnapshot {
+                extent: None,
+                position: None,
+                maximized: false,
+                fullscreen: false,
+            }
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct FakePlatform {
+        options: Option<DecorationOptions>,
+        default_decorations: Option<WindowDecorations>,
+    }
+
+    impl FakePlatform {
+        pub(crate) fn new() -> Self {
+            Self::default()
+        }
+
+        fn with(options: DecorationOptions, default_decorations: WindowDecorations) -> Self {
+            Self {
+                options: Some(options),
+                default_decorations: Some(default_decorations),
+            }
+        }
+    }
+
+    impl Platform for FakePlatform {
+        fn display(&self) -> DisplayBackend {
+            DisplayBackend::Windows
+        }
+
+        fn default_window_decorations(&self) -> WindowDecorations {
+            self.default_decorations
+                .unwrap_or(WindowDecorations::Server)
+        }
+
+        fn window_decoration_options(&self) -> DecorationOptions {
+            self.options.unwrap_or_else(DecorationOptions::all)
+        }
+
+        fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery {
+            match kind {
+                MenuKind::Dropdown => MenuDelivery::Page,
+                MenuKind::ContextMenu => MenuDelivery::Composited,
+            }
+        }
+
+        fn media_session(&self) -> &dyn MediaSink {
+            &FakeMediaSink
+        }
+
+        fn cef_paths(&self) -> CefPaths {
+            CefPaths::default()
+        }
+
+        fn window_source(&self) -> &dyn WindowSource {
+            &FakeWindowSource
+        }
+    }
+
+    /// The platform handle installs exactly once per process, so the whole
+    /// test binary shares one install and no test depends on running first.
+    pub(crate) fn installed_platform() -> &'static dyn Platform {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| install(Box::new(FakePlatform::new())));
+        get()
+    }
+
+    // -----------------------------------------------------------------
+    // Global handles
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn an_installed_backend_is_visible_through_get_and_try_get() {
+        let installed = installed_platform();
+        assert_eq!(installed.display(), DisplayBackend::Windows);
+        let seen = try_get().expect("try_get after install");
+        assert_eq!(seen.display(), DisplayBackend::Windows);
+        assert!(std::ptr::addr_eq(
+            std::ptr::from_ref(installed),
+            std::ptr::from_ref(seen),
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "install() called twice")]
+    fn installing_a_second_backend_panics() {
+        installed_platform();
+        install(Box::new(FakePlatform::new()));
+    }
+
+    struct SilentBridge;
+
+    impl BrowserBridge for SilentBridge {
+        fn send_key_event(
+            &self,
+            _type_: c_int,
+            _modifiers: u32,
+            _windows_key_code: c_int,
+            _native_key_code: c_int,
+            _is_system_key: bool,
+            _character: u16,
+            _unmodified_character: u16,
+        ) {
+        }
+        fn send_mouse_click(
+            &self,
+            _x: c_int,
+            _y: c_int,
+            _modifiers: u32,
+            _button: c_int,
+            _mouse_up: bool,
+            _click_count: c_int,
+        ) {
+        }
+        fn send_mouse_move(&self, _x: i32, _y: i32, _modifiers: u32, _leave: bool) {}
+        fn send_mouse_wheel(
+            &self,
+            _x: c_int,
+            _y: c_int,
+            _modifiers: u32,
+            _delta_x: c_int,
+            _delta_y: c_int,
+        ) {
+        }
+        fn set_focus(&self, _focus: bool) {}
+        fn navigate_history(&self, _forward: bool) {}
+        fn undo(&self) {}
+        fn redo(&self) {}
+        fn cut(&self) {}
+        fn copy(&self) {}
+        fn paste(&self) {}
+        fn select_all(&self) {}
+        fn has_active(&self) -> bool {
+            true
+        }
+    }
+
+    fn installed_bridge() -> &'static dyn BrowserBridge {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| install_browser_bridge(Box::new(SilentBridge)));
+        browser_bridge().expect("bridge after install")
+    }
+
+    #[test]
+    fn an_installed_browser_bridge_is_visible_through_browser_bridge() {
+        assert!(installed_bridge().has_active());
+    }
+
+    #[test]
+    #[should_panic(expected = "install_browser_bridge called twice")]
+    fn installing_a_second_browser_bridge_panics() {
+        installed_bridge();
+        install_browser_bridge(Box::new(SilentBridge));
+    }
+
+    static LISTENER_HITS: AtomicUsize = AtomicUsize::new(0);
+    static OTHER_LISTENER_HITS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn the_first_registered_decorations_listener_is_the_one_notified() {
+        // Single test for the whole listener slot: it is a process-wide
+        // OnceLock, so a second test could not observe a fresh one.
+        set_decorations_listener(|| {
+            LISTENER_HITS.fetch_add(1, Ordering::Relaxed);
+        });
+        notify_decorations_changed();
+        assert_eq!(LISTENER_HITS.load(Ordering::Relaxed), 1);
+
+        // A later registration is dropped rather than replacing the first.
+        set_decorations_listener(|| {
+            OTHER_LISTENER_HITS.fetch_add(1, Ordering::Relaxed);
+        });
+        notify_decorations_changed();
+        assert_eq!(LISTENER_HITS.load(Ordering::Relaxed), 2);
+        assert_eq!(OTHER_LISTENER_HITS.load(Ordering::Relaxed), 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Main-thread park
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn the_main_park_releases_every_waiter_once_signaled() {
+        let waiter = std::thread::spawn(main_park_wait);
+        main_park_signal();
+        waiter.join().expect("parked thread");
+        // Latched: a wait entered after the signal returns immediately, and
+        // the platform default routes through the same latch.
+        main_park_wait();
+        installed_platform().run_main_loop();
+    }
+
+    #[test]
+    fn waking_the_main_loop_is_idempotent() {
+        let p = FakePlatform::new();
+        p.wake_main_loop();
+        p.wake_main_loop();
+        main_park_signal();
+        p.run_main_loop();
+    }
+
+    // -----------------------------------------------------------------
+    // Value types
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_fixed_cursor_shape_round_trips_through_its_cef_value() {
+        let shape = cursor::CursorShape::Hand;
+        assert_eq!(cursor::CursorShape::from_cef(shape.as_raw()), Some(shape));
+        for shape in [
+            cursor::CursorShape::Pointer,
+            cursor::CursorShape::IBeam,
+            cursor::CursorShape::NotAllowed,
+            cursor::CursorShape::Grabbing,
+        ] {
+            assert_eq!(cursor::CursorShape::from_cef(shape.as_raw()), Some(shape));
+        }
+    }
+
+    #[test]
+    fn a_cursor_value_outside_the_fixed_shapes_is_rejected() {
+        assert_eq!(cursor::CursorShape::from_cef(-1), None);
+        assert_eq!(cursor::CursorShape::from_cef(i32::MAX), None);
+    }
+
+    #[test]
+    fn macos_uses_command_as_its_action_modifier_and_the_rest_use_control() {
+        assert_eq!(
+            DisplayBackend::MacOS.action_modifier_flag(),
+            event_flags::EVENTFLAG_COMMAND_DOWN
+        );
+        for backend in [
+            DisplayBackend::Windows,
+            DisplayBackend::Wayland,
+            DisplayBackend::X11,
+        ] {
+            assert_eq!(
+                backend.action_modifier_flag(),
+                event_flags::EVENTFLAG_CONTROL_DOWN
+            );
+        }
+    }
+
+    #[test]
+    fn only_windows_hands_cef_the_full_browser_argv() {
+        assert!(DisplayBackend::Windows.cef_full_browser_argv());
+        for backend in [
+            DisplayBackend::MacOS,
+            DisplayBackend::Wayland,
+            DisplayBackend::X11,
+        ] {
+            assert!(!backend.cef_full_browser_argv());
+        }
+    }
+
+    #[test]
+    fn every_decoration_mode_round_trips_through_its_wire_string() {
+        for mode in [
+            WindowDecorations::Csd,
+            WindowDecorations::Server,
+            WindowDecorations::ServerThemed,
+        ] {
+            assert_eq!(WindowDecorations::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(WindowDecorations::Csd.as_str(), "csd");
+        assert_eq!(WindowDecorations::Server.as_str(), "server");
+        assert_eq!(WindowDecorations::ServerThemed.as_str(), "serverThemed");
+    }
+
+    #[test]
+    fn an_unknown_decoration_string_does_not_parse() {
+        for raw in ["", "CSD", "serverthemed", "none"] {
+            assert_eq!(WindowDecorations::parse(raw), None);
+        }
+    }
+
+    #[test]
+    fn csd_is_a_member_of_every_decoration_option_set() {
+        for options in [
+            DecorationOptions::csd_only(),
+            DecorationOptions::with_server(false),
+            DecorationOptions::with_server(true),
+            DecorationOptions::all(),
+        ] {
+            assert!(options.contains(WindowDecorations::Csd));
+        }
+    }
+
+    #[test]
+    fn a_decoration_set_contains_only_the_server_modes_it_advertises() {
+        let csd = DecorationOptions::csd_only();
+        assert!(!csd.contains(WindowDecorations::Server));
+        assert!(!csd.contains(WindowDecorations::ServerThemed));
+        assert!(!csd.has_choice());
+        assert_eq!(csd.iter().collect::<Vec<_>>(), vec![WindowDecorations::Csd]);
+
+        let plain = DecorationOptions::with_server(false);
+        assert!(plain.contains(WindowDecorations::Server));
+        assert!(!plain.contains(WindowDecorations::ServerThemed));
+        assert!(plain.has_choice());
+        assert_eq!(
+            plain.iter().collect::<Vec<_>>(),
+            vec![WindowDecorations::Csd, WindowDecorations::Server]
+        );
+
+        let all = DecorationOptions::all();
+        assert!(all.contains(WindowDecorations::ServerThemed));
+        assert!(all.has_choice());
+        assert_eq!(
+            all.iter().collect::<Vec<_>>(),
+            vec![
+                WindowDecorations::Csd,
+                WindowDecorations::Server,
+                WindowDecorations::ServerThemed
+            ]
+        );
+    }
+
+    #[test]
+    fn a_surface_handle_carries_a_pointer_or_an_id_unchanged() {
+        assert!(SurfaceHandle::NONE.is_none());
+        assert!(SurfaceHandle::from_ptr(std::ptr::null_mut()).is_none());
+        assert!(SurfaceHandle::from_id(0).is_none());
+
+        let mut backing = 7u32;
+        let ptr: *mut c_void = std::ptr::from_mut(&mut backing).cast();
+        let handle = SurfaceHandle::from_ptr(ptr);
+        assert!(!handle.is_none());
+        assert_eq!(handle.as_ptr(), ptr);
+
+        let id = SurfaceHandle::from_id(42);
+        assert!(!id.is_none());
+        assert_eq!(id.id(), 42);
+    }
+
+    // -----------------------------------------------------------------
+    // Trait defaults
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_configured_decoration_mode_wins_when_the_backend_offers_it() {
+        let p = FakePlatform::with(DecorationOptions::all(), WindowDecorations::Server);
+        assert_eq!(
+            p.resolve_window_decorations(Some(WindowDecorations::ServerThemed)),
+            WindowDecorations::ServerThemed
+        );
+    }
+
+    #[test]
+    fn an_unconfigured_decoration_mode_falls_back_to_the_backend_default() {
+        let p = FakePlatform::with(DecorationOptions::all(), WindowDecorations::Server);
+        assert_eq!(
+            p.resolve_window_decorations(None),
+            WindowDecorations::Server
+        );
+    }
+
+    #[test]
+    fn a_decoration_mode_the_backend_cannot_honor_falls_back_to_csd() {
+        let p = FakePlatform::with(DecorationOptions::csd_only(), WindowDecorations::Server);
+        // Both the configured mode and the backend's own default are outside
+        // the option set, so every path lands on CSD.
+        assert_eq!(
+            p.resolve_window_decorations(Some(WindowDecorations::ServerThemed)),
+            WindowDecorations::Csd
+        );
+        assert_eq!(p.resolve_window_decorations(None), WindowDecorations::Csd);
+    }
+
+    #[test]
+    fn the_effective_scale_trusts_mpv_when_it_reports_one() {
+        let p = FakePlatform::new();
+        assert!((p.effective_scale(1.5) - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn an_unknown_mpv_scale_falls_back_to_the_platform_scale() {
+        let p = FakePlatform::new();
+        for unknown in [0.0, -2.0] {
+            assert!((p.effective_scale(unknown) - p.get_scale()).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn mpv_is_resized_only_when_the_boot_scale_differs_from_the_saved_one() {
+        let p = FakePlatform::new();
+        let saved = LogicalSize { w: 1280, h: 720 };
+        assert_eq!(
+            p.reconcile_mpv_size(2.0, 1.0, saved, false),
+            Some(PhysicalSize { w: 2560, h: 1440 })
+        );
+    }
+
+    #[test]
+    fn a_locked_or_unknown_or_unchanged_scale_leaves_mpv_sizing_alone() {
+        let p = FakePlatform::new();
+        let saved = LogicalSize { w: 1280, h: 720 };
+        assert_eq!(p.reconcile_mpv_size(2.0, 1.0, saved, true), None);
+        assert_eq!(p.reconcile_mpv_size(0.0, 1.0, saved, false), None);
+        assert_eq!(p.reconcile_mpv_size(2.0, 0.0, saved, false), None);
+        assert_eq!(p.reconcile_mpv_size(1.0, 1.0, saved, false), None);
+        // Under the 0.01 tolerance the difference is noise, not a rescale.
+        assert_eq!(p.reconcile_mpv_size(1.005, 1.0, saved, false), None);
+    }
+
+    #[test]
+    fn the_default_backend_boots_mpv_with_the_saved_geometry_string() {
+        let p = FakePlatform::new();
+        let boot = BootGeometry::from_clamped(
+            LogicalSize { w: 1280, h: 720 },
+            Scale(1.0),
+            WindowGeometry::from_raw(1280, 720, 20, 30),
+            false,
+        );
+        assert_eq!(
+            p.boot_mpv_geometry(&boot).as_deref(),
+            Some("1280x720+20+30")
+        );
+        // ... and applies it without touching the window itself.
+        p.apply_boot_geometry(&boot);
+        assert_eq!(p.query_window_position(), None);
+    }
+
+    #[test]
+    fn the_default_backend_does_not_clamp_geometry() {
+        let p = FakePlatform::new();
+        let g = WindowGeometry::from_raw(4000, 3000, -1, -1);
+        assert_eq!(p.clamp_window_geometry(g), g);
+    }
+
+    #[test]
+    fn a_backend_without_a_native_chooser_declines_the_file_dialog() {
+        let p = FakePlatform::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&called);
+        let taken = p.open_file_dialog(FileDialogRequest {
+            kind: FileDialogKind::OpenFile,
+            title: None,
+            default_path: None,
+            filters: Vec::new(),
+            on_done: Box::new(move |_| flag.store(true, Ordering::Relaxed)),
+        });
+        assert!(!taken);
+        assert!(
+            !called.load(Ordering::Relaxed),
+            "a declined request must not resolve"
+        );
+    }
+
+    #[test]
+    fn a_backend_without_a_clipboard_reads_empty_text_synchronously() {
+        let p = FakePlatform::new();
+        assert!(p.clipboard_text_supported());
+        let seen = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&seen);
+        p.clipboard_read_text_async(Box::new(move |text| {
+            *sink.lock() = Some(text.to_string());
+        }));
+        assert_eq!(seen.lock().as_deref(), Some(""));
+        p.clear_clipboard_handler();
+    }
+
+    #[test]
+    fn the_default_run_blocking_runs_the_closure_inline() {
+        let p = FakePlatform::new();
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        p.run_blocking(Box::new(move || flag.store(true, Ordering::Relaxed)));
+        assert!(done.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_backend_that_overrides_nothing_owns_no_surfaces() {
+        let p = FakePlatform::new();
+        let s = p.alloc_surface();
+        assert!(s.is_none());
+        assert!(!p.surface_present(
+            s,
+            PaintFrame::Software {
+                size: PhysicalSize { w: 1, h: 1 },
+                pixels: &[0, 0, 0, 0],
+                dirty: &[],
+            }
+        ));
+        // Every remaining surface hook is a no-op.
+        p.surface_resize(
+            s,
+            SurfaceSize {
+                logical_w: 1,
+                logical_h: 1,
+                physical_w: 1,
+                physical_h: 1,
+            },
+        );
+        p.surface_set_visible(s, true);
+        p.restack(&[s]);
+        p.free_surface(s);
+    }
+
+    #[test]
+    fn the_trait_defaults_describe_a_windowed_backend_with_no_extras() {
+        let p = FakePlatform::new();
+        assert!(p.init(std::ptr::null_mut()));
+        assert!(!p.in_transition());
+        assert!((p.get_scale() - 1.0).abs() < f32::EPSILON);
+        assert!((p.get_display_scale(100, 100) - 1.0).abs() < f32::EPSILON);
+        assert!(!p.window_decorations_supported());
+        assert_eq!(p.effective_decorations(), EffectiveDecorations::ServerSide);
+        assert!(p.shared_texture_supported());
+        assert!(!p.cef_init_precedes_mpv_window());
+        assert!(p.cef_host().is_none());
+        // The no-op hooks must stay callable on a bare backend.
+        p.early_init();
+        p.begin_transition();
+        p.end_transition();
+        p.set_expected_size(800, 600);
+        p.set_fullscreen(true);
+        p.toggle_fullscreen();
+        p.window_minimize();
+        p.window_toggle_maximize();
+        p.window_start_move();
+        p.window_start_resize(1);
+        p.set_cursor(cursor::CursorShape::Hand);
+        p.set_idle_inhibit(IdleInhibitLevel::Display);
+        p.set_theme_color(0x00_FF_00);
+        p.set_shared_texture_unsupported();
+        p.open_external_url("https://example.invalid/");
+        p.open_path(Path::new("."));
+        p.pump();
+        p.cleanup();
+        p.post_window_cleanup();
+    }
+
+    #[test]
+    fn the_default_mpv_host_needs_nothing_from_the_platform() {
+        let p = FakePlatform::new();
+        let host = p.mpv_host();
+        assert!(host.host_ready());
+        assert_eq!(host.embed_wid(), None);
+        assert_eq!(host.logical_content_size(), None);
+        host.prepare(Some(WindowDecorations::Csd));
+        host.ensure_host_window();
+        host.detach();
+    }
+
+    #[test]
+    fn the_default_vo_wait_pumps_with_the_tick_budget_until_the_pump_is_done() {
+        let p = FakePlatform::new();
+        let mut budgets: Vec<Duration> = Vec::new();
+        p.mpv_host().run_vo_wait(&mut |budget| {
+            budgets.push(budget);
+            budgets.len() < 3
+        });
+        assert_eq!(budgets, vec![VO_WAIT_TICK; 3]);
+    }
+
+    #[test]
+    fn a_backend_without_an_osr_popup_surface_ignores_every_popup_call() {
+        let p = FakePlatform::new();
+        let popup = p.osr_popup_surface();
+        let s = SurfaceHandle::NONE;
+        popup.show(s, 0, 0, 10, 10);
+        popup.present(
+            s,
+            PaintFrame::Software {
+                size: PhysicalSize { w: 1, h: 1 },
+                pixels: &[0, 0, 0, 0],
+                dirty: &[],
+            },
+            10,
+            10,
+        );
+        popup.hide(s);
+    }
+
+    #[test]
+    fn the_default_cef_paths_leave_every_location_at_cefs_own_default() {
+        let paths = FakePlatform::new().cef_paths();
+        assert!(paths.browser_subprocess_path.is_none());
+        assert!(paths.framework_dir_path.is_none());
+        assert!(paths.resources_dir_path.is_none());
+        assert!(paths.locales_dir_path.is_none());
+    }
+}

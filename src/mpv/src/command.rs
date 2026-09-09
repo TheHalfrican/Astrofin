@@ -49,3 +49,71 @@ impl Command {
 // preserves those addresses.
 unsafe impl Send for Command {}
 unsafe impl Sync for Command {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    /// Read the argv back the way libmpv does: walk pointers until the NULL.
+    fn read_back(cmd: &Command) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut p = cmd.as_ptr();
+        loop {
+            let s = unsafe { *p };
+            if s.is_null() {
+                break;
+            }
+            out.push(unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned());
+            p = unsafe { p.add(1) };
+        }
+        out
+    }
+
+    #[test]
+    fn new_keeps_the_arguments_in_order() {
+        let cmd = Command::new(["loadfile", "http://host/a.mkv", "replace"]).unwrap();
+        assert_eq!(
+            read_back(&cmd),
+            ["loadfile", "http://host/a.mkv", "replace"]
+        );
+    }
+
+    #[test]
+    fn new_rejects_an_argument_with_an_interior_nul() {
+        assert!(Command::new(["seek", "1\0 2"]).is_err());
+    }
+
+    #[test]
+    fn new_accepts_an_empty_argument_list() {
+        let cmd = Command::new(Vec::<&str>::new()).unwrap();
+        assert!(cmd.is_empty());
+        assert_eq!(cmd.len(), 0);
+        assert!(read_back(&cmd).is_empty());
+    }
+
+    /// libmpv reads the table until it hits the NULL; `len` must not count it.
+    #[test]
+    fn as_ptr_yields_a_null_terminated_table_one_longer_than_len() {
+        let cmd = Command::new(["cycle", "pause"]).unwrap();
+        assert_eq!(cmd.len(), 2);
+        let end = unsafe { *cmd.as_ptr().add(cmd.len()) };
+        assert!(end.is_null(), "argv must be NULL-terminated");
+    }
+
+    #[test]
+    fn is_empty_is_false_as_soon_as_there_is_one_argument() {
+        let cmd = Command::new(["stop"]).unwrap();
+        assert!(!cmd.is_empty());
+        assert_eq!(cmd.len(), 1);
+    }
+
+    /// The pointers point into heap storage the `Command` owns, so moving it
+    /// (as `SAFETY` on the `Send` impl claims) leaves them valid.
+    #[test]
+    fn pointers_survive_moving_the_command() {
+        let cmd = Command::new(["sub-add", "/tmp/x.srt", "select"]).unwrap();
+        let moved = cmd;
+        assert_eq!(read_back(&moved), ["sub-add", "/tmp/x.srt", "select"]);
+    }
+}

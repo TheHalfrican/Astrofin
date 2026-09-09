@@ -63,3 +63,34 @@ wrap_client! {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn make_client_builds_a_client_that_offers_every_handler() {
+        let inner = Inner::new_detached();
+        let client = make_client(Arc::clone(&inner));
+        // The vtable is built in Rust; none of these slots may be empty or
+        // CEF silently loses the callback.
+        assert!(client.render_handler().is_some());
+        assert!(client.life_span_handler().is_some());
+        assert!(client.load_handler().is_some());
+        assert!(client.context_menu_handler().is_some());
+        assert!(client.dialog_handler().is_some());
+        assert!(client.display_handler().is_some());
+        assert!(client.keyboard_handler().is_some());
+    }
+
+    #[test]
+    fn make_client_shares_the_inner_it_was_given() {
+        let inner = Inner::new_detached();
+        let before = Arc::strong_count(&inner);
+        let client = make_client(Arc::clone(&inner));
+        assert!(Arc::strong_count(&inner) > before);
+        drop(client);
+    }
+}

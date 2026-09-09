@@ -104,4 +104,82 @@ mod tests {
             w.join().expect("waiter thread");
         }
     }
+
+    #[test]
+    fn new_holds_the_state_it_was_given() {
+        let mb = Mailbox::new(String::from("seed"));
+        assert_eq!(mb.peek(|s| s.clone()), "seed");
+    }
+
+    #[test]
+    fn clones_share_one_slot() {
+        let mb = Mailbox::new(0u32);
+        let other = mb.clone();
+        other.update(|s| *s += 5);
+        assert_eq!(mb.peek(|s| *s), 5);
+        mb.update(|s| *s += 1);
+        assert_eq!(other.peek(|s| *s), 6);
+    }
+
+    #[test]
+    fn update_returns_the_closures_value() {
+        let mb = Mailbox::new(vec![1u8, 2, 3]);
+        let taken = mb.update(std::mem::take);
+        assert_eq!(taken, vec![1, 2, 3]);
+        assert!(mb.peek(Vec::is_empty));
+    }
+
+    #[test]
+    fn peek_sees_the_slot_without_taking_it() {
+        let mb = Mailbox::new(Some(4u32));
+        assert_eq!(mb.peek(|s| *s), Some(4));
+        assert_eq!(mb.peek(|s| *s), Some(4));
+    }
+
+    #[test]
+    fn updates_the_consumer_never_observed_coalesce_into_the_last_one() {
+        let mb = Mailbox::new(None::<u32>);
+        for v in 1..=3 {
+            mb.update(|s| *s = Some(v));
+        }
+        assert_eq!(mb.wait(|s| s.is_some(), Option::take), Some(3));
+        assert_eq!(mb.peek(|s| *s), None);
+    }
+
+    #[test]
+    fn wait_ignores_updates_until_its_predicate_holds() {
+        let mb = Mailbox::new(0u32);
+        let producer = mb.clone();
+        let t = std::thread::spawn(move || {
+            for v in 1..=5 {
+                producer.update(|s| *s = v);
+            }
+        });
+        // Only 5 satisfies the predicate, so no earlier value can be returned.
+        assert_eq!(mb.wait(|s| *s == 5, |s| *s), 5);
+        t.join().expect("producer thread");
+    }
+
+    #[test]
+    fn a_full_slot_hands_every_value_across_the_thread_in_order() {
+        // `wait` mutates under the lock but wakes nobody, so both sides
+        // publish their side of the handshake with `update`.
+        let mb = Mailbox::new(None::<u32>);
+        let producer = mb.clone();
+        let t = std::thread::spawn(move || {
+            for v in 1..=3 {
+                // Park until the consumer has drained the previous value, so
+                // nothing is coalesced away.
+                producer.wait(Option::is_none, |_| ());
+                producer.update(|s| *s = Some(v));
+            }
+        });
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(mb.wait(|s| s.is_some(), Option::take));
+            mb.update(|_| ());
+        }
+        t.join().expect("producer thread");
+        assert_eq!(seen, vec![Some(1), Some(2), Some(3)]);
+    }
 }

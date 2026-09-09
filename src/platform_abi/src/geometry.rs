@@ -410,4 +410,155 @@ mod tests {
         clamp_to_bounds(&mut g, SCREEN);
         assert_eq!(g, WindowGeometry::from_raw(1920, 1080, 0, 0));
     }
+
+    #[test]
+    fn an_extent_derives_its_logical_size_from_the_scale() {
+        let e = WindowExtent::new(PhysicalSize { w: 2560, h: 1440 }, Scale(2.0));
+        assert_eq!(e.physical(), PhysicalSize { w: 2560, h: 1440 });
+        assert_eq!(e.logical(), LogicalSize { w: 1280, h: 720 });
+        assert_eq!(e.scale(), Scale(2.0));
+    }
+
+    #[test]
+    fn with_logical_keeps_a_logical_size_division_cannot_reproduce() {
+        // 1601/1.25 rounds to 1281, so the producer's own 1280 only survives
+        // because it is carried explicitly.
+        let e = WindowExtent::with_logical(
+            PhysicalSize { w: 1601, h: 900 },
+            Scale(1.25),
+            LogicalSize { w: 1280, h: 720 },
+        );
+        assert_eq!(e.logical(), LogicalSize { w: 1280, h: 720 });
+        assert_ne!(
+            e.logical(),
+            WindowExtent::new(PhysicalSize { w: 1601, h: 900 }, Scale(1.25)).logical()
+        );
+    }
+
+    #[test]
+    fn a_pointer_maps_through_the_extents_own_ratio() {
+        let e = WindowExtent::new(PhysicalSize { w: 2560, h: 1440 }, Scale(2.0));
+        assert_eq!(
+            e.to_logical_point(PhysicalPoint { x: 1000, y: 400 }),
+            LogicalPoint { x: 500, y: 200 }
+        );
+        assert_eq!(
+            e.to_logical_point(PhysicalPoint { x: 0, y: 0 }),
+            LogicalPoint { x: 0, y: 0 }
+        );
+    }
+
+    #[test]
+    fn a_point_past_the_client_origin_floors_toward_negative_infinity() {
+        let e = WindowExtent::new(PhysicalSize { w: 2560, h: 1440 }, Scale(2.0));
+        // -1 physical is -0.5 logical: flooring keeps the mapping monotone
+        // instead of snapping a dragged pointer back to 0.
+        assert_eq!(
+            e.to_logical_point(PhysicalPoint { x: -1, y: -3 }),
+            LogicalPoint { x: -1, y: -2 }
+        );
+    }
+
+    #[test]
+    fn a_degenerate_extent_maps_points_unchanged() {
+        let e = WindowExtent::with_logical(
+            PhysicalSize { w: 0, h: -4 },
+            Scale(1.0),
+            LogicalSize { w: 800, h: 600 },
+        );
+        assert_eq!(
+            e.to_logical_point(PhysicalPoint { x: 17, y: -9 }),
+            LogicalPoint { x: 17, y: -9 }
+        );
+    }
+
+    #[test]
+    fn boot_geometry_reports_the_clamped_values_it_was_built_from() {
+        let g = BootGeometry::from_clamped(
+            LogicalSize { w: 1280, h: 720 },
+            Scale(1.25),
+            WindowGeometry::from_raw(1600, 900, 40, 50),
+            true,
+        );
+        assert_eq!(g.logical(), LogicalSize { w: 1280, h: 720 });
+        assert_eq!(g.physical(), PhysicalSize { w: 1600, h: 900 });
+        assert_eq!(g.scale(), Scale(1.25));
+        assert_eq!(g.position(), Some(WindowPos { x: 40, y: 50 }));
+        assert!(g.maximized());
+    }
+
+    #[test]
+    fn an_unset_boot_position_is_dropped_rather_than_defaulted() {
+        let g = BootGeometry::from_clamped(
+            LogicalSize { w: 800, h: 600 },
+            Scale(1.0),
+            WindowGeometry::from_raw(800, 600, -1, 5),
+            false,
+        );
+        assert_eq!(g.position(), None);
+        assert!(!g.maximized());
+        assert_eq!(g.mpv_geometry_string(), "800x600");
+    }
+
+    #[test]
+    fn a_partly_negative_raw_position_counts_as_unset() {
+        assert_eq!(WindowGeometry::from_raw(800, 600, -1, 5).position, None);
+        assert_eq!(WindowGeometry::from_raw(800, 600, 5, -1).position, None);
+        assert_eq!(
+            WindowGeometry::from_raw(800, 600, 0, 0).position,
+            Some(WindowPos { x: 0, y: 0 })
+        );
+        assert_eq!(
+            WindowGeometry::from_raw(800, 600, -1, -1).raw_position(),
+            (-1, -1)
+        );
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_number_counts_as_unknown() {
+        assert_eq!(Scale(f32::NAN).or_one(), Scale(1.0));
+        assert_eq!(
+            LogicalSize { w: 800, h: 600 }.to_physical(Scale(f32::NAN)),
+            PhysicalSize { w: 800, h: 600 }
+        );
+    }
+
+    #[test]
+    fn converting_a_size_rounds_to_the_nearest_whole_pixel() {
+        // 801 * 1.5 is 1201.5 — a half pixel rounds away from zero, not down.
+        assert_eq!(
+            LogicalSize { w: 801, h: 601 }.to_physical(Scale(1.5)),
+            PhysicalSize { w: 1202, h: 902 }
+        );
+        assert_eq!(
+            PhysicalSize { w: 1202, h: 902 }.to_logical(Scale(1.5)),
+            LogicalSize { w: 801, h: 601 }
+        );
+    }
+
+    #[test]
+    fn a_window_exactly_filling_the_bounds_is_left_alone() {
+        let mut g = WindowGeometry::from_raw(1920, 1080, 0, 0);
+        clamp_to_bounds(&mut g, SCREEN);
+        assert_eq!(g, WindowGeometry::from_raw(1920, 1080, 0, 0));
+    }
+
+    #[test]
+    fn empty_bounds_collapse_the_window_onto_the_origin() {
+        let mut g = WindowGeometry::from_raw(800, 600, 40, 50);
+        clamp_to_bounds(&mut g, Bounds { w: 0, h: 0 });
+        assert_eq!(g, WindowGeometry::from_raw(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn a_boot_position_at_the_origin_is_still_a_position() {
+        let g = BootGeometry::from_clamped(
+            LogicalSize { w: 800, h: 600 },
+            Scale(1.0),
+            WindowGeometry::from_raw(800, 600, 0, 0),
+            false,
+        );
+        assert!(g.force_position());
+        assert_eq!(g.mpv_geometry_string(), "800x600+0+0");
+    }
 }

@@ -201,7 +201,23 @@ fn fmt_point(v: Option<f64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
+    use crate::test_support;
+
+    /// Put the process-wide pair back where mpv starts it.
+    fn reset() {
+        let mut g = inner().lock();
+        g.a = None;
+        g.b = None;
+        g.pushed = (None, None);
+    }
+
+    fn observed() -> Points {
+        let g = inner().lock();
+        (g.a, g.b)
+    }
 
     #[test]
     fn the_wire_spellings_are_the_three_actions() {
@@ -315,5 +331,110 @@ mod tests {
             push_js(a, b),
             "window._nativeAbLoop && window._nativeAbLoop(83, 105.5)"
         );
+    }
+
+    #[test]
+    fn an_unset_point_is_rendered_as_no() {
+        assert_eq!(fmt_point(None), "no");
+        assert_eq!(fmt_point(Some(83.25)), "83.250");
+    }
+
+    // ---- the process-wide pair ------------------------------------------
+
+    #[test]
+    fn an_observed_point_is_pushed_to_the_osd() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        on_property("ab-loop-a", &PropertyValue::Node(Node::Double(12.5)));
+        assert_eq!(
+            js.only(),
+            "window._nativeAbLoop && window._nativeAbLoop(12.5, null)"
+        );
+        on_property("ab-loop-b", &PropertyValue::Node(Node::Double(20.0)));
+        assert_eq!(
+            js.only(),
+            "window._nativeAbLoop && window._nativeAbLoop(12.5, 20)"
+        );
+        assert_eq!(observed(), (Some(12.5), Some(20.0)));
+        reset();
+    }
+
+    #[test]
+    fn a_pair_that_did_not_move_is_not_pushed_again() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        // mpv's boot value: both ends already unset, so nothing to redraw.
+        on_property("ab-loop-a", &PropertyValue::Node(Node::String("no".into())));
+        assert!(js.take().is_empty());
+        on_property("ab-loop-a", &PropertyValue::Node(Node::Double(12.5)));
+        assert!(!js.take().is_empty());
+        on_property("ab-loop-a", &PropertyValue::Node(Node::Double(12.5)));
+        assert!(js.take().is_empty());
+        reset();
+    }
+
+    #[test]
+    fn an_unrelated_property_never_touches_the_pair() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        on_property("ab-loop-c", &PropertyValue::Node(Node::Double(3.0)));
+        assert!(js.take().is_empty());
+        assert_eq!(observed(), (None, None));
+    }
+
+    #[test]
+    fn clearing_a_point_pushes_null_for_that_end() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        on_property("ab-loop-a", &PropertyValue::Node(Node::Double(12.5)));
+        js.take();
+        on_property("ab-loop-a", &PropertyValue::Node(Node::String("no".into())));
+        assert_eq!(
+            js.only(),
+            "window._nativeAbLoop && window._nativeAbLoop(null, null)"
+        );
+        reset();
+    }
+
+    #[test]
+    fn an_unknown_action_is_dropped() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        jfn_playback_ab_loop_action("set-c");
+        jfn_playback_ab_loop_action("");
+        assert_eq!(observed(), (None, None));
+        assert!(js.take().is_empty());
+    }
+
+    #[test]
+    fn an_action_never_writes_the_points_itself() {
+        // mpv stamps both points and reports them back; nothing here may
+        // pre-empt that, or the OSD would draw a loop mpv never armed.
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        jfn_playback_ab_loop_action("set-a");
+        jfn_playback_ab_loop_action("set-b");
+        jfn_playback_ab_loop_action("clear");
+        assert_eq!(observed(), (None, None));
+        assert!(js.take().is_empty());
+    }
+
+    #[test]
+    fn clearing_the_loop_leaves_the_observed_pair_to_mpv() {
+        let _g = test_support::lock();
+        reset();
+        on_property("ab-loop-a", &PropertyValue::Node(Node::Double(12.5)));
+        let js = test_support::JsRecorder::install();
+        jfn_playback_clear_ab_loop();
+        // The write went to mpv; the pair only moves when mpv reports back.
+        assert_eq!(observed(), (Some(12.5), None));
+        assert!(js.take().is_empty());
+        reset();
     }
 }

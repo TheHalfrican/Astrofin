@@ -799,4 +799,48 @@ mod tests {
             "no rejected payload may reach the renderer"
         );
     }
+
+    #[test]
+    fn the_web_profile_carries_the_style_sheets_and_ends_with_the_theme_script() {
+        crate::test_support::install_platform();
+        let info = build_for_kind("web", false).expect("web is a known kind");
+        assert_eq!(info.styles(), WEB_STYLES);
+        // astrofin-theme.js reads window.jmpInfo and the shim's theme-color
+        // observer, so it has to be last in the single injected bundle.
+        assert_eq!(info.scripts().last(), Some(&InjectedScript::AstrofinTheme));
+        assert!(info.scripts().contains(&InjectedScript::Csd));
+        assert!(!info.functions().is_empty());
+    }
+
+    #[test]
+    fn shared_textures_enabled_is_carried_through_unchanged() {
+        crate::test_support::install_platform();
+        let on = build_for_kind("about", true).expect("about is a known kind");
+        let off = build_for_kind("about", false).expect("about is a known kind");
+        assert!(on.shared_textures_enabled());
+        assert!(!off.shared_textures_enabled());
+    }
+
+    #[test]
+    fn window_decoration_options_are_empty_where_the_setting_does_not_apply() {
+        crate::test_support::install_platform();
+        // The stub backend reports the setting unsupported, which is the
+        // non-Linux case: the settings UI entry must then be hidden.
+        let info = build_for_kind("web", false).expect("web is a known kind");
+        assert!(info.window_decoration_options().is_empty());
+    }
+
+    #[test]
+    fn only_the_web_profile_declares_window_decorations() {
+        crate::test_support::install_platform();
+        let overlay = build_for_kind("overlay", false).expect("overlay is a known kind");
+        assert!(overlay.window_decorations().is_none());
+        // The web profile mirrors whatever settings.json configured, which may
+        // legitimately be nothing; the accessor must render it as a wire
+        // literal when it is set.
+        let web = build_for_kind("web", false).expect("web is a known kind");
+        if let Some(wd) = web.window_decorations() {
+            assert!(matches!(wd, "csd" | "server" | "server-themed"), "{wd}");
+        }
+    }
 }
