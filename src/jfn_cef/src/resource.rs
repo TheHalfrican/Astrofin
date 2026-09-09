@@ -36,6 +36,7 @@ macro_rules! embedded {
 
 // URL key is the path after the `app://` scheme (no leading slash).
 static RESOURCES: &[(&str, Embedded)] = &[
+    embedded!("ab-loop.js", "application/javascript"),
     embedded!("about.html", "text/html"),
     embedded!("about.js", "application/javascript"),
     embedded!("astrofin-fonts.css", "text/css"),
