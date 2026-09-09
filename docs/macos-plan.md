@@ -155,6 +155,8 @@ CLI from `build/mpv-build/mpv` for mpv-only debugging.
 
 "macOS works" means all of:
 
+(All of these were met on 2026-09-09; see "Verified on the MacBook" below.)
+
 - `just lint` clean (fmt-check + clippy `-D warnings`).
 - `just test` and `just test-js` green.
 - `build/output/Astrofin.app` launches, reaches the server, logs in.
@@ -301,10 +303,17 @@ the composited screen. Title: Dragon Ball Z Kai S5E99, HEVC Main 10
 
 ### Still open
 
-- Item 15 (install the DMG to `/Applications` and launch from there; a locally
-  built DMG carries no quarantine flag, so the real Gatekeeper path needs a
-  downloaded copy and a person for the right-click > Open). Item 17 (legacy
-  Intel workflow) ran on the tag; item 19 (NSOpenPanel) is done. Item 16: `build-macos.yml`
+- Item 15 done 2026-09-09: the user installed
+  `Astrofin-0.4.0-dev+9ff10f1-macos-arm64.dmg`; launched by path
+  (`open -n /Applications/Astrofin.app`) it resolved shaders from its own
+  `Contents/Resources`, auto-connected to Home signed in, and quit cleanly on
+  the Quit Apple event. A locally built DMG carries no quarantine flag
+  (`xattr` shows only `com.apple.provenance`), so Gatekeeper never ran; the
+  right-click > Open path needs a copy that came through a browser. Gotcha:
+  Launch Services also registers `build/output/Astrofin.app` under the same
+  bundle id, so a name-based launch (Spotlight, `open -a`) can start the
+  development build instead; launch the installed copy by path. Item 17
+  (legacy Intel workflow) ran on the tag; item 19 (NSOpenPanel) is done. Item 16: `build-macos.yml`
   passes on GitHub; the run on the macOS fixes themselves (7d88015) was
   started 2026-09-09 after the remote was corrected. Items 9–12 are done,
   see above.
