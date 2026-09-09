@@ -25,3 +25,6 @@ third_party/*
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Finder metadata (the repo is now developed on macOS too)
+.DS_Store
