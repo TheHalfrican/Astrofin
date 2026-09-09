@@ -321,6 +321,25 @@ pub fn jfn_mpv_set_start_position(s: f64) {
     unsafe { set_double(c"start", s) };
 }
 
+/// A-B repeat loop points, in seconds. `None` unsets that end by writing
+/// mpv's sentinel string `"no"`; with either end unset mpv does not loop
+/// (`DOCS/man/options.rst`, `--ab-loop-a`).
+///
+/// Both ends are always written, `a` first, so a caller can never leave a
+/// new `b` paired with a stale `a`. Both writes are async property sets, so
+/// this is safe to call from the mpv event thread.
+pub fn jfn_mpv_set_ab_loop(a: Option<f64>, b: Option<f64>) {
+    set_ab_loop_point(c"ab-loop-a", a);
+    set_ab_loop_point(c"ab-loop-b", b);
+}
+
+fn set_ab_loop_point(name: &CStr, secs: Option<f64>) {
+    match secs {
+        Some(s) => unsafe { set_double(name, s) },
+        None => unsafe { set_str(name, c"no") },
+    }
+}
+
 /// Track id sentinel: 0 = disabled. >=1 = explicit mpv track id.
 /// Mpv's auto-track-selection is globally disabled (boot applies
 /// `track-auto-selection=no`); jellyfin-web is the authority.

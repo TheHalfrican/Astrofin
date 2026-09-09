@@ -54,6 +54,7 @@ Done on `main`:
 - Playback Info shows mpv stats (2026-09-08): properties observed only while the panel is open, snapshot pushed to JS at most once a second; `getStats()` builds Video/Audio/Player categories.
 - Upstream: PRs #686-#690 and the #643 comment posted 2026-09-08 (see memory `upstream-contributions`). Two pre-existing upstream failures on their `main` (clippy in `windows/src/input.rs`, the instance-ipc test) are fixed on their `iced-ui`.
 - Bugs fixed 2026-09-08: input-plugin's "player cannot be null" on every restart and the "queue invalid" warning (`src/web/input-plugin.test.js` pins both).
+- A-B repeat loop (`docs/ab-loop.md`, 2026-09-08): `[` / `]` / `\` plus a `repeat` button cycle mpv's own `ab-loop-a`/`ab-loop-b` through a new `playerSetAbLoop` IPC; `src/playback/src/ab_loop.rs` observes both properties process-wide and pushes them to `window._nativeAbLoop`, and `src/web/ab-loop.js` draws the scrubber band, A/B pins and readout from that push alone. Points are cleared on every load/stop (mpv keeps them across files) and never persisted; seeking past B does not loop, which is mpv's documented behaviour.
 
 Release flow: `CHANGELOG.md` + workspace `version` in `src/Cargo.toml` (`0.2.0` released 2026-09-08 as tag `v0.2.0`; main then moves to the next `-dev`); `just package` builds the installers from the staged `build/`.
 

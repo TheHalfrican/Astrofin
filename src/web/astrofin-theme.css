@@ -972,6 +972,123 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   background: rgba(var(--af-text-primary-rgb), .62);
 }
 
+/* A-B repeat loop (docs/ab-loop.md). Three pieces, all drawn by
+ * src/web/ab-loop.js from whatever mpv reports for ab-loop-a / ab-loop-b:
+ * a band across the scrubber, a readout chip beside the "ends at" text, and
+ * a `repeat` button in the control row.
+ *
+ * Same two constraints as the rest of section (h): nothing opaque over the
+ * video, and the fills carry the contrast on their own because
+ * backdrop-filter cannot see the mpv window.
+ *
+ * Alignment: jf-web insets .sliderMarkerContainer by 0.54em on both sides so
+ * a marker at N% lands on the track rather than on the container, and the
+ * chapter stars above ride on that. The loop overlay is inset the same way
+ * (--af-abloop-inset) so its percentages agree with theirs; the value is a
+ * variable so a jf-web change is one edit, not four. */
+.videoOsdBottom .sliderContainer {
+  --af-abloop-inset: 0.54em;
+  position: relative;
+}
+
+.videoOsdBottom .af-abloop-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--af-abloop-inset);
+  right: var(--af-abloop-inset);
+  /* Click-through: the scrubber underneath keeps its whole hit area. */
+  pointer-events: none;
+  z-index: 1;
+}
+.videoOsdBottom .af-abloop-overlay[hidden],
+.videoOsdBottom .af-abloop-band[hidden],
+.videoOsdBottom .af-abloop-pin[hidden] {
+  display: none !important;
+}
+
+/* The selected span: a translucent accent wash on the track itself, one
+ * step above the buffered span so the loop reads as the stronger claim on
+ * that stretch without hiding the played bar under it. */
+.videoOsdBottom .af-abloop-band {
+  position: absolute;
+  top: 50%;
+  height: 9px;
+  transform: translateY(-50%);
+  border-radius: var(--af-radius-pill);
+  background: rgba(var(--af-accent-primary-rgb), .22);
+  box-shadow: inset 0 0 0 1px rgba(var(--af-accent-primary-rgb), .38);
+  transition:
+    left var(--af-dur-tile) var(--af-ease-out),
+    width var(--af-dur-tile) var(--af-ease-out);
+}
+
+/* End pins: a hairline on the track with its letter floated above it, so
+ * the two points stay findable when the band is only a few pixels wide. */
+.videoOsdBottom .af-abloop-pin {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 15px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-accent-primary);
+  box-shadow: 0 0 8px rgba(var(--af-accent-primary-rgb), .55);
+  transition: left var(--af-dur-tile) var(--af-ease-out);
+}
+.videoOsdBottom .af-abloop-pin::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 4px;
+  border-radius: var(--af-radius-sm);
+  background: rgba(var(--af-accent-primary-rgb), .18);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-badge);
+  line-height: 1.2;
+  color: var(--af-accent-primary);
+}
+
+/* Readout chip beside .endTimeText, in the same mono face as the times so
+ * it reads as one of them rather than as a badge. */
+.videoOsdBottom .af-abloop-readout {
+  flex: none;
+  margin-left: var(--af-space-3);
+  padding: 2px 8px;
+  border-radius: var(--af-radius-sm);
+  border: 1px solid var(--af-edge-chip);
+  background: rgba(var(--af-accent-primary-rgb), .12);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--af-accent-primary);
+  white-space: nowrap;
+}
+.videoOsdBottom .af-abloop-readout[hidden],
+.videoOsdBottom .af-abloop-readout:empty {
+  display: none !important;
+}
+
+/* The button inherits .paper-icon-button-light above; only the active state
+ * is new — accent plus the same glow the scrubber thumb carries, so "a loop
+ * is running" is legible at OSD distance. */
+.videoOsdBottom .af-abloop-btn.is-active {
+  color: var(--af-accent-primary);
+}
+.videoOsdBottom .af-abloop-btn.is-active .material-icons {
+  text-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .videoOsdBottom .af-abloop-band,
+  .videoOsdBottom .af-abloop-pin {
+    transition: none;
+  }
+}
+
 /* Minimal icon buttons: one step below primary at rest, full primary on
  * hover/focus. The token set has no rung between --af-text-muted and
  * --af-text-primary, and muted measured 2.2-3.0:1 over a bright frame, so the

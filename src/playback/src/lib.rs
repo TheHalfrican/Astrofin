@@ -5,6 +5,7 @@
 //! out to registered sinks via the FFI vtable. Sink delivery is
 //! non-blocking: sinks own their own consumer threads.
 
+pub mod ab_loop;
 pub mod browser_sink;
 mod coordinator;
 pub mod exec_js;

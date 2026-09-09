@@ -34,6 +34,7 @@ pub(crate) enum NativeFunction {
     PlayerSetAudioDelay,
     PlayerSetSubtitleDelay,
     PlayerSetAspectMode,
+    PlayerSetAbLoop,
     PlayerOsdActive,
     PlayerStatsActive,
     SetPlaybackVideoMode,
@@ -84,6 +85,7 @@ impl NativeFunction {
             "playerSetAudioDelay" => Self::PlayerSetAudioDelay,
             "playerSetSubtitleDelay" => Self::PlayerSetSubtitleDelay,
             "playerSetAspectMode" => Self::PlayerSetAspectMode,
+            "playerSetAbLoop" => Self::PlayerSetAbLoop,
             "playerOsdActive" => Self::PlayerOsdActive,
             "playerStatsActive" => Self::PlayerStatsActive,
             "setPlaybackVideoMode" => Self::SetPlaybackVideoMode,
@@ -135,6 +137,7 @@ impl NativeFunction {
             Self::PlayerSetAudioDelay => "playerSetAudioDelay",
             Self::PlayerSetSubtitleDelay => "playerSetSubtitleDelay",
             Self::PlayerSetAspectMode => "playerSetAspectMode",
+            Self::PlayerSetAbLoop => "playerSetAbLoop",
             Self::PlayerOsdActive => "playerOsdActive",
             Self::PlayerStatsActive => "playerStatsActive",
             Self::SetPlaybackVideoMode => "setPlaybackVideoMode",
@@ -178,6 +181,7 @@ pub(crate) enum InjectedScript {
     MpvVideoPlayer,
     MpvAudioPlayer,
     PlaybackSource,
+    AbLoop,
     InputPlugin,
     ClientSettings,
     Csd,
@@ -195,6 +199,7 @@ impl InjectedScript {
             "mpv-video-player.js" => Self::MpvVideoPlayer,
             "mpv-audio-player.js" => Self::MpvAudioPlayer,
             "playback-source.js" => Self::PlaybackSource,
+            "ab-loop.js" => Self::AbLoop,
             "input-plugin.js" => Self::InputPlugin,
             "client-settings.js" => Self::ClientSettings,
             "csd.js" => Self::Csd,
@@ -213,6 +218,7 @@ impl InjectedScript {
             Self::MpvVideoPlayer => "mpv-video-player.js",
             Self::MpvAudioPlayer => "mpv-audio-player.js",
             Self::PlaybackSource => "playback-source.js",
+            Self::AbLoop => "ab-loop.js",
             Self::InputPlugin => "input-plugin.js",
             Self::ClientSettings => "client-settings.js",
             Self::Csd => "csd.js",
@@ -274,6 +280,7 @@ const WEB_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::PlayerSetAudioDelay,
     NativeFunction::PlayerSetSubtitleDelay,
     NativeFunction::PlayerSetAspectMode,
+    NativeFunction::PlayerSetAbLoop,
     NativeFunction::PlayerOsdActive,
     NativeFunction::PlayerStatsActive,
     NativeFunction::SetPlaybackVideoMode,
@@ -305,6 +312,10 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     // Before input-plugin.js: its constructor is the only place that holds a
     // playbackManager handle, and it hands it straight to this module.
     InjectedScript::PlaybackSource,
+    // Same reason, one step further: input-plugin.js's constructor hands the
+    // playbackManager handle to this module too, so it has to be installed
+    // before that constructor runs.
+    InjectedScript::AbLoop,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
 ];

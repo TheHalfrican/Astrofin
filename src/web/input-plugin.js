@@ -17,10 +17,11 @@
 
             console.debug('[Media] inputPlugin constructed with playbackManager:', !!playbackManager);
 
-            // The OSD source badge needs the same handle and there is no
-            // other route to it: playbackManager is not on window. attach()
-            // never throws.
+            // The OSD source badge and the A-B loop need the same handle and
+            // there is no other route to it: playbackManager is not on
+            // window. Neither attach() throws.
             window.AstrofinPlaybackSource?.attach(playbackManager);
+            window.AstrofinAbLoop?.attach(playbackManager);
 
             if (playbackManager && window.Events) {
                 this.setupEvents(playbackManager);

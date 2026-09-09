@@ -29,6 +29,7 @@ use jfn_mpv::api::{
     jfn_mpv_stop, jfn_mpv_sub_add,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
+use jfn_playback::ab_loop::{jfn_playback_clear_ab_loop, jfn_playback_set_ab_loop_ms};
 use jfn_playback::ingest_driver::jfn_playback_fullscreen;
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 use jfn_playback::{Input as PbInput, MediaType as PbMediaType, post as pb_post};
@@ -187,7 +188,21 @@ fn post_metadata(meta: &MediaMetadata) {
     }));
 }
 
+/// mpv keeps `ab-loop-a` / `ab-loop-b` across files, so a loop set on one
+/// episode would silently apply to the next. Both ends are dropped on every
+/// load and every stop; the observation then pushes the cleared pair out to
+/// the OSD, which is how the UI learns about it.
+fn clear_ab_loop(reason: &str) {
+    jfn_logging::log(
+        jfn_logging::CATEGORY_CEF,
+        jfn_logging::LEVEL_DEBUG,
+        &format!("ab-loop: clearing both points ({reason})"),
+    );
+    jfn_playback_clear_ab_loop();
+}
+
 fn handle_player_load(args: &ListValue) {
+    clear_ab_loop("playerLoad");
     let url = list_string(args, 0);
     let start_ms = if args.size() > 1 {
         list_int(args, 1)
@@ -305,6 +320,7 @@ fn handle_message(message: BrowserMessage) -> bool {
     match message.name() {
         "playerLoad" => with_args(args, handle_player_load),
         "playerStop" => {
+            clear_ab_loop("playerStop");
             jfn_mpv_stop();
             true
         }
@@ -327,6 +343,19 @@ fn handle_message(message: BrowserMessage) -> bool {
         }),
         "playerSetSpeed" => with_args(args, |a| {
             jfn_mpv_set_speed(list_int(a, 0) as f64 / 1000.0);
+        }),
+        // Both ends every time, in milliseconds, with a negative value for
+        // "unset". Nothing is echoed back from here: the OSD redraws off the
+        // `ab-loop-a` / `ab-loop-b` observations mpv answers with.
+        "playerSetAbLoop" => with_args(args, |a| {
+            let a_ms = i64::from(list_int(a, 0));
+            let b_ms = i64::from(list_int(a, 1));
+            jfn_logging::log(
+                jfn_logging::CATEGORY_CEF,
+                jfn_logging::LEVEL_DEBUG,
+                &format!("playerSetAbLoop: a={a_ms}ms b={b_ms}ms"),
+            );
+            jfn_playback_set_ab_loop_ms(a_ms, b_ms);
         }),
         "playerSetSubtitle" => with_args(args, |a| {
             let id = list_int(a, 0) as i64;
