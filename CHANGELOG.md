@@ -5,6 +5,32 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- macOS: native file chooser. `<input type=file>` in jellyfin-web now opens an
+  `NSOpenPanel` sheet on the player window (type filters, multi-select,
+  cancel) instead of resolving to a silent cancel. Linux still cancels.
+- macOS: hardware decoding defaults to VideoToolbox. Windows and Linux keep
+  `no`; the settings page shows the real default instead of "auto".
+- `just deps` on macOS upgrades stale Homebrew formulas from its own list;
+  a too-old libplacebo used to fail inside the mpv meson configure.
+
+### Fixed
+- macOS: warm launches could deadlock right after platform init (main thread
+  in a synchronous mpv read, mpv core applying the startup background colour,
+  the VO waiting on the main queue). Boot-time synchronous mpv reads now run
+  off the main thread while it keeps pumping.
+- macOS: quitting from the connect screen crashed CEF's in-process GPU thread
+  about one time in three; the never-navigated main web layer is now created
+  at `about:blank`.
+- macOS: two copies of MoltenVK were loaded on machines with the Homebrew
+  `molten-vk` formula; the Vulkan loader is pinned to the bundled one.
+- The settings page claimed hardware decoding was "auto" while mpv ran with
+  none; the display fallback now follows the real default.
+
+### Docs
+- `docs/macos-plan.md`: the plan as executed on an M3 Max, with every item
+  verified except the human DMG install, and the fixes above.
+
 ## [0.3.0] - 2026-09-08
 
 ### Added

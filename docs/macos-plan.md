@@ -267,13 +267,17 @@ the composited screen. Title: Dragon Ball Z Kai S5E99, HEVC Main 10
 
 - **9. Playback.** `[Source] play requested method=DirectPlay`, mpv
   `Selected decoder: hevc`, `VO: [gpu-next] 1920x1080 yuv420p10`,
-  `AO: [coreaudio]`. Software decode: `HWDEC_DEFAULT` is `"no"`
-  (`src/mpv/src/options.rs`) and the profile sets nothing, so
+  `AO: [coreaudio]`. The first run decoded in software: `HWDEC_DEFAULT` was
+  `"no"` on every OS and the profile sets nothing, so
   `vd: No hardware decoding requested`; zero dropped frames over eleven
-  minutes on the M3 Max. Whether macOS should default to `videotoolbox` is a
-  product decision, not a bug. The settings UI showed "auto" for it because
-  `native-shim.js` fell back to `auto` when settings.json omits the default;
-  fixed to fall back to `no`.
+  minutes on the M3 Max even so. Later the same day the default became
+  per-OS (`videotoolbox` on macOS, `src/mpv/src/options.rs`, mirrored in
+  `jfn_config`, pinned by a test in `jfn_rust::cli`): the rerun logged
+  `vd: Using hardware decoding (videotoolbox)` with a `videotoolbox[p010]`
+  pipeline end to end, zero drops over 237 s, colour and subtitles unchanged.
+  The settings UI had shown "auto" for an unset value because
+  `native-shim.js` guessed; the blob now carries `hwdecDefault` and the shim
+  shows that.
 - **10. Video modes.** Auto resolved to `animation` (`series genre:
   Animation`; the episode has no genres, the resolver fetched the series).
   Live-Action, Animation, Off and Auto each logged `video mode … applied` and
