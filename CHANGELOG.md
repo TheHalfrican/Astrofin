@@ -5,6 +5,8 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
 ### Added
 - macOS: native file chooser. `<input type=file>` in jellyfin-web now opens an
   `NSOpenPanel` sheet on the player window (type filters, multi-select,
