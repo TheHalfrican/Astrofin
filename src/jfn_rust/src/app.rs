@@ -339,8 +339,34 @@ fn wait_for_vo_window() -> bool {
     true
 }
 
+/// Runs a synchronous libmpv read where the main thread must not block on
+/// mpv's core lock.
+///
+/// mpv's macOS VO thread services window work through
+/// `DispatchQueue.main.sync`, and the core thread waits on the VO while it
+/// applies an option that touches the window (the startup `background-color`
+/// write, for one). A main-thread `mpv_get_property` that arrives in that
+/// window parks all three threads for good; whether it does is a race
+/// against how fast the window came up, so it only shows on a warm start.
+/// `Platform::run_blocking` runs `f` on a side thread while main keeps its
+/// run loop pumping on macOS, and inline where nothing needs main. `None`
+/// only if the side thread died before answering.
+fn mpv_read_off_main<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    plat().run_blocking(Box::new(move || {
+        let _ = tx.send(f());
+    }));
+    rx.recv().ok()
+}
+
 fn publish_device_profile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) {
-    let caps = unsafe { jfn_mpv::capabilities::query_raw(mpv_raw) };
+    // Raw pointers are not `Send`; the handle outlives every boot step, so
+    // the side thread may read through it.
+    let addr = mpv_raw as usize;
+    let caps = mpv_read_off_main(move || unsafe {
+        jfn_mpv::capabilities::query_raw(addr as *mut jfn_mpv::sys::mpv_handle)
+    })
+    .unwrap_or_default();
     let decoders: Vec<jfn_jellyfin::Codec> = caps
         .decoders
         .into_iter()
@@ -749,7 +775,8 @@ fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
         return 0;
     }
 
-    log_mpv_versions();
+    // Two sync reads; same main-thread hazard as the device profile.
+    let _ = mpv_read_off_main(log_mpv_versions);
 
     let rc = unsafe { run_with_cef(&boot_args, instance) };
     if rc != 0 {
@@ -956,8 +983,8 @@ unsafe fn run_with_cef(ba: &BootArgs, instance: &Instance) -> c_int {
         plat().set_theme_color(0x101010);
     }
 
-    // 4. Build device profile. Must run after VO-init wait — sync mpv API
-    //    calls would deadlock against core_thread on macOS.
+    // 4. Build device profile. Its demuxer read is a sync mpv_get_property,
+    //    which must not run on the main thread here: see mpv_read_off_main.
     publish_device_profile(mpv_raw);
 
     // 5. CEF init flags + initialise.
