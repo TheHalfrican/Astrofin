@@ -115,19 +115,23 @@ CLI from `build/mpv-build/mpv` for mpv-only debugging.
     `build/`. This is the first run that exercises Gatekeeper for real.
 16. **`.github/workflows/build-macos.yml`** — matrix `macos-15`/arm64 +
     `macos-15-intel`/x86_64. Has run on this fork: the `v0.3.0` tag and the
-    0.4.0-dev bump both passed on 2026-09-09, and a `workflow_dispatch` on the
-    macOS fixes (c226a79) passed both jobs (arm64 8 min, Intel 19 min). Note it calls
+    0.4.0-dev bump both passed on 2026-09-09 (pushed from Windows), and a
+    `workflow_dispatch` the same day passed both jobs (arm64 8 min, Intel
+    19 min) but built 14a5a81, not the macOS fixes: this Mac's clone had only
+    the Gitea URL on `origin`, so the fixes reached GitHub later (see 18). Note it calls
     `cargo xtask install --prefix build/output` **without** `--mpv-cli`, unlike
     `just build`, and brew-installs its own list (adds `sdl3`, omits `cmake`,
     `pkgconf`, `little-cms2`, and installs `create-dmg` later in the job).
 17. **`.github/workflows/build-macos-legacy.yml`** — `macos-26-intel`,
     `MACOSX_DEPLOYMENT_TARGET=12.0`, builds ffmpeg and libplacebo from source and
     caches them under `~/jellyfin-deps` (cosmetic rebrand residue; the remaining
-    rows are listed in `docs/rebrand-plan.md` around lines 240-247). Still
-    never run on this fork.
-18. **Triggering CI.** Push-triggered runs do fire for `build-macos.yml` on the
-    GitHub fork (see 16); `gh workflow run build-macos.yml -R TheHalfrican/Astrofin
-    --ref main` also works and is how the 2026-09-09 verification run was started. The
+    rows are listed in `docs/rebrand-plan.md` around lines 240-247). Ran and
+    passed on the `v0.3.0` tag push (2026-09-09).
+18. **Triggering CI.** Push-triggered runs fire on GitHub (the tag and bump
+    pushes from Windows did). A clone taken from Gitea has only the Gitea URL
+    on `origin`; add GitHub as a second push URL (`git remote set-url --add
+    --push origin` for both) or nothing reaches GitHub Actions. Manual:
+    `gh workflow run build-macos.yml -R TheHalfrican/Astrofin --ref main`. The
     self-hosted Gitea runner is Windows-only, so macOS CI is GitHub Actions only.
 
 ### Follow-up features
@@ -231,6 +235,24 @@ have used x86_64 libraries. Build with `/opt/homebrew/bin` ahead of
   the boot-time sync reads (version log, demuxer list) through
   `Platform::run_blocking`, so main keeps pumping. Five consecutive warm
   launches reached the connect screen afterwards; before, zero of four did.
+- **Shutdown segfault from the connect screen.** `EXC_BAD_ACCESS` at offset
+  `+0x277ba34` (or `+0x2775664`) in CEF's `Chrome_InProcGpuThread` while the
+  main thread sat in `CefShutdown`: a constructor receiving a null object for a
+  thread-ownership check. Reproduction by state: 0 of 60 SIGTERM shutdowns
+  from the signed-in Home page, 14 of 44 from the connect screen on a fresh
+  profile, where the main web layer is created with the saved server URL,
+  i.e. an empty string, and never commits a navigation. `cef_create_browser`
+  (`src/jfn_cef/src/client/browser_ops.rs`) now substitutes `about:blank` for
+  an empty initial URL; the overlay's `navigateMain` replaces it as before.
+  After the fix: 0 of 11 connect-screen shutdowns (about 1.5 % likely by
+  chance at the old rate: suggestive, and the count was kept small on purpose
+  because every crash pops a macOS dialog on this machine). A
+  `--disable-gpu-compositing` control on the unfixed build was cut short at
+  4 of 4 clean, so it says nothing. Earlier per-crash bookkeeping and the
+  teardown-order notes: the shutdown path runs six non-CEF steps between
+  `run_main_loop` returning and `CefShutdown` without pumping, and gates the
+  external pump off before the call (`jfn_cef_shutdown`); both are still worth
+  a look if the crash ever returns.
 
 ### Runtime items 9–12, verified 2026-09-09 over CDP
 
@@ -275,13 +297,10 @@ the composited screen. Title: Dragon Ball Z Kai S5E99, HEVC Main 10
 - Item 15 (install the DMG to `/Applications` and launch from there; a locally
   built DMG carries no quarantine flag, so the real Gatekeeper path needs a
   downloaded copy and a person for the right-click > Open), 17 (the legacy
-  Intel workflow has never run) and 19 (NSOpenPanel). Item 16 is done:
-  `build-macos.yml` passed both jobs on the fixes above. Items 9–12 are done,
+  Intel workflow: ran on the tag) and 19 (NSOpenPanel). Item 16: `build-macos.yml`
+  passes on GitHub; the run on the macOS fixes themselves (7d88015) was
+  started 2026-09-09 after the remote was corrected. Items 9–12 are done,
   see above.
-- Intermittent `EXC_BAD_ACCESS` on shutdown in CEF's `Chrome_InProcGpuThread`,
-  one of six SIGTERM shutdowns, every frame inside the CEF binary. The
-  truncated teardown leaves the instance socket behind; the next launch
-  removes it. Report: `~/Library/Logs/DiagnosticReports/astrofin-2026-09-09-110441.ips`.
 - `jmpInfo.videoMode` stays stale after a script-driven mode switch (the UI
   path updates it); harmless, noticed while driving over CDP.
 - `screencapture -x` failed once inside a subagent early in the session and
