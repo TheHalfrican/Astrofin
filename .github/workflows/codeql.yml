@@ -1,0 +1,66 @@
+# CodeQL static analysis (GitHub-only; the Gitea instance has no code scanning).
+#
+# Rust is analysed with build-mode "none": CodeQL builds its database straight
+# from the sources, so this job never needs libmpv, CEF or MSYS2 and runs on a
+# plain ubuntu-latest runner. Do not switch it to autobuild/manual -- that would
+# drag the whole native toolchain in for no extra findings.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'third_party/**'
+      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'third_party/**'
+      - 'docs/**'
+      - '**/*.md'
+  schedule:
+    # Mondays 05:17 UTC; off the hour so the run is not queued with everyone else.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, javascript-typescript]
+    steps:
+      # No submodules: third_party/ is excluded from the analysis anyway.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # Keeps vendored/bundled sources out of the database as well as out of
+          # the trigger. build/ and dist/ are staged copies of our own tree.
+          config: |
+            paths-ignore:
+              - third_party
+              - build
+              - dist
+              - src/target
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
