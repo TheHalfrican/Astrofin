@@ -115,7 +115,13 @@ impl Inner {
         let extra = crate::injection::build_for_kind(&kind, shared);
 
         let mut client = crate::client_impl::make_client(Arc::clone(self));
-        let url_cef = CefString::from(url);
+        // A browser created with no URL never commits a navigation (the main
+        // layer on a fresh profile: no saved server yet). Closing such a
+        // browser during CefShutdown crashed CEF's in-process GPU thread on
+        // macOS (single-process, OSR) in 14 of 44 shutdowns from the connect
+        // screen, and never from a navigated page. Give it a real, empty
+        // document instead; the overlay's navigateMain replaces it anyway.
+        let url_cef = CefString::from(if url.is_empty() { "about:blank" } else { url });
         let mut extra_opt = extra.and_then(crate::injection::ExtraInfo::into_dictionary);
         let _ = browser_host_create_browser(
             Some(&wi),
