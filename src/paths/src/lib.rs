@@ -158,10 +158,10 @@ fn exe_dir() -> PathBuf {
 pub fn resource_dir() -> PathBuf {
     let dir = exe_dir();
     #[cfg(target_os = "macos")]
-    if dir.file_name() == Some(std::ffi::OsStr::new("MacOS")) {
-        if let Some(contents) = dir.parent() {
-            return contents.join("Resources");
-        }
+    if dir.file_name() == Some(std::ffi::OsStr::new("MacOS"))
+        && let Some(contents) = dir.parent()
+    {
+        return contents.join("Resources");
     }
     dir
 }
