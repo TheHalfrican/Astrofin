@@ -1007,17 +1007,26 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   display: none !important;
 }
 
-/* The selected span: a translucent accent wash on the track itself, one
- * step above the buffered span so the loop reads as the stronger claim on
- * that stretch without hiding the played bar under it. */
+/* The selected span: a light wash on the track itself, one step above the
+ * buffered span, plus a hairline accent rule along the top and bottom edges.
+ *
+ * The wash is neutral rather than accent on purpose. The played part of the
+ * scrubber is already bright accent, so an accent wash over it disappeared
+ * (measured live, 15-window-composite.png in the A-B report); a text-colour
+ * wash reads against both the played bar and the dark unplayed track. It
+ * stays well under alpha 1 so the video is never covered, and the two accent
+ * rules — not a full outline, so the ends stay open onto the track — are
+ * what say "this stretch is the loop". */
 .videoOsdBottom .af-abloop-band {
   position: absolute;
   top: 50%;
   height: 9px;
   transform: translateY(-50%);
   border-radius: var(--af-radius-pill);
-  background: rgba(var(--af-accent-primary-rgb), .22);
-  box-shadow: inset 0 0 0 1px rgba(var(--af-accent-primary-rgb), .38);
+  background: rgba(var(--af-text-primary-rgb), .30);
+  box-shadow:
+    inset 0 1px 0 0 rgba(var(--af-accent-primary-rgb), .85),
+    inset 0 -1px 0 0 rgba(var(--af-accent-primary-rgb), .85);
   transition:
     left var(--af-dur-tile) var(--af-ease-out),
     width var(--af-dur-tile) var(--af-ease-out);
@@ -1080,6 +1089,20 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
 }
 .videoOsdBottom .af-abloop-btn.is-active .material-icons {
   text-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .55);
+}
+
+/* A-B toasts clear of the OSD bar. jellyfin-web's .toastContainer is
+ * bottom-anchored and the bottom bar sits in the same corner, so a toast
+ * fired from the player landed on the start time and the "Ends at" text.
+ * ab-loop.js measures the bar and writes its height into
+ * --af-abloop-toast-lift on its own toast (only while the bar is visible);
+ * the extra step is added here so the token stays in the stylesheet. With no
+ * bar on screen nothing is lifted and the toast sits where jf-web puts it.
+ * The class is on our toasts alone, so playback-source.js's are where they
+ * were. margin, not transform: jf-web's own toast transition owns the
+ * transform. */
+.toast.af-abloop-toast--lifted {
+  margin-bottom: calc(var(--af-abloop-toast-lift, 0px) + var(--af-space-3));
 }
 
 @media (prefers-reduced-motion: reduce) {

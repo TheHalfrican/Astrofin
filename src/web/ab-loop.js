@@ -8,13 +8,16 @@
 //     the loop is how you leave it without clearing it;
 //   - with either end unset — mpv spells that "no" — looping is off.
 //
-// State flows one way, per CLAUDE.md's "mpv Event Flow": this file asks the
-// native side to set the points, the native side writes them to mpv, mpv
-// reports the two properties back, and the native side pushes them here as
-// `window._nativeAbLoop(a, b)` in seconds. Nothing below ever writes `state`
-// from a keystroke or a click — it sends the request and waits for mpv to
-// say what happened. A point the user asks for that mpv refuses simply never
-// appears.
+// State flows one way, per CLAUDE.md's "mpv Event Flow": this file asks for
+// a *step* — `jmpNative.playerAbLoop('set-a' | 'set-b' | 'clear')` — mpv
+// stamps the point from its own pts, mpv reports the two properties back,
+// and the native side pushes them here as `window._nativeAbLoop(a, b)` in
+// seconds. Nothing below ever writes `state` from a keystroke or a click,
+// and nothing below ever sends a time: mpv disarms a loop whose B is already
+// behind the core (player/playloop.c, update_ab_loop_clip), and the position
+// this file can sample lags the core by up to half a second, so a B taken
+// from it never armed. Even the toast that names the two points waits for
+// mpv to say what they are.
 //
 // Everything is decoration over playback and the whole module shares one
 // execute_java_script call with the mpv shims, so it is wrapped in try/catch,
@@ -38,11 +41,25 @@
         var RETRY_MS = 250;
         var RETRY_MAX = 40;
 
+        // A mount is never final: jellyfin-web swaps the whole player page
+        // under us (see currentOsd). The MutationObserver catches that in a
+        // frame; this is the belt-and-braces sweep for a swap that somehow
+        // produced no body mutation we saw.
+        var SAFETY_MS = 2000;
+
+        // How long a "the user asked for this" flag survives while waiting
+        // for mpv to report the point back. mpv answers in a frame or two;
+        // past this the ask is stale and the push is somebody else's (an
+        // item load clearing the pair, say).
+        var PENDING_MS = 1500;
+
         var TOAST_IN_MS = 300;
         var TOAST_HOLD_MS = 3500;
         var TOAST_OUT_MS = 300;
 
         var BTN_CLASS = 'af-abloop-btn';
+        var TOAST_CLASS = 'af-abloop-toast';
+        var TOAST_LIFTED_CLASS = 'af-abloop-toast--lifted';
         var OVERLAY_CLASS = 'af-abloop-overlay';
         var BAND_CLASS = 'af-abloop-band';
         var PIN_CLASS = 'af-abloop-pin';
@@ -51,10 +68,13 @@
         // Verified live in docs/design/theme-injection.md, "Player OSD": the
         // scrubber is `.sliderContainer.mdl-slider-container` inside a flex
         // row with `.startTimeText` and `.endTimeText`, and the control row
-        // is `.buttons.focuscontainer-x`.
-        var SLIDER_SELECTOR = '.videoOsdBottom .sliderContainer';
-        var BUTTONS_SELECTOR = '.videoOsdBottom .buttons';
-        var END_TIME_SELECTOR = '.videoOsdBottom .endTimeText';
+        // is `.buttons.focuscontainer-x`. All three are looked up *inside*
+        // one `.videoOsdBottom`, never document-wide, so the three pieces
+        // cannot end up in two different copies of the player page.
+        var OSD_SELECTOR = '.videoOsdBottom';
+        var SLIDER_SELECTOR = '.sliderContainer';
+        var BUTTONS_SELECTOR = '.buttons';
+        var END_TIME_SELECTOR = '.endTimeText';
         var VIDEO_SELECTOR = '.videoPlayerContainer';
 
         // The button cycles exactly like mpv's own `ab-loop` command, and
@@ -200,6 +220,16 @@
         var keyHandler = null;
         var retryTimer = null;
         var retriesLeft = 0;
+        var observer = null;
+        var safetyTimer = null;
+        var checkQueued = false;
+
+        // The action the user last asked mpv for, and its expiry. The point
+        // itself comes from mpv, so the toast that announces it has to wait
+        // for the push; this is how the push tells "the user just pressed ]"
+        // from "the item changed and the pair was cleared".
+        var pending = null;
+        var pendingUntil = 0;
 
         // The whole of it. Written only by applyPush.
         var state = { a: null, b: null };
@@ -286,52 +316,74 @@
 
         // ---- talking to mpv ---------------------------------------------------
 
-        // Always both ends; -1 is "unset". Deliberately does not touch
-        // `state` — that is mpv's to report.
-        function send(aSec, bSec) {
+        // A step, never a time: 'set-a' | 'set-b' | 'clear'. mpv stamps the
+        // point from its own pts, because it disarms a loop whose B is
+        // already behind the core (player/playloop.c, update_ab_loop_clip)
+        // and the position this file can sample lags the core by up to half
+        // a second — a B taken from it never armed. Deliberately does not
+        // touch `state`: that is mpv's to report.
+        function sendAction(action) {
             var n = native();
-            if (!n || typeof n.playerSetAbLoop !== 'function') {
-                debug('playerSetAbLoop is not available');
+            if (!n || typeof n.playerAbLoop !== 'function') {
+                debug('playerAbLoop is not available');
                 return false;
             }
-            var toMs = function (v) {
-                var s = num(v);
-                return s === null ? -1 : Math.round(s * 1000);
-            };
-            guard('playerSetAbLoop', function () {
-                n.playerSetAbLoop(toMs(aSec), toMs(bSec));
+            guard('playerAbLoop', function () {
+                n.playerAbLoop(action);
             });
             return true;
+        }
+
+        function now() {
+            return typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : 0;
+        }
+
+        // Arm the "the user asked for this" flag the next push reads.
+        function expect(action) {
+            pending = action;
+            pendingUntil = now() + PENDING_MS;
+        }
+
+        function takePending() {
+            var p = pending;
+            if (p !== null && now() > pendingUntil) p = null;
+            pending = null;
+            pendingUntil = 0;
+            return p;
         }
 
         // ---- actions -----------------------------------------------------------
 
         // Setting A always begins a fresh loop: A alone means mpv is not
-        // looping yet, so there is no B worth keeping.
+        // looping yet, so there is no B worth keeping. The position is read
+        // only to refuse the press when there is no playback to stamp; the
+        // point mpv lands on is mpv's, and the toast waits for it.
         function setA() {
-            var pos = positionSec();
-            if (pos === null) {
+            if (positionSec() === null) {
                 toast(rejectText('no-position'));
                 return;
             }
-            if (!send(pos, null)) return;
-            toast('Loop start (A) at ' + fmtTime(pos));
+            if (!sendAction('set-a')) return;
+            expect('set-a');
         }
 
+        // The guards stay here, on the sampled position, because they are
+        // user feedback: half a second either way does not change whether
+        // the press was a mistake, and a refusal has to be immediate.
         function setB() {
-            var pos = positionSec();
-            var reason = checkB(state, pos);
+            var reason = checkB(state, positionSec());
             if (reason) {
                 toast(rejectText(reason));
                 return;
             }
-            if (!send(state.a, pos)) return;
-            toast('Looping ' + fmtTime(state.a) + '–' + fmtTime(pos));
+            if (!sendAction('set-b')) return;
+            expect('set-b');
         }
 
         function clearPoints() {
             if (state.a === null && state.b === null) return;
-            if (!send(null, null)) return;
+            if (!sendAction('clear')) return;
+            pending = null;
             toast('A-B loop cleared');
         }
 
@@ -387,6 +439,38 @@
 
         // ---- toast ---------------------------------------------------------------
 
+        // The toast container is jellyfin-web's, bottom-anchored, and the
+        // OSD's bottom bar sits in exactly that corner — a toast fired from
+        // the player lands on the start time and the "Ends at" text. Lift
+        // ours clear of the bar by its measured height (plus one spacing
+        // token, added in the CSS) while the bar is actually visible; jf-web
+        // hides the bar by fading it, not by unmounting it, so the rect
+        // alone is not the test. Only our own toasts carry the class, so
+        // playback-source.js's are untouched.
+        function liftToast(el) {
+            var w = win();
+            var osd = currentOsd();
+            if (!w || !osd || !el || !el.style || typeof el.style.setProperty !== 'function') return;
+            if (typeof w.getComputedStyle === 'function') {
+                var cs = guard('osd style', function () {
+                    return w.getComputedStyle(osd);
+                });
+                if (cs && (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) === 0)) {
+                    return;
+                }
+            }
+            if (typeof osd.getBoundingClientRect !== 'function') return;
+            var rect = guard('osd rect', function () {
+                return osd.getBoundingClientRect();
+            });
+            var h = rect ? num(rect.height) : null;
+            if (h === null || h <= 0) return;
+            guard('toast lift', function () {
+                el.style.setProperty('--af-abloop-toast-lift', Math.round(h) + 'px');
+                if (el.classList) el.classList.add(TOAST_LIFTED_CLASS);
+            });
+        }
+
         // Same synthesized markup playback-source.js uses: jellyfin-web's
         // toast module is ESM and cannot be imported from an injected script,
         // and the classes are what toast.scss and our own theme already
@@ -403,8 +487,9 @@
                 d.body.appendChild(container);
             }
             var el = d.createElement('div');
-            el.className = 'toast';
+            el.className = 'toast ' + TOAST_CLASS;
             el.textContent = text;
+            liftToast(el);
             container.appendChild(el);
             var later = typeof w.setTimeout === 'function' ? w.setTimeout : null;
             if (!later) return;
@@ -427,16 +512,75 @@
 
         // ---- DOM -------------------------------------------------------------------
 
+        // Whether the node is still in the live document. The whole of bug 2:
+        // jellyfin-web can hand a mounted control to a page it is about to
+        // throw away, and a detached element keeps its parentNode, its
+        // classes and its styles — everything except a place on screen.
+        function isLive(el) {
+            if (!el) return false;
+            if (typeof el.isConnected === 'boolean') return el.isConnected;
+            var d = doc();
+            if (d && d.body && typeof d.body.contains === 'function') return d.body.contains(el);
+            return false;
+        }
+
+        // The OSD the controls belong to: the last *connected*
+        // `.videoOsdBottom`. jellyfin-web swaps player pages by appending the
+        // incoming `DIV.page.libraryPage` and only then detaching the
+        // outgoing one, so for a frame there are two and document order puts
+        // the new one last (probe7 in the live A-B report: `playbackstart`
+        // fires ~6 ms *before* the swap, which is how the first mount landed
+        // in the page that was on its way out).
+        function currentOsd() {
+            var d = doc();
+            if (!d || typeof d.querySelectorAll !== 'function') return null;
+            var all = guard('osd lookup', function () {
+                return d.querySelectorAll(OSD_SELECTOR);
+            });
+            if (!all || !all.length) return null;
+            for (var i = all.length - 1; i >= 0; i--) {
+                if (isLive(all[i])) return all[i];
+            }
+            return null;
+        }
+
+        // One of ours, inside `osd` and still connected, or null.
+        function mountedIn(osd, cls) {
+            if (!osd || typeof osd.querySelector !== 'function') return null;
+            var el = guard('mount lookup', function () {
+                return osd.querySelector('.' + cls);
+            });
+            return el && isLive(el) ? el : null;
+        }
+
+        // Anything of ours anywhere else — an earlier page's copy that is
+        // somehow still attached, or one the OSD moved. Removed rather than
+        // left to accumulate.
+        function dropStrays(osd, cls) {
+            var d = doc();
+            if (!d || typeof d.querySelectorAll !== 'function') return;
+            var all = guard('stray lookup', function () {
+                return d.querySelectorAll('.' + cls);
+            });
+            if (!all) return;
+            for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                if (!el || (osd && typeof osd.contains === 'function' && osd.contains(el))) continue;
+                if (el.parentNode) el.parentNode.removeChild(el);
+            }
+        }
+
         // Idempotent. Sits with the right-hand utility cluster, before the
         // subtitle button, and is created once per OSD instance.
-        function ensureButton() {
+        function ensureButton(osd) {
             var d = doc();
-            if (!d || typeof d.querySelector !== 'function') return null;
-            var host = d.querySelector(BUTTONS_SELECTOR);
+            if (!d || !osd || typeof osd.querySelector !== 'function') return null;
+            var host = osd.querySelector(BUTTONS_SELECTOR);
             if (!host) return null;
-            var existing = d.querySelector('.' + BTN_CLASS);
+            var existing = mountedIn(osd, BTN_CLASS);
             if (existing && existing.parentNode === host) return existing;
             if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+            dropStrays(osd, BTN_CLASS);
             var btn = d.createElement('button');
             btn.setAttribute('type', 'button');
             btn.className = 'paper-icon-button-light ' + BTN_CLASS;
@@ -461,14 +605,15 @@
 
         // A chip beside the "ends at" text, in the same mono face the time
         // readouts use.
-        function ensureReadout() {
+        function ensureReadout(osd) {
             var d = doc();
-            if (!d || typeof d.querySelector !== 'function') return null;
-            var end = d.querySelector(END_TIME_SELECTOR);
+            if (!d || !osd || typeof osd.querySelector !== 'function') return null;
+            var end = osd.querySelector(END_TIME_SELECTOR);
             if (!end || !end.parentNode) return null;
-            var existing = d.querySelector('.' + READOUT_CLASS);
+            var existing = mountedIn(osd, READOUT_CLASS);
             if (existing && existing.parentNode === end.parentNode) return existing;
             if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+            dropStrays(osd, READOUT_CLASS);
             var el = d.createElement('div');
             el.className = READOUT_CLASS;
             end.parentNode.insertBefore(el, end.nextSibling);
@@ -480,14 +625,15 @@
         // for exactly this) and is inset like jf-web's own
         // .sliderMarkerContainer so its percentages land on the same track
         // the chapter stars do.
-        function ensureOverlay() {
+        function ensureOverlay(osd) {
             var d = doc();
-            if (!d || typeof d.querySelector !== 'function') return null;
-            var host = d.querySelector(SLIDER_SELECTOR);
+            if (!d || !osd || typeof osd.querySelector !== 'function') return null;
+            var host = osd.querySelector(SLIDER_SELECTOR);
             if (!host) return null;
-            var existing = d.querySelector('.' + OVERLAY_CLASS);
+            var existing = mountedIn(osd, OVERLAY_CLASS);
             if (existing && existing.parentNode === host) return existing;
             if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+            dropStrays(osd, OVERLAY_CLASS);
             var el = d.createElement('div');
             el.className = OVERLAY_CLASS;
             el.setAttribute('aria-hidden', 'true');
@@ -506,8 +652,8 @@
             return el;
         }
 
-        function renderButton() {
-            var btn = ensureButton();
+        function renderButton(osd) {
+            var btn = ensureButton(osd);
             if (!btn) return false;
             var label = BTN_LABELS[nextAction(state)];
             btn.setAttribute('aria-label', label);
@@ -520,8 +666,8 @@
             return true;
         }
 
-        function renderReadout() {
-            var el = ensureReadout();
+        function renderReadout(osd) {
+            var el = ensureReadout(osd);
             if (!el) return false;
             var text = readoutText(state);
             el.textContent = text;
@@ -529,8 +675,8 @@
             return true;
         }
 
-        function renderOverlay() {
-            var el = ensureOverlay();
+        function renderOverlay(osd) {
+            var el = ensureOverlay(osd);
             if (!el) return false;
             var dur = durationSec();
             var geo = bandGeometry(state, dur);
@@ -563,25 +709,136 @@
 
         // Idempotent, and the only thing that draws. Every piece it could not
         // place yet arms a bounded retry, because the OSD mounts after
-        // `playbackstart`.
+        // `playbackstart`. A full mount is never treated as final — see
+        // checkMounts.
         function render() {
-            var d = doc();
-            if (!d || typeof d.querySelector !== 'function') return;
+            var osd = currentOsd();
+            if (!osd) {
+                scheduleRetry();
+                return;
+            }
             var mounted = 0;
-            if (guard('render button', renderButton)) mounted += 1;
-            if (guard('render readout', renderReadout)) mounted += 1;
-            if (guard('render overlay', renderOverlay)) mounted += 1;
+            if (
+                guard('render button', function () {
+                    return renderButton(osd);
+                })
+            ) {
+                mounted += 1;
+            }
+            if (
+                guard('render readout', function () {
+                    return renderReadout(osd);
+                })
+            ) {
+                mounted += 1;
+            }
+            if (
+                guard('render overlay', function () {
+                    return renderOverlay(osd);
+                })
+            ) {
+                mounted += 1;
+            }
             if (mounted < 3) scheduleRetry();
+        }
+
+        // True only when all three are connected and living in the OSD that
+        // is on screen now. "I mounted it once" is not the question.
+        function uiIsMounted() {
+            var osd = currentOsd();
+            if (!osd) return false;
+            return !!(
+                mountedIn(osd, BTN_CLASS) &&
+                mountedIn(osd, READOUT_CLASS) &&
+                mountedIn(osd, OVERLAY_CLASS)
+            );
         }
 
         function removeUi() {
             var d = doc();
-            if (!d || typeof d.querySelector !== 'function') return;
-            var selectors = ['.' + BTN_CLASS, '.' + READOUT_CLASS, '.' + OVERLAY_CLASS];
-            for (var i = 0; i < selectors.length; i++) {
-                var el = d.querySelector(selectors[i]);
-                if (el && el.parentNode) el.parentNode.removeChild(el);
+            if (!d || typeof d.querySelectorAll !== 'function') return;
+            var classes = [BTN_CLASS, READOUT_CLASS, OVERLAY_CLASS];
+            for (var i = 0; i < classes.length; i++) {
+                var all = guard('removeUi', function () {
+                    return d.querySelectorAll('.' + classes[i]);
+                });
+                if (!all) continue;
+                for (var j = 0; j < all.length; j++) {
+                    if (all[j] && all[j].parentNode) all[j].parentNode.removeChild(all[j]);
+                }
             }
+        }
+
+        // ---- surviving the page swap ----------------------------------------
+
+        // Re-render whenever any of the three has gone missing from the OSD
+        // on screen. Cheap: three scoped querySelectors and an isConnected.
+        function checkMounts() {
+            if (!videoActive() || uiIsMounted()) return;
+            debug('remounting into the current OSD');
+            armRetries();
+            render();
+        }
+
+        // One check per frame however many mutations arrived — a page swap
+        // is hundreds of them.
+        function scheduleCheck() {
+            var w = win();
+            if (checkQueued || !w) return;
+            var later = null;
+            if (typeof w.requestAnimationFrame === 'function') {
+                later = function (fn) {
+                    w.requestAnimationFrame(fn);
+                };
+            } else if (typeof w.setTimeout === 'function') {
+                later = function (fn) {
+                    w.setTimeout(fn, 0);
+                };
+            }
+            if (!later) return;
+            checkQueued = true;
+            later(function () {
+                checkQueued = false;
+                guard('mount check', checkMounts);
+            });
+        }
+
+        // Only while a video player is up: outside playback there is no OSD
+        // to lose and no reason to watch the whole body.
+        function startWatching() {
+            var w = win();
+            var d = doc();
+            if (!w || !d || !d.body) return;
+            if (!observer && typeof w.MutationObserver === 'function') {
+                observer = guard('observer', function () {
+                    var o = new w.MutationObserver(function () {
+                        scheduleCheck();
+                    });
+                    o.observe(d.body, { childList: true, subtree: true });
+                    return o;
+                });
+                if (!observer) observer = null;
+            }
+            if (safetyTimer === null && typeof w.setInterval === 'function') {
+                safetyTimer = w.setInterval(function () {
+                    guard('mount safety', checkMounts);
+                }, SAFETY_MS);
+            }
+        }
+
+        function stopWatching() {
+            var w = win();
+            if (observer) {
+                guard('observer disconnect', function () {
+                    if (typeof observer.disconnect === 'function') observer.disconnect();
+                });
+                observer = null;
+            }
+            if (safetyTimer !== null && w && typeof w.clearInterval === 'function') {
+                w.clearInterval(safetyTimer);
+            }
+            safetyTimer = null;
+            checkQueued = false;
         }
 
         // ---- retries ------------------------------------------------------------------
@@ -614,22 +871,55 @@
         // The only writer of `state`. The native side clears mpv's points on
         // every load and stop, so an item change arrives here as a null/null
         // push and the UI empties itself.
+        //
+        // The "loop start at m:ss" / "looping m:ss–m:ss" toasts fire from
+        // *here* rather than from the key press, because the times are mpv's
+        // and the key press does not know them. `pending` is what keeps that
+        // honest: a push the user did not ask for — the pair mpv reports at
+        // startup, or the clear on a new item — says nothing.
         function applyPush(a, b) {
+            var prev = state;
             state = normalizePush(a, b);
             debug('points a=' + state.a + ' b=' + state.b);
+            guard('announce', function () {
+                announce(prev, state);
+            });
             armRetries();
             render();
+        }
+
+        function announce(prev, next) {
+            if (pending === null) return;
+            if (pending === 'set-a' && prev.a === null && next.a !== null && next.b === null) {
+                takePending();
+                toast('Loop start (A) at ' + fmtTime(next.a));
+                return;
+            }
+            if (pending === 'set-b' && prev.b === null && next.a !== null && next.b !== null) {
+                takePending();
+                var lo = Math.min(next.a, next.b);
+                var hi = Math.max(next.a, next.b);
+                toast('Looping ' + fmtTime(lo) + '–' + fmtTime(hi));
+                return;
+            }
+            // Nothing matched: drop a request mpv never answered rather than
+            // letting it announce the next unrelated push.
+            if (now() > pendingUntil) takePending();
         }
 
         // ---- lifecycle ------------------------------------------------------------------
 
         function handleStart() {
+            startWatching();
             armRetries();
             render();
         }
 
         function handleStop() {
+            stopWatching();
             clearRetry();
+            pending = null;
+            pendingUntil = 0;
             state = { a: null, b: null };
             removeUi();
         }
@@ -667,11 +957,14 @@
                 if (keyHandler && w && typeof w.removeEventListener === 'function') {
                     w.removeEventListener('keydown', keyHandler, true);
                 }
+                stopWatching();
                 clearRetry();
                 keyHandler = null;
                 pm = null;
                 onStart = null;
                 onStop = null;
+                pending = null;
+                pendingUntil = 0;
                 state = { a: null, b: null };
             });
         }
@@ -697,7 +990,11 @@
             _state: function () {
                 return state;
             },
-            _render: render
+            _render: render,
+            // The page-swap watch, so a test can drive it without a
+            // MutationObserver.
+            _checkMounts: checkMounts,
+            _uiIsMounted: uiIsMounted
         };
 
         var w = win();
