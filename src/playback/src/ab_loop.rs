@@ -1,12 +1,24 @@
 //! A-B repeat loop: mpv's `ab-loop-a` / `ab-loop-b`, mirrored to the OSD.
 //!
-//! mpv owns the loop. The web layer asks for two points, this module writes
-//! them as async property sets, and the *only* thing that ever changes the
-//! state JS draws is mpv reporting the properties back. Nothing here polices
-//! the playhead: once both points are set mpv seeks to `a` when playback
-//! passes `b`, and a manual seek past `b` deliberately does not loop
-//! (`DOCS/man/options.rst`, `--ab-loop-a`). With either point unset — mpv
-//! spells that `"no"` — looping is off.
+//! mpv owns the loop, and mpv stamps the points. The web layer asks for one
+//! of three *actions* — set A, set B, clear — never for a time; this module
+//! turns the action into `no-osd ab-loop` (which mpv answers with its own
+//! `get_current_time()`) or into a pair of `"no"` writes, and the *only*
+//! thing that ever changes the state JS draws is mpv reporting the
+//! properties back.
+//!
+//! The points have to come from mpv rather than from the UI's sampled
+//! position because mpv disarms the loop at write time when the core's pts is
+//! already past the `b` being written (`player/playloop.c`,
+//! `update_ab_loop_clip`, run on every `ab-loop-a` / `ab-loop-b` set). The
+//! position the OSD has lags the core by up to half a second, so a `b` taken
+//! from it is always in the past and the loop never armed until something
+//! seeked back before it.
+//!
+//! Nothing here polices the playhead: once both points are set mpv seeks to
+//! `a` when playback passes `b`, and a manual seek past `b` deliberately does
+//! not loop (`DOCS/man/options.rst`, `--ab-loop-a`). With either point unset
+//! — mpv spells that `"no"` — looping is off.
 //!
 //! The two observations get their own `reply_userdata`, like
 //! [`crate::stats`]: they are a UI concern with no bearing on the playback
@@ -23,7 +35,7 @@ use jfn_mpv::{Node, PropertyValue};
 pub const AB_LOOP_OBSERVE_ID: u64 = 101;
 
 /// Both loop points, in seconds. `None` is mpv's `"no"` — that end is unset.
-type Points = (Option<f64>, Option<f64>);
+pub type Points = (Option<f64>, Option<f64>);
 
 struct Inner {
     a: Option<f64>,
@@ -48,34 +60,81 @@ fn inner() -> &'static Mutex<Inner> {
 // Writing
 // ---------------------------------------------------------------------
 
-/// Set both loop points from the web layer's milliseconds, where a negative
-/// value means "unset". Both ends are always written, so a half-set pair can
-/// never survive a call.
-pub fn jfn_playback_set_ab_loop_ms(a_ms: i64, b_ms: i64) {
-    let (a, b) = points_from_ms(a_ms, b_ms);
-    jfn_mpv::api::jfn_mpv_set_ab_loop(a, b);
+/// The three things the web layer can ask for. Deliberately not "here are
+/// the two times": see the module note on `update_ab_loop_clip`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+    SetA,
+    SetB,
+    Clear,
+}
+
+impl Action {
+    /// The wire spelling, as `playerAbLoop`'s single argument.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "set-a" => Some(Self::SetA),
+            "set-b" => Some(Self::SetB),
+            "clear" => Some(Self::Clear),
+            _ => None,
+        }
+    }
+}
+
+/// What an [`Action`] does to mpv, given the pair mpv last reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Command {
+    /// `no-osd ab-loop` — mpv stamps the next point from its own pts.
+    Cycle,
+    /// Write `"no"` to both ends.
+    ClearBoth,
+    /// The UI asked for a step mpv is not on. Nothing is written; the next
+    /// observation push resyncs the UI.
+    Ignore,
+}
+
+/// mpv's `ab-loop` command walks A → B → clear off *mpv's* state, so an
+/// action is only run when the observed pair says mpv is on that step.
+/// A stale UI (a click that raced a load, or the intermediate pair a clear
+/// passes through) therefore cannot turn "set A" into "set B".
+#[must_use]
+pub fn command_for(action: Action, observed: Points) -> Command {
+    match (action, observed) {
+        (Action::SetA, (None, None)) | (Action::SetB, (Some(_), None)) => Command::Cycle,
+        (Action::Clear, _) => Command::ClearBoth,
+        _ => Command::Ignore,
+    }
+}
+
+/// Run one A-B loop action against mpv. Unknown spellings are logged and
+/// dropped rather than guessed at.
+pub fn jfn_playback_ab_loop_action(action: &str) {
+    let Some(act) = Action::parse(action) else {
+        tracing::warn!(target: "mpv", "ab-loop: unknown action {action:?}");
+        return;
+    };
+    let observed = {
+        let g = inner().lock();
+        (g.a, g.b)
+    };
+    match command_for(act, observed) {
+        Command::Cycle => jfn_mpv::api::jfn_mpv_ab_loop_cycle(),
+        Command::ClearBoth => jfn_mpv::api::jfn_mpv_clear_ab_loop(),
+        Command::Ignore => tracing::debug!(
+            target: "mpv",
+            "ab-loop: ignoring {action:?}; mpv is at a={} b={}",
+            fmt_point(observed.0),
+            fmt_point(observed.1)
+        ),
+    }
 }
 
 /// Drop both loop points. mpv keeps `ab-loop-a` / `ab-loop-b` across files,
-/// so a loop set on one episode would otherwise apply to the next; the web
+/// so a loop set on one episode would otherwise apply to the next; the CEF
 /// layer clears on every load and stop.
 pub fn jfn_playback_clear_ab_loop() {
-    jfn_mpv::api::jfn_mpv_set_ab_loop(None, None);
-}
-
-/// Milliseconds from JS to mpv's seconds. Anything negative is the "unset"
-/// sentinel the web layer sends for a point it does not have.
-#[must_use]
-pub fn points_from_ms(a_ms: i64, b_ms: i64) -> Points {
-    (point_from_ms(a_ms), point_from_ms(b_ms))
-}
-
-fn point_from_ms(ms: i64) -> Option<f64> {
-    if ms < 0 {
-        None
-    } else {
-        Some(ms as f64 / 1000.0)
-    }
+    jfn_mpv::api::jfn_mpv_clear_ab_loop();
 }
 
 // ---------------------------------------------------------------------
@@ -145,16 +204,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn negative_milliseconds_are_the_unset_sentinel() {
-        assert_eq!(points_from_ms(-1, -1), (None, None));
-        assert_eq!(points_from_ms(1500, -1), (Some(1.5), None));
-        assert_eq!(points_from_ms(-1, 1500), (None, Some(1.5)));
+    fn the_wire_spellings_are_the_three_actions() {
+        assert_eq!(Action::parse("set-a"), Some(Action::SetA));
+        assert_eq!(Action::parse("set-b"), Some(Action::SetB));
+        assert_eq!(Action::parse("clear"), Some(Action::Clear));
+        assert_eq!(Action::parse("setA"), None);
+        assert_eq!(Action::parse(""), None);
     }
 
     #[test]
-    fn milliseconds_become_seconds() {
-        assert_eq!(points_from_ms(0, 3250), (Some(0.0), Some(3.25)));
-        assert_eq!(points_from_ms(83_000, 105_500), (Some(83.0), Some(105.5)));
+    fn setting_a_only_cycles_mpv_when_mpv_has_no_points() {
+        assert_eq!(command_for(Action::SetA, (None, None)), Command::Cycle);
+        // mpv is past that step: its `ab-loop` would stamp B, not A.
+        assert_eq!(
+            command_for(Action::SetA, (Some(12.0), None)),
+            Command::Ignore
+        );
+        assert_eq!(
+            command_for(Action::SetA, (Some(12.0), Some(20.0))),
+            Command::Ignore
+        );
+        // The pair a clear passes through on its way to (no, no).
+        assert_eq!(
+            command_for(Action::SetA, (None, Some(20.0))),
+            Command::Ignore
+        );
+    }
+
+    #[test]
+    fn setting_b_only_cycles_mpv_when_a_is_set_and_b_is_not() {
+        assert_eq!(
+            command_for(Action::SetB, (Some(12.0), None)),
+            Command::Cycle
+        );
+        assert_eq!(command_for(Action::SetB, (None, None)), Command::Ignore);
+        assert_eq!(
+            command_for(Action::SetB, (Some(12.0), Some(20.0))),
+            Command::Ignore
+        );
+        assert_eq!(
+            command_for(Action::SetB, (None, Some(20.0))),
+            Command::Ignore
+        );
+    }
+
+    #[test]
+    fn clearing_writes_both_ends_whatever_mpv_is_showing() {
+        for observed in [
+            (None, None),
+            (Some(12.0), None),
+            (None, Some(20.0)),
+            (Some(12.0), Some(20.0)),
+        ] {
+            assert_eq!(command_for(Action::Clear, observed), Command::ClearBoth);
+        }
     }
 
     #[test]
@@ -203,8 +306,11 @@ mod tests {
     }
 
     #[test]
-    fn milliseconds_round_trip_through_the_push() {
-        let (a, b) = points_from_ms(83_000, 105_500);
+    fn an_observed_pair_round_trips_through_the_push() {
+        let (a, b) = (
+            point_from_value(&PropertyValue::Node(Node::Double(83.0))),
+            point_from_value(&PropertyValue::Node(Node::Double(105.5))),
+        );
         assert_eq!(
             push_js(a, b),
             "window._nativeAbLoop && window._nativeAbLoop(83, 105.5)"

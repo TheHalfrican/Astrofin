@@ -321,22 +321,35 @@ pub fn jfn_mpv_set_start_position(s: f64) {
     unsafe { set_double(c"start", s) };
 }
 
-/// A-B repeat loop points, in seconds. `None` unsets that end by writing
-/// mpv's sentinel string `"no"`; with either end unset mpv does not loop
-/// (`DOCS/man/options.rst`, `--ab-loop-a`).
+/// One step of mpv's own `ab-loop` command: with neither point set it stamps
+/// `ab-loop-a`, with only `a` set it stamps `ab-loop-b`, and with both set it
+/// clears the pair (`player/command.c`, `cmd_ab_loop`).
 ///
-/// Both ends are always written, `a` first, so a caller can never leave a
-/// new `b` paired with a stale `a`. Both writes are async property sets, so
-/// this is safe to call from the mpv event thread.
-pub fn jfn_mpv_set_ab_loop(a: Option<f64>, b: Option<f64>) {
-    set_ab_loop_point(c"ab-loop-a", a);
-    set_ab_loop_point(c"ab-loop-b", b);
+/// The point is *mpv's* `get_current_time()`, which is why the loop is set
+/// this way rather than by writing a time the UI sampled: mpv disarms the
+/// loop at write time when the core's pts is already past the `b` being
+/// written (`player/playloop.c`, `update_ab_loop_clip`), and the UI's
+/// position lags the core by up to half a second.
+///
+/// `no-osd` (`DOCS/man/input.rst`, "Input Command Prefixes") keeps mpv's own
+/// "A-B loop: …" text off the video: the OSD for this is ours.
+///
+/// Async, so this is safe to call from the mpv event thread.
+pub fn jfn_mpv_ab_loop_cycle() {
+    cmd(&[c"no-osd", c"ab-loop"]);
 }
 
-fn set_ab_loop_point(name: &CStr, secs: Option<f64>) {
-    match secs {
-        Some(s) => unsafe { set_double(name, s) },
-        None => unsafe { set_str(name, c"no") },
+/// Drop both A-B loop points by writing mpv's sentinel string `"no"` to each;
+/// with either end unset mpv does not loop (`DOCS/man/options.rst`,
+/// `--ab-loop-a`).
+///
+/// `a` first, deliberately: the two async writes are observed separately, so
+/// there is one intermediate pair either way, and `(no, b)` already draws as
+/// "no loop" while `(a, no)` would flash the A-only state.
+pub fn jfn_mpv_clear_ab_loop() {
+    unsafe {
+        set_str(c"ab-loop-a", c"no");
+        set_str(c"ab-loop-b", c"no");
     }
 }
 

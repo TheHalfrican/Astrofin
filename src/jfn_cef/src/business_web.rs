@@ -29,7 +29,7 @@ use jfn_mpv::api::{
     jfn_mpv_stop, jfn_mpv_sub_add,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
-use jfn_playback::ab_loop::{jfn_playback_clear_ab_loop, jfn_playback_set_ab_loop_ms};
+use jfn_playback::ab_loop::{jfn_playback_ab_loop_action, jfn_playback_clear_ab_loop};
 use jfn_playback::ingest_driver::jfn_playback_fullscreen;
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 use jfn_playback::{Input as PbInput, MediaType as PbMediaType, post as pb_post};
@@ -344,18 +344,20 @@ fn handle_message(message: BrowserMessage) -> bool {
         "playerSetSpeed" => with_args(args, |a| {
             jfn_mpv_set_speed(list_int(a, 0) as f64 / 1000.0);
         }),
-        // Both ends every time, in milliseconds, with a negative value for
-        // "unset". Nothing is echoed back from here: the OSD redraws off the
-        // `ab-loop-a` / `ab-loop-b` observations mpv answers with.
-        "playerSetAbLoop" => with_args(args, |a| {
-            let a_ms = i64::from(list_int(a, 0));
-            let b_ms = i64::from(list_int(a, 1));
+        // One of "set-a" / "set-b" / "clear" — a step, never a time. mpv
+        // stamps the point itself (`jfn_playback::ab_loop`), because it
+        // disarms a loop whose `b` is already behind the core's pts and the
+        // web layer's position lags that by up to half a second. Nothing is
+        // echoed back from here: the OSD redraws off the `ab-loop-a` /
+        // `ab-loop-b` observations mpv answers with.
+        "playerAbLoop" => with_args(args, |a| {
+            let action = list_string(a, 0);
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_DEBUG,
-                &format!("playerSetAbLoop: a={a_ms}ms b={b_ms}ms"),
+                &format!("playerAbLoop: {action}"),
             );
-            jfn_playback_set_ab_loop_ms(a_ms, b_ms);
+            jfn_playback_ab_loop_action(&action);
         }),
         "playerSetSubtitle" => with_args(args, |a| {
             let id = list_int(a, 0) as i64;
