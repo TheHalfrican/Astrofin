@@ -493,17 +493,24 @@ fn shutdown_runtime(manager_thread: std::thread::JoinHandle<()>) {
 /// Boot-time mpv size reconcile (saved scale vs live display scale);
 /// seeds the display-hz cache and returns it for browser init.
 fn boot_mpv_reconcile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) -> f64 {
-    let mut display_hidpi_scale: f64 = 0.0;
-    unsafe {
-        let name = cs("display-hidpi-scale");
-        jfn_mpv::sys::mpv_get_property(
-            mpv_raw,
-            name.as_ptr(),
-            jfn_mpv::sys::mpv_format::MPV_FORMAT_DOUBLE,
-            &mut display_hidpi_scale as *mut f64 as *mut std::ffi::c_void,
-        );
-    }
-    jfn_playback::ingest_driver::jfn_playback_seed_display_hz_sync();
+    // Two more sync reads after CEF init; same main-thread hazard as the
+    // device profile, see mpv_read_off_main.
+    let addr = mpv_raw as usize;
+    let display_hidpi_scale = mpv_read_off_main(move || {
+        let mut scale: f64 = 0.0;
+        unsafe {
+            let name = cs("display-hidpi-scale");
+            jfn_mpv::sys::mpv_get_property(
+                addr as *mut jfn_mpv::sys::mpv_handle,
+                name.as_ptr(),
+                jfn_mpv::sys::mpv_format::MPV_FORMAT_DOUBLE,
+                &mut scale as *mut f64 as *mut std::ffi::c_void,
+            );
+        }
+        jfn_playback::ingest_driver::jfn_playback_seed_display_hz_sync();
+        scale
+    })
+    .unwrap_or(0.0);
     let hz = jfn_playback::ingest_driver::jfn_playback_display_hz();
     let saved = jfn_config::window_geometry();
     let snap = crate::window_geometry::controller().source().snapshot();
