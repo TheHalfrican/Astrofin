@@ -49,3 +49,22 @@ if [ -n "${MISSING}" ]; then
     # shellcheck disable=SC2086
     brew install ${MISSING}
 fi
+
+# A formula that is present but stale still fails the build: the mpv fork's
+# meson.build carries minimum versions (libplacebo >= 7.360.1 as of 2026-09)
+# that a months-old keg will not meet. Upgrade only our own list, never the
+# whole machine.
+echo "Checking for outdated packages..."
+OUTDATED="$(brew outdated --formula --quiet)"
+STALE=""
+for pkg in ${PACKAGES}; do
+    if printf '%s\n' "${OUTDATED}" | grep -qx "${pkg}"; then
+        STALE="${STALE} ${pkg}"
+    fi
+done
+
+if [ -n "${STALE}" ]; then
+    echo "Upgrading outdated packages:${STALE}"
+    # shellcheck disable=SC2086
+    brew upgrade ${STALE}
+fi
