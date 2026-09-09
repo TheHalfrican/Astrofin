@@ -114,17 +114,20 @@ CLI from `build/mpv-build/mpv` for mpv-only debugging.
 15. Install that DMG to `/Applications` and launch from there, not from
     `build/`. This is the first run that exercises Gatekeeper for real.
 16. **`.github/workflows/build-macos.yml`** — matrix `macos-15`/arm64 +
-    `macos-15-intel`/x86_64. Never run on this fork. Note it calls
+    `macos-15-intel`/x86_64. Has run on this fork: the `v0.3.0` tag and the
+    0.4.0-dev bump both passed on 2026-09-09, and a `workflow_dispatch` on the
+    macOS fixes (c226a79) passed both jobs (arm64 8 min, Intel 19 min). Note it calls
     `cargo xtask install --prefix build/output` **without** `--mpv-cli`, unlike
     `just build`, and brew-installs its own list (adds `sdl3`, omits `cmake`,
     `pkgconf`, `little-cms2`, and installs `create-dmg` later in the job).
 17. **`.github/workflows/build-macos-legacy.yml`** — `macos-26-intel`,
     `MACOSX_DEPLOYMENT_TARGET=12.0`, builds ffmpeg and libplacebo from source and
     caches them under `~/jellyfin-deps` (cosmetic rebrand residue; the remaining
-    rows are listed in `docs/rebrand-plan.md` around lines 240-247). Also never
-    run on this fork.
-18. **Triggering CI.** Push-triggered runs have not fired on the GitHub fork; use
-    `gh workflow run build-macos.yml -R TheHalfrican/Astrofin --ref main`. The
+    rows are listed in `docs/rebrand-plan.md` around lines 240-247). Still
+    never run on this fork.
+18. **Triggering CI.** Push-triggered runs do fire for `build-macos.yml` on the
+    GitHub fork (see 16); `gh workflow run build-macos.yml -R TheHalfrican/Astrofin
+    --ref main` also works and is how the 2026-09-09 verification run was started. The
     self-hosted Gitea runner is Windows-only, so macOS CI is GitHub Actions only.
 
 ### Follow-up features
@@ -229,19 +232,58 @@ have used x86_64 libraries. Build with `/opt/homebrew/bin` ahead of
   `Platform::run_blocking`, so main keeps pumping. Five consecutive warm
   launches reached the connect screen afterwards; before, zero of four did.
 
+### Runtime items 9–12, verified 2026-09-09 over CDP
+
+Driven with `--remote-debug-port 9223` and a small DevTools driver (targets,
+`Runtime.evaluate`, `Page.captureScreenshot`; real CDP mouse clicks, since
+synthetic DOM mouse events do not wake the OSD), with `screencapture -x` for
+the composited screen. Title: Dragon Ball Z Kai S5E99, HEVC Main 10
+1920x1080, mkv, direct play.
+
+- **9. Playback.** `[Source] play requested method=DirectPlay`, mpv
+  `Selected decoder: hevc`, `VO: [gpu-next] 1920x1080 yuv420p10`,
+  `AO: [coreaudio]`. Software decode: `HWDEC_DEFAULT` is `"no"`
+  (`src/mpv/src/options.rs`) and the profile sets nothing, so
+  `vd: No hardware decoding requested`; zero dropped frames over eleven
+  minutes on the M3 Max. Whether macOS should default to `videotoolbox` is a
+  product decision, not a bug. The settings UI showed "auto" for it because
+  `native-shim.js` fell back to `auto` when settings.json omits the default;
+  fixed to fall back to `no`.
+- **10. Video modes.** Auto resolved to `animation` (`series genre:
+  Animation`; the episode has no genres, the resolver fetched the series).
+  Live-Action, Animation, Off and Auto each logged `video mode … applied` and
+  a matching `mpv reports glsl-shaders=…`, with shaders resolved from
+  `Contents/Resources/shaders/`. Switching back to Auto mid-playback applies
+  the live-action fallback rather than re-resolving, as documented.
+- **11. OSD and fullscreen.** The OSD bar (DIRECT PLAY chip, scrubber, star
+  chapter markers, transport row), the trickplay bubble (time only: the item
+  has no trickplay images) and the Playback Info panel with live mpv stats
+  all composite over the video. Fullscreen via the OSD button:
+  `fullscreen=true`, window 1698x2128 -> 3456x2168, and back, with the
+  window restored. The OSD title clips in a narrow window (849 pt wide);
+  cosmetic.
+- **12. Now Playing.** The sink logs nothing on success; `mediaremoted`
+  shows `setting nowPlayingItem` for `io.github.thehalfrican.Astrofin` and
+  the `Playing -> Paused -> Playing` transitions following the OSD pause and
+  resume, with the state coming out of mpv (`Set property: pause=true`,
+  `_nativeEmit signal: paused`).
+- Retina, by eye on the composites: connect, sign-in, Home, item detail, OSD,
+  stats panel and fullscreen are all crisp at 2x.
+
 ### Still open
 
-- Items 9–12 (server login, 1080p HEVC playback, the four video modes, OSD and
-  fullscreen, Now Playing), 15 (install the DMG and launch from
-  `/Applications`), 16–18 (the GitHub macOS workflows have still never run),
-  19 (NSOpenPanel), and the Retina visual checks. All need a server and eyes.
+- Item 15 (install the DMG to `/Applications` and launch from there; a locally
+  built DMG carries no quarantine flag, so the real Gatekeeper path needs a
+  downloaded copy and a person for the right-click > Open), 17 (the legacy
+  Intel workflow has never run) and 19 (NSOpenPanel). Item 16 is done:
+  `build-macos.yml` passed both jobs on the fixes above. Items 9–12 are done,
+  see above.
 - Intermittent `EXC_BAD_ACCESS` on shutdown in CEF's `Chrome_InProcGpuThread`,
   one of six SIGTERM shutdowns, every frame inside the CEF binary. The
   truncated teardown leaves the instance socket behind; the next launch
   removes it. Report: `~/Library/Logs/DiagnosticReports/astrofin-2026-09-09-110441.ips`.
-- `boot_mpv_reconcile` still does sync reads on the main thread after CEF
-  init. Not seen to deadlock, but it is the same hazard class as above.
-- The runtime checks above are log-based; nothing was looked at. `screencapture -x`
-  failed with "could not create image from display" inside the subagent that
-  ran them, but works from the main session's shell (verified at the end of
-  the session, 3456x2234), so take screenshots from the main session.
+- `jmpInfo.videoMode` stays stale after a script-driven mode switch (the UI
+  path updates it); harmless, noticed while driving over CDP.
+- `screencapture -x` failed once inside a subagent early in the session and
+  worked everywhere afterwards, including in subagents; the earlier failure
+  was most likely the permission not yet granted.
