@@ -99,10 +99,11 @@
         settings: {
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
-                // settings.json omits hwdec when it equals the Rust-side default
-                // (HWDEC_DEFAULT = "no" in src/mpv/src/options.rs), so the display
-                // fallback must be that default, not "auto".
-                hwdec: _savedSettings.hwdec || 'no',
+                // settings.json omits hwdec when it equals the Rust-side default,
+                // which is per-OS (videotoolbox on macOS, no elsewhere); the
+                // native side injects it as hwdecDefault so the UI shows the
+                // real value rather than a guess.
+                hwdec: _savedSettings.hwdec || _savedSettings.hwdecDefault || 'no',
                 videoMode: _savedSettings.videoMode || 'auto',
                 transcodeNotice: _savedSettings.transcodeNotice || 'cpu'
             },

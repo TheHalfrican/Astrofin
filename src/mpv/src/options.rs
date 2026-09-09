@@ -1,6 +1,14 @@
 //! Hwdec mode policy: which mpv hardware-decode backends each OS offers.
 
-pub const HWDEC_DEFAULT: &str = "no";
+/// mpv's `hwdec` when the user has not chosen one. VideoToolbox is the
+/// platform decoder on macOS and what every other player there defaults to;
+/// elsewhere the default stays software. `jfn_config` mirrors this constant
+/// (it cannot depend on this crate) and a test in `jfn_rust::cli` pins both.
+pub const HWDEC_DEFAULT: &str = if cfg!(target_os = "macos") {
+    "videotoolbox"
+} else {
+    "no"
+};
 
 #[expect(
     dead_code,

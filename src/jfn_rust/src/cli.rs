@@ -46,7 +46,7 @@ pub struct Cli {
     #[arg(long, env = ENV_CACHE_DIR)]
     pub cache_dir: Option<String>,
 
-    /// Hardware decoding mode (default: no).
+    /// Hardware decoding mode (default: no; videotoolbox on macOS).
     #[arg(long)]
     pub hwdec: Option<String>,
 
@@ -345,7 +345,14 @@ mod tests {
     // links them to the consts, so guard the drift here.
     #[test]
     fn const_defaults_match_help_text() {
-        assert_eq!(jfn_mpv::HWDEC_DEFAULT, "no");
+        assert_eq!(
+            jfn_mpv::HWDEC_DEFAULT,
+            if cfg!(target_os = "macos") {
+                "videotoolbox"
+            } else {
+                "no"
+            }
+        );
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
         assert_eq!(jfn_mpv::VideoMode::default().as_str(), "auto");
         assert_eq!(

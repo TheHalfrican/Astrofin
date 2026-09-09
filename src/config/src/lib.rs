@@ -19,7 +19,13 @@ use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 
 const DEVICE_NAME_MAX: usize = 64;
-const HWDEC_DEFAULT: &str = "no";
+// Mirrors `jfn_mpv::HWDEC_DEFAULT` (this crate cannot depend on jfn_mpv); a
+// test in jfn_rust::cli keeps the two in step.
+const HWDEC_DEFAULT: &str = if cfg!(target_os = "macos") {
+    "videotoolbox"
+} else {
+    "no"
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
@@ -269,6 +275,10 @@ struct CliSettings<'a> {
     device_name_default: String,
 
     hwdec_options: &'a [&'a str],
+
+    /// What an unset `hwdec` resolves to, so the UI can show the real value
+    /// instead of guessing (the file omits `hwdec` when it equals this).
+    hwdec_default: &'static str,
 }
 
 impl SettingsData {
@@ -407,6 +417,7 @@ impl SettingsData {
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
             hwdec_options: hwdec_opts,
+            hwdec_default: HWDEC_DEFAULT,
         };
         serde_json::to_string(&view).unwrap_or_default()
     }
@@ -942,8 +953,10 @@ mod tests {
                 "deviceName",
                 "deviceNameDefault",
                 "hwdecOptions",
+                "hwdecDefault",
             ]
         );
+        assert!(text.contains(&format!(r#""hwdecDefault":"{}""#, crate::HWDEC_DEFAULT)));
         assert!(text.contains(r#""videoMode":"live-action""#));
         assert!(text.contains(r#""videoModeLibraries":{"lib1":"animation"}"#));
         assert!(text.contains(r#""transcodeNotice":"any""#));
