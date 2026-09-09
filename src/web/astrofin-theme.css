@@ -927,10 +927,25 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
  *
  * Ahead of the playhead (.unwatched) the star is accent and lit; behind it
  * (.watched) it dims to a pale neutral, which also keeps it legible where it
- * sits on top of the bright cyan played bar. */
+ * sits on top of the bright cyan played bar.
+ *
+ * Vertical alignment: jf-web hangs the ticks off the TOP of the slider
+ * (.sliderMarkerContainer has no top/bottom, so it collapses to a zero-height
+ * strip at y=0, and each .sliderMarker is nudged down by translate3d(0,25%,0)
+ * of its own 12px). That only lines up with the track by coincidence at
+ * jf-web's font size; the track itself is centred at 50% of
+ * .mdl-slider-container (emby-slider.scss:135-156). Give the marker strip the
+ * full container height and centre each star on it so the glyphs sit on the
+ * line whatever the OSD's font size or bar height. */
+.videoOsdBottom .sliderMarkerContainer {
+  top: 0;
+  bottom: 0;
+}
 .videoOsdBottom .sliderMarker {
   width: 11px;
   height: 11px;
+  top: 50%;
+  transform: translateY(-50%);
   background-color: transparent;
   pointer-events: none;
   transition: filter var(--af-dur-tile) var(--af-ease-out);
