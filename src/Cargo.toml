@@ -41,6 +41,7 @@ calloop-wayland-source = "0.4"
 cef = { version = "=151", default-features = false }
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
+block2 = "0.6"
 dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
 gethostname = "1"
 gix = { version = "0.85", default-features = false, features = ["status", "sha1"] }

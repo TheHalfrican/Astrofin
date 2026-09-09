@@ -418,6 +418,7 @@ mod cef_host;
 mod cef_pump;
 mod compositor;
 mod dispatch;
+mod file_dialog;
 mod init;
 mod input;
 mod menu;
@@ -637,6 +638,10 @@ impl Platform for MacosPlatform {
 
     fn run_blocking(&self, f: Box<dyn FnOnce() + Send>) {
         macos_run_blocking(f);
+    }
+
+    fn open_file_dialog(&self, req: jfn_platform_abi::FileDialogRequest) -> bool {
+        file_dialog::open(req)
     }
 }
 

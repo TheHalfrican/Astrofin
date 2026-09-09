@@ -20,6 +20,7 @@ jfn-paths = { path = "../paths" }
 jfn-platform-abi = { path = "../platform_abi" }
 jfn-playback = { path = "../playback" }
 cef.workspace = true
+block2.workspace = true
 dispatch2.workspace = true
 libc.workspace = true
 nix.workspace = true
