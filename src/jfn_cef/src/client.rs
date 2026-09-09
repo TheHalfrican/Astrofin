@@ -235,6 +235,15 @@ impl Inner {
     fn surface_handle(&self) -> platform_ops::SurfaceHandle {
         self.surface.load()
     }
+
+    /// A detached `Inner` with no CEF browser attached, for the unit tests.
+    /// Every browser op on `Inner` early-returns while `browser` is `None`,
+    /// so such an instance exercises the pure state without a live CEF.
+    #[cfg(test)]
+    pub(crate) fn new_detached() -> Arc<Self> {
+        crate::test_support::install_platform();
+        Self::new()
+    }
 }
 
 pub(crate) fn now_ns() -> i64 {
@@ -263,5 +272,168 @@ impl JfnCefLayer {
     }
     pub fn set_context_menu_dispatcher_rust(&self, f: Option<Box<ContextDispatcherFn>>) {
         *self.inner.context_menu_dispatcher.lock() = f;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    fn layer() -> JfnCefLayer {
+        JfnCefLayer {
+            inner: Inner::new_detached(),
+        }
+    }
+
+    #[test]
+    fn a_fresh_inner_has_no_layer_pointer() {
+        let inner = Inner::new_detached();
+        assert!(inner.layer_ptr().is_null());
+    }
+
+    #[test]
+    fn set_layer_ptr_is_read_back_by_layer_ptr() {
+        let inner = Inner::new_detached();
+        let ptr = 0x1234_usize as *mut JfnCefLayer;
+        inner.set_layer_ptr(ptr);
+        assert_eq!(inner.layer_ptr(), ptr);
+        // The null sentinel after `handle_on_before_close`'s swap is
+        // load-bearing, so storing null must be observable.
+        inner.set_layer_ptr(std::ptr::null_mut());
+        assert!(inner.layer_ptr().is_null());
+    }
+
+    #[test]
+    fn cursor_handle_is_none_until_set() {
+        let inner = Inner::new_detached();
+        assert!(inner.cursor_handle().is_none());
+    }
+
+    struct DropSink;
+
+    impl crate::sink_routing::Sink<()> for DropSink {
+        fn emit(&mut self, _value: ()) {}
+    }
+
+    #[test]
+    fn set_cursor_handle_keeps_the_first_handle_it_is_given() {
+        let inner = Inner::new_detached();
+        let mut router = crate::sink_routing::Router::<(), DropSink>::new(DropSink);
+        let first = router.add_level();
+        let second = router.add_level();
+        inner.set_cursor_handle(first);
+        // A layer is registered with the cursor router exactly once; a second
+        // set must not silently re-key an already-routed layer.
+        inner.set_cursor_handle(second);
+        assert_eq!(inner.cursor_handle(), Some(first));
+    }
+
+    #[test]
+    fn now_ns_is_monotonic_and_starts_near_zero() {
+        let first = now_ns();
+        let second = now_ns();
+        assert!(first >= 0, "first reading was {first}");
+        assert!(second >= first, "{second} went backwards from {first}");
+        // The origin is captured on the first call, so a reading taken
+        // immediately after cannot be a wall-clock epoch.
+        assert!(second < 60_000_000_000, "second reading was {second}");
+    }
+
+    #[test]
+    fn set_message_handler_rust_installs_and_clears_the_slot() {
+        let l = layer();
+        assert!(l.inner.message_handler.lock().is_none());
+        l.set_message_handler_rust(Some(Box::new(|_msg| true)));
+        assert!(l.inner.message_handler.lock().is_some());
+        l.set_message_handler_rust(None);
+        assert!(l.inner.message_handler.lock().is_none());
+    }
+
+    #[test]
+    fn set_created_callback_rust_installs_the_closure_that_is_invoked() {
+        let l = layer();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        l.set_created_callback_rust(Some(Box::new(move |_raw| {
+            seen.fetch_add(1, Ordering::Release);
+        })));
+        {
+            let g = l.inner.created_callback.lock();
+            let f = g.as_ref().expect("callback installed");
+            f(std::ptr::null_mut());
+        }
+        assert_eq!(hits.load(Ordering::Acquire), 1);
+        l.set_created_callback_rust(None);
+        assert!(l.inner.created_callback.lock().is_none());
+    }
+
+    #[test]
+    fn set_before_close_callback_rust_installs_the_closure_that_is_invoked() {
+        let l = layer();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        l.set_before_close_callback_rust(Some(Box::new(move || {
+            seen.fetch_add(1, Ordering::Release);
+        })));
+        {
+            let g = l.inner.before_close_callback.lock();
+            let f = g.as_ref().expect("callback installed");
+            f();
+        }
+        assert_eq!(hits.load(Ordering::Acquire), 1);
+        l.set_before_close_callback_rust(None);
+        assert!(l.inner.before_close_callback.lock().is_none());
+    }
+
+    #[test]
+    fn set_context_menu_builder_rust_replaces_a_previously_installed_builder() {
+        let l = layer();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let first = Arc::clone(&hits);
+        l.set_context_menu_builder_rust(Some(Box::new(move |_raw| {
+            first.fetch_add(1, Ordering::Release);
+        })));
+        let second = Arc::clone(&hits);
+        l.set_context_menu_builder_rust(Some(Box::new(move |_raw| {
+            second.fetch_add(10, Ordering::Release);
+        })));
+        {
+            let g = l.inner.context_menu_builder.lock();
+            let f = g.as_ref().expect("builder installed");
+            f(std::ptr::null_mut());
+        }
+        assert_eq!(hits.load(Ordering::Acquire), 10, "the first builder ran");
+        l.set_context_menu_builder_rust(None);
+        assert!(l.inner.context_menu_builder.lock().is_none());
+    }
+
+    #[test]
+    fn set_context_menu_dispatcher_rust_installs_a_closure_whose_answer_is_returned() {
+        let l = layer();
+        l.set_context_menu_dispatcher_rust(Some(Box::new(|cmd| cmd == 7)));
+        {
+            let g = l.inner.context_menu_dispatcher.lock();
+            let f = g.as_ref().expect("dispatcher installed");
+            assert!(f(7));
+            assert!(!f(8));
+        }
+        l.set_context_menu_dispatcher_rust(None);
+        assert!(l.inner.context_menu_dispatcher.lock().is_none());
+    }
+
+    #[test]
+    fn a_detached_inner_reports_no_live_browser_and_ignores_browser_ops() {
+        let inner = Inner::new_detached();
+        assert!(!inner.browser_alive());
+        // Every op below must be a no-op rather than a null dereference.
+        inner.invalidate_view();
+        inner.send_external_begin_frame();
+        inner.cef_was_hidden(true);
+        inner.close_browser_force();
+        inner.exec_js("window.__nothing();");
+        assert!(!inner.browser_alive());
     }
 }

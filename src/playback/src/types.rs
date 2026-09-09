@@ -145,3 +145,66 @@ pub enum PlaybackActionKind {
 pub struct PlaybackAction {
     pub kind: PlaybackActionKind,
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn a_fresh_snapshot_is_stopped_at_normal_rate() {
+        let s = PlaybackSnapshot::fresh();
+        assert_eq!(s.presence, PlayerPresence::None);
+        assert_eq!(s.phase, PlaybackPhase::Stopped);
+        assert_eq!(s.media_type, MediaType::Unknown);
+        // The one field `fresh` does not take from `Default`: a rate of 0
+        // would read as "stopped" to every sink.
+        assert_eq!(s.rate, 1.0);
+        assert_eq!(PlaybackSnapshot::default().rate, 0.0);
+        assert!(!s.seeking);
+        assert!(!s.buffering);
+        assert!(!s.fullscreen);
+        assert_eq!(s.position_us, 0);
+        assert_eq!(s.duration_us, 0);
+        assert!(s.buffered.is_empty());
+    }
+
+    #[test]
+    fn a_new_event_carries_its_kind_and_nothing_else() {
+        let ev = PlaybackEvent::new(PlaybackEventKind::Started);
+        assert_eq!(ev.kind, PlaybackEventKind::Started);
+        assert!(!ev.flag);
+        assert!(ev.error_message.is_empty());
+        assert!(ev.artwork_uri.is_empty());
+        assert!(!ev.can_go_next);
+        assert!(!ev.can_go_prev);
+        assert_eq!(ev.metadata, MediaMetadata::default());
+        // The coordinator stamps the post-transition snapshot on the way
+        // out, so a bare event starts from `Default`, not from `fresh`.
+        assert_eq!(ev.snapshot, PlaybackSnapshot::default());
+    }
+
+    #[test]
+    fn the_default_media_and_presence_are_the_unknown_variants() {
+        assert_eq!(MediaType::default(), MediaType::Unknown);
+        assert_eq!(PlayerPresence::default(), PlayerPresence::None);
+        assert_eq!(PlaybackPhase::default(), PlaybackPhase::Stopped);
+    }
+
+    #[test]
+    fn the_ffi_discriminants_are_the_documented_wire_values() {
+        // These cross the C ABI to the OS media sinks; renumbering one
+        // silently reinterprets every event.
+        assert_eq!(PlaybackEventKind::Started as u8, 0);
+        assert_eq!(PlaybackEventKind::Seeked as u8, 19);
+        assert_eq!(PlaybackEventKind::BufferedRangesChanged as u8, 14);
+        assert_eq!(MediaType::Video as u8, 2);
+        assert_eq!(PlaybackPhase::Stopped as u8, 3);
+        assert_eq!(EndReason::Canceled as u8, 2);
+        assert_eq!(
+            PlaybackActionKind::ApplyPendingTrackSelectionAndPlay as u8,
+            0
+        );
+    }
+}

@@ -335,8 +335,26 @@ fn node_string(v: &PropertyValue, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
+    use crate::test_support;
     use jfn_mpv::Node;
+
+    /// Puts the process-wide stats channel back in its boot state.
+    fn reset() {
+        let mut g = inner().lock();
+        g.active = false;
+        g.data = StatsData::default();
+        g.dirty = false;
+        g.last_push = None;
+    }
+
+    /// Lets the next `on_property` push instead of waiting out the
+    /// once-a-second floor.
+    fn allow_push_now() {
+        inner().lock().last_push = None;
+    }
 
     #[test]
     fn scalar_properties_land_in_their_fields() {
@@ -411,5 +429,129 @@ mod tests {
         let mut d = StatsData::default();
         assert!(!d.apply("nonesuch", &PropertyValue::Int(1)));
         assert_eq!(d, StatsData::default());
+    }
+
+    // ---- the process-wide channel --------------------------------------
+
+    #[test]
+    fn activating_the_channel_reports_the_transition_once() {
+        let _g = test_support::lock();
+        reset();
+        assert!(!jfn_playback_stats_active());
+        assert!(jfn_playback_set_stats_active(true));
+        assert!(jfn_playback_stats_active());
+        // Already on: the caller has nothing new to log.
+        assert!(!jfn_playback_set_stats_active(true));
+        reset();
+    }
+
+    #[test]
+    fn deactivating_reports_the_transition_and_clears_the_panel() {
+        let _g = test_support::lock();
+        reset();
+        jfn_playback_set_stats_active(true);
+        let js = test_support::JsRecorder::install();
+        assert!(jfn_playback_set_stats_active(false));
+        assert!(!jfn_playback_stats_active());
+        assert_eq!(
+            js.only(),
+            "window._nativeUpdateStats && window._nativeUpdateStats(null)"
+        );
+        // Already off: no second null push.
+        assert!(!jfn_playback_set_stats_active(false));
+        assert!(js.take().is_empty());
+        reset();
+    }
+
+    #[test]
+    fn activating_starts_from_an_empty_snapshot() {
+        let _g = test_support::lock();
+        reset();
+        jfn_playback_set_stats_active(true);
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        jfn_playback_set_stats_active(false);
+        jfn_playback_set_stats_active(true);
+        assert_eq!(inner().lock().data, StatsData::default());
+        reset();
+    }
+
+    #[test]
+    fn an_inactive_channel_ignores_every_property_change() {
+        let _g = test_support::lock();
+        reset();
+        let js = test_support::JsRecorder::install();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert!(js.take().is_empty());
+        assert_eq!(inner().lock().data, StatsData::default());
+    }
+
+    #[test]
+    fn an_active_channel_pushes_the_coalesced_snapshot_as_json() {
+        let _g = test_support::lock();
+        reset();
+        jfn_playback_set_stats_active(true);
+        let js = test_support::JsRecorder::install();
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert_eq!(
+            js.only(),
+            r#"window._nativeUpdateStats({"videoCodec":"hevc"})"#
+        );
+        reset();
+    }
+
+    #[test]
+    fn changes_inside_the_push_interval_are_coalesced_into_the_next_push() {
+        let _g = test_support::lock();
+        reset();
+        jfn_playback_set_stats_active(true);
+        let js = test_support::JsRecorder::install();
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert!(!js.take().is_empty());
+        // Inside the floor: folded in, not pushed.
+        on_property("current-vo", &PropertyValue::String("gpu-next".into()));
+        assert!(js.take().is_empty());
+        // The next push carries both.
+        allow_push_now();
+        on_property("hwdec-current", &PropertyValue::String("d3d11va".into()));
+        assert_eq!(
+            js.only(),
+            r#"window._nativeUpdateStats({"videoCodec":"hevc","hwdec":"d3d11va","vo":"gpu-next"})"#
+        );
+        reset();
+    }
+
+    #[test]
+    fn a_value_that_did_not_move_does_not_arm_a_push() {
+        let _g = test_support::lock();
+        reset();
+        jfn_playback_set_stats_active(true);
+        let js = test_support::JsRecorder::install();
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert!(!js.take().is_empty());
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert!(js.take().is_empty());
+        reset();
+    }
+
+    #[test]
+    fn the_refresh_rate_is_folded_in_from_the_process_wide_cache() {
+        let _g = test_support::lock();
+        reset();
+        crate::ingest_driver::jfn_playback_set_display_hz(59.94);
+        jfn_playback_set_stats_active(true);
+        let js = test_support::JsRecorder::install();
+        allow_push_now();
+        on_property("video-codec", &PropertyValue::String("hevc".into()));
+        assert_eq!(
+            js.only(),
+            r#"window._nativeUpdateStats({"videoCodec":"hevc","displayFps":59.94})"#
+        );
+        crate::ingest_driver::jfn_playback_set_display_hz(0.0);
+        reset();
     }
 }

@@ -205,4 +205,64 @@ mod tests {
         let mut s = ScrollAccum::new();
         assert_eq!(s.flush(), None);
     }
+
+    #[test]
+    fn the_last_event_of_a_burst_owns_the_position_and_modifiers() {
+        let mut s = ScrollAccum::new();
+        s.accumulate(1, 1, 0, true, 1.0, 1.0);
+        s.accumulate(9, 8, 7, true, 1.0, 1.0);
+        let f = s.flush().unwrap();
+        assert_eq!((f.x, f.y, f.mods), (9, 8, 7));
+        assert_eq!((f.dx, f.dy), (2, 2));
+    }
+
+    #[test]
+    fn opposing_deltas_in_one_burst_cancel_and_flush_nothing() {
+        let mut s = ScrollAccum::new();
+        s.accumulate(0, 0, 0, false, 0.0, 1.0);
+        s.accumulate(0, 0, 0, false, 0.0, -1.0);
+        assert_eq!(s.flush(), None);
+        // The cancelled burst left nothing pending either.
+        assert_eq!(s.flush(), None);
+    }
+
+    #[test]
+    fn precise_deltas_below_one_pixel_accumulate_until_they_round_up() {
+        let mut s = ScrollAccum::new();
+        s.accumulate(0, 0, 0, true, 0.0, 0.3);
+        // Rounds to zero this cycle: nothing is forwarded, nothing is lost.
+        assert_eq!(s.flush(), None);
+        s.accumulate(0, 0, 0, true, 0.0, 0.3);
+        let f = s.flush().unwrap();
+        assert_eq!(f.dy, 1);
+    }
+
+    #[test]
+    fn a_line_scroll_drains_over_several_flushes_without_losing_pixels() {
+        let mut s = ScrollAccum::new();
+        s.accumulate(0, 0, 0, false, 0.0, 1.0);
+        let mut total = 0;
+        let mut flushes = 0;
+        while let Some(f) = s.flush() {
+            total += f.dy;
+            flushes += 1;
+            assert!(flushes < 32, "the drain must converge");
+        }
+        assert_eq!(total, PIXELS_PER_TICK as i32);
+        assert!(flushes > 1, "one line scroll is spread over several frames");
+    }
+
+    #[test]
+    fn switching_to_line_scrolling_mid_burst_carries_the_precise_remainder() {
+        let mut s = ScrollAccum::new();
+        s.accumulate(0, 0, 0, true, 0.0, 0.5);
+        s.accumulate(0, 0, 0, false, 0.0, 1.0);
+        let f = s.flush().unwrap();
+        assert!(
+            !f.precise,
+            "the last event decides how the chunk is reported"
+        );
+        // 0.5 px carried in + 40 px for the line, drained at 45%.
+        assert_eq!(f.dy, ((0.5 + PIXELS_PER_TICK) * DRAIN).round() as i32);
+    }
 }

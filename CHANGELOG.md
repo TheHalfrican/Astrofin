@@ -33,6 +33,11 @@ project uses semantic versioning.
     every setting.
 
 ### Added
+- Backend tests to one test per public function across every non-exempt
+  Rust file (docs/test-plan.md phase 2): mpv option tables and command wire
+  forms, playback sinks through recording fakes, paint-scheduler pacing,
+  startup-option precedence, the platform trait defaults, wake events,
+  Linux menu rendering. Workspace tests 563 -> about 1400.
 - Test-suite tooling (docs/test-plan.md): `cargo xtask test-ratio` measures
   tests per public function with an explicit exemption list for platform glue
   (`dev/test-exempt.txt`) and a floor that only moves up

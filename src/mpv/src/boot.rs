@@ -111,104 +111,179 @@ fn set_option_flag_or_skip(handle: &Handle, name: &str, value: bool) -> crate::e
     }
 }
 
-fn apply_defaults(
-    handle: &Handle,
-    display: DisplayBackend,
-    client_side_decorations: bool,
-) -> crate::error::Result<()> {
-    let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
+/// One option written between `mpv_create` and `mpv_initialize`, as a value.
+///
+/// The tables below are the whole of the boot policy; keeping them as data
+/// rather than as a run of `set(..)?` calls is what makes that policy
+/// readable back out (and testable) without a live mpv core.
+#[derive(Clone, Debug, PartialEq)]
+enum Opt {
+    Str(&'static str, String),
+    Flag(&'static str, bool),
+}
 
-    // OSD/OSC off — CEF overlay handles all UI.
-    set("osd-level", "0")?;
-    set("osc", "no")?;
-    set("display-tags", "")?;
+impl Opt {
+    fn str(name: &'static str, value: impl Into<String>) -> Self {
+        Self::Str(name, value.into())
+    }
+}
 
-    // Track selection is owned by Jellyfin. Disable mpv's heuristic
-    // so unspecified tracks stay disabled instead of being auto-picked
-    // by language / default-flag / codec scoring.
-    set("track-auto-selection", "no")?;
+/// Write `opts` in order, stopping at the first error that is not
+/// "this libmpv build has no such option".
+fn apply_options(handle: &Handle, opts: &[Opt]) -> crate::error::Result<()> {
+    for opt in opts {
+        match opt {
+            Opt::Str(name, value) => set_option_or_skip(handle, name, value)?,
+            Opt::Flag(name, value) => set_option_flag_or_skip(handle, name, *value)?,
+        }
+    }
+    Ok(())
+}
 
-    // Input: we own all devices and route through CEF.
-    set("input-default-bindings", "no")?;
-    set("input-vo-keyboard", "no")?;
-    set("input-cursor", "no")?;
-    set("cursor-autohide", "no")?;
+/// The options every run applies, whatever the caller asked for.
+fn default_options(display: DisplayBackend, client_side_decorations: bool) -> Vec<Opt> {
+    let mut opts = vec![
+        // OSD/OSC off — CEF overlay handles all UI.
+        Opt::str("osd-level", "0"),
+        Opt::str("osc", "no"),
+        Opt::str("display-tags", ""),
+        // Track selection is owned by Jellyfin. Disable mpv's heuristic
+        // so unspecified tracks stay disabled instead of being auto-picked
+        // by language / default-flag / codec scoring.
+        Opt::str("track-auto-selection", "no"),
+        // Input: we own all devices and route through CEF.
+        Opt::str("input-default-bindings", "no"),
+        Opt::str("input-vo-keyboard", "no"),
+        Opt::str("input-cursor", "no"),
+        Opt::str("cursor-autohide", "no"),
+    ];
 
     if display == DisplayBackend::Other {
-        set("input-vo-cursor", "no")?;
-        set("input-keyboard", "no")?;
+        opts.push(Opt::str("input-vo-cursor", "no"));
+        opts.push(Opt::str("input-keyboard", "no"));
     }
 
     // Disable mpv's clipboard so it keeps a single wl_display connection.
     if display == DisplayBackend::Wayland {
-        set("clipboard-backends", "")?;
+        opts.push(Opt::str("clipboard-backends", ""));
     }
 
     // Window behavior.
-    set("stop-screensaver", "no")?;
-    set("keepaspect-window", "no")?;
-    set("auto-window-resize", "no")?;
+    opts.push(Opt::str("stop-screensaver", "no"));
+    opts.push(Opt::str("keepaspect-window", "no"));
+    opts.push(Opt::str("auto-window-resize", "no"));
     // Suppress the server-side decoration request on Wayland when the app
     // draws its own client-side decorations; otherwise a compositor titlebar
     // (e.g. KDE) would stack on top of ours.
     let suppress_ssd = display == DisplayBackend::Wayland && client_side_decorations;
-    set("border", if suppress_ssd { "no" } else { "yes" })?;
-    set("title", "Astrofin")?;
-    set("wayland-app-id", "io.github.thehalfrican.Astrofin")?;
+    opts.push(Opt::str("border", if suppress_ssd { "no" } else { "yes" }));
+    opts.push(Opt::str("title", "Astrofin"));
+    opts.push(Opt::str(
+        "wayland-app-id",
+        "io.github.thehalfrican.Astrofin",
+    ));
 
     // Keep window open when idle. `force-window=yes` (not "immediate")
     // avoids a macOS deadlock: "immediate" calls handle_force_window
     // inside `mpv_initialize`, which triggers `DispatchQueue.main.sync`
     // while the main thread is blocked in init.
-    set("force-window", "yes")?;
-    set("idle", "yes")?;
+    opts.push(Opt::str("force-window", "yes"));
+    opts.push(Opt::str("idle", "yes"));
 
-    Ok(())
+    opts
 }
 
-fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
-    let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
-    let set_flag = |name: &str, value: bool| set_option_flag_or_skip(handle, name, value);
+/// [`JfnMpvBoot`] with its C strings decoded, so the option table it maps to
+/// is a pure function of owned Rust values.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct BootSettings {
+    hwdec: Option<String>,
+    user_agent: Option<String>,
+    audio_passthrough: Option<String>,
+    audio_exclusive: bool,
+    audio_channels: Option<String>,
+    geometry: Option<String>,
+    wid: i64,
+    force_window_position: bool,
+    window_maximized_at_boot: bool,
+}
 
-    // libmpv defaults config=no (opposite of the mpv CLI); enable it so
-    // users' $MPV_HOME/mpv.conf is loaded.
-    set("config", "yes")?;
-    // We only feed mpv direct media URLs from the Jellyfin server; the
-    // youtube-dl/yt-dlp hook would just add startup latency.
-    set("ytdl", "no")?;
+impl BootSettings {
+    /// # Safety
+    /// Every non-null string field of `boot` must be NUL-terminated and valid
+    /// for the duration of the call.
+    unsafe fn from_boot(boot: &JfnMpvBoot) -> Self {
+        Self {
+            hwdec: unsafe { cstr_opt(boot.hwdec) },
+            user_agent: unsafe { cstr_opt(boot.user_agent) },
+            audio_passthrough: unsafe { cstr_opt(boot.audio_passthrough) },
+            audio_exclusive: boot.audio_exclusive,
+            audio_channels: unsafe { cstr_opt(boot.audio_channels) },
+            geometry: unsafe { cstr_opt(boot.geometry) },
+            wid: boot.wid,
+            force_window_position: boot.force_window_position,
+            window_maximized_at_boot: boot.window_maximized_at_boot,
+        }
+    }
+}
 
-    if let Some(ua) = unsafe { cstr_opt(boot.user_agent) } {
-        set("user-agent", &ua)?;
+/// The options the caller's boot struct asks for, in the order they are
+/// written.
+fn boot_options(s: &BootSettings) -> Vec<Opt> {
+    let mut opts = vec![
+        // libmpv defaults config=no (opposite of the mpv CLI); enable it so
+        // users' $MPV_HOME/mpv.conf is loaded.
+        Opt::str("config", "yes"),
+        // We only feed mpv direct media URLs from the Jellyfin server; the
+        // youtube-dl/yt-dlp hook would just add startup latency.
+        Opt::str("ytdl", "no"),
+    ];
+
+    if let Some(ua) = &s.user_agent {
+        opts.push(Opt::str("user-agent", ua.clone()));
     }
-    if let Some(hwdec) = unsafe { cstr_opt(boot.hwdec) } {
-        set("hwdec", &hwdec)?;
+    if let Some(hwdec) = &s.hwdec {
+        opts.push(Opt::str("hwdec", hwdec.clone()));
     }
-    if let Some(geom) = unsafe { cstr_opt(boot.geometry) } {
-        set("geometry", &geom)?;
+    if let Some(geom) = &s.geometry {
+        opts.push(Opt::str("geometry", geom.clone()));
     }
-    if boot.wid != 0 {
-        set("wid", &boot.wid.to_string())?;
+    if s.wid != 0 {
+        opts.push(Opt::str("wid", s.wid.to_string()));
     }
-    if boot.force_window_position {
-        set("force-window-position", "yes")?;
+    if s.force_window_position {
+        opts.push(Opt::str("force-window-position", "yes"));
     }
-    if boot.window_maximized_at_boot {
-        set("window-maximized", "yes")?;
+    if s.window_maximized_at_boot {
+        opts.push(Opt::str("window-maximized", "yes"));
     }
-    if let Some(spdif) = unsafe { cstr_opt(boot.audio_passthrough) }
-        && !spdif.is_empty()
-    {
-        set("audio-spdif", &spdif)?;
+    if let Some(spdif) = s.audio_passthrough.as_deref().filter(|v| !v.is_empty()) {
+        opts.push(Opt::str("audio-spdif", spdif));
     }
-    if boot.audio_exclusive {
-        set_flag("audio-exclusive", true)?;
+    if s.audio_exclusive {
+        opts.push(Opt::Flag("audio-exclusive", true));
     }
-    if let Some(ch) = unsafe { cstr_opt(boot.audio_channels) }
-        && !ch.is_empty()
-    {
-        set("audio-channels", &ch)?;
+    if let Some(ch) = s.audio_channels.as_deref().filter(|v| !v.is_empty()) {
+        opts.push(Opt::str("audio-channels", ch));
     }
-    Ok(())
+    opts
+}
+
+fn apply_defaults(
+    handle: &Handle,
+    display: DisplayBackend,
+    client_side_decorations: bool,
+) -> crate::error::Result<()> {
+    apply_options(handle, &default_options(display, client_side_decorations))
+}
+
+/// # Safety
+/// See [`BootSettings::from_boot`].
+unsafe fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
+    apply_options(
+        handle,
+        &boot_options(&unsafe { BootSettings::from_boot(boot) }),
+    )
 }
 
 /// Create + configure + initialize the libmpv handle. On success, the
@@ -238,7 +313,7 @@ pub unsafe fn jfn_mpv_handle_init(boot: *const JfnMpvBoot) -> *mut sys::mpv_hand
         tracing::error!(target: "mpv", "apply_defaults failed: {:?}", e);
         return ptr::null_mut();
     }
-    if let Err(e) = apply_boot_options(&handle, boot) {
+    if let Err(e) = unsafe { apply_boot_options(&handle, boot) } {
         tracing::error!(target: "mpv", "apply_boot_options failed: {:?}", e);
         return ptr::null_mut();
     }
@@ -306,4 +381,315 @@ pub fn current_raw_handle() -> Option<*mut sys::mpv_handle> {
 /// [`jfn_mpv_handle_terminate`].
 pub fn current_handle() -> Option<Arc<Handle>> {
     handle_slot().lock().as_ref().map(Arc::clone)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    fn value_of<'a>(opts: &'a [Opt], name: &str) -> Option<&'a Opt> {
+        opts.iter().find(|o| match o {
+            Opt::Str(n, _) | Opt::Flag(n, _) => *n == name,
+        })
+    }
+
+    fn string_of(opts: &[Opt], name: &str) -> Option<String> {
+        match value_of(opts, name) {
+            Some(Opt::Str(_, v)) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
+    fn names(opts: &[Opt]) -> Vec<&'static str> {
+        opts.iter()
+            .map(|o| match o {
+                Opt::Str(n, _) | Opt::Flag(n, _) => *n,
+            })
+            .collect()
+    }
+
+    /// A `JfnMpvBoot` with every pointer null, i.e. "nothing configured".
+    fn empty_boot() -> JfnMpvBoot {
+        JfnMpvBoot {
+            display_backend: DisplayBackend::Other as u8,
+            hwdec: ptr::null(),
+            user_agent: ptr::null(),
+            audio_passthrough: ptr::null(),
+            audio_exclusive: false,
+            audio_channels: ptr::null(),
+            geometry: ptr::null(),
+            wid: 0,
+            force_window_position: false,
+            window_maximized_at_boot: false,
+            mpv_log_level: ptr::null(),
+            client_side_decorations: false,
+        }
+    }
+
+    // ---- the process-global slot ------------------------------------------
+
+    #[test]
+    fn handle_init_refuses_a_null_boot_struct_instead_of_dereferencing_it() {
+        assert!(unsafe { jfn_mpv_handle_init(ptr::null()) }.is_null());
+    }
+
+    #[test]
+    fn handle_get_is_null_until_init_has_succeeded() {
+        assert!(jfn_mpv_handle_get().is_null());
+    }
+
+    #[test]
+    fn current_raw_handle_is_none_until_init_has_succeeded() {
+        assert!(current_raw_handle().is_none());
+    }
+
+    #[test]
+    fn current_handle_is_none_until_init_has_succeeded() {
+        assert!(current_handle().is_none());
+    }
+
+    /// Shutdown runs it, and so does a failed start-up; neither must depend
+    /// on a handle ever having existed.
+    #[test]
+    fn terminate_is_a_no_op_when_no_handle_was_ever_published() {
+        jfn_mpv_handle_terminate();
+        jfn_mpv_handle_terminate();
+        assert!(current_handle().is_none());
+    }
+
+    // ---- the wire value for the display backend ---------------------------
+
+    #[test]
+    fn the_display_backend_byte_maps_to_the_three_backends() {
+        assert!(DisplayBackend::from_raw(0) == DisplayBackend::Wayland);
+        assert!(DisplayBackend::from_raw(1) == DisplayBackend::X11);
+        assert!(DisplayBackend::from_raw(2) == DisplayBackend::Other);
+        // Anything a future caller invents is "not a windowing system we
+        // drive", which is the conservative branch.
+        assert!(DisplayBackend::from_raw(3) == DisplayBackend::Other);
+        assert!(DisplayBackend::from_raw(255) == DisplayBackend::Other);
+    }
+
+    // ---- default options --------------------------------------------------
+
+    /// The overlay draws every pixel of UI, and CEF owns every input device,
+    /// so mpv's own OSD, key bindings and cursor handling all have to go.
+    #[test]
+    fn the_defaults_hand_ui_and_input_to_the_overlay() {
+        let opts = default_options(DisplayBackend::X11, false);
+        for name in [
+            "osd-level",
+            "osc",
+            "input-default-bindings",
+            "input-vo-keyboard",
+            "input-cursor",
+            "cursor-autohide",
+        ] {
+            assert!(value_of(&opts, name).is_some(), "{name} missing");
+        }
+        assert_eq!(string_of(&opts, "osd-level").as_deref(), Some("0"));
+        assert_eq!(string_of(&opts, "osc").as_deref(), Some("no"));
+    }
+
+    /// Jellyfin picks the tracks; mpv's language/default-flag scoring would
+    /// silently override it.
+    #[test]
+    fn the_defaults_disable_mpvs_own_track_selection() {
+        let opts = default_options(DisplayBackend::Wayland, false);
+        assert_eq!(
+            string_of(&opts, "track-auto-selection").as_deref(),
+            Some("no")
+        );
+    }
+
+    /// `force-window=yes` and not `immediate`: the latter deadlocks macOS
+    /// inside `mpv_initialize`.
+    #[test]
+    fn the_defaults_keep_an_idle_window_open_without_the_macos_deadlock() {
+        let opts = default_options(DisplayBackend::Other, false);
+        assert_eq!(string_of(&opts, "force-window").as_deref(), Some("yes"));
+        assert_eq!(string_of(&opts, "idle").as_deref(), Some("yes"));
+        assert_eq!(string_of(&opts, "title").as_deref(), Some("Astrofin"));
+        assert_eq!(
+            string_of(&opts, "wayland-app-id").as_deref(),
+            Some("io.github.thehalfrican.Astrofin")
+        );
+    }
+
+    /// One `wl_display` connection per process: mpv's clipboard backend would
+    /// open a second one.
+    #[test]
+    fn only_wayland_gets_the_clipboard_disabled() {
+        assert_eq!(
+            string_of(
+                &default_options(DisplayBackend::Wayland, false),
+                "clipboard-backends"
+            )
+            .as_deref(),
+            Some("")
+        );
+        for display in [DisplayBackend::X11, DisplayBackend::Other] {
+            assert!(value_of(&default_options(display, false), "clipboard-backends").is_none());
+        }
+    }
+
+    /// Client-side decorations only clash with a compositor titlebar, which
+    /// is a Wayland-only thing; on X11 the WM draws the border either way.
+    #[test]
+    fn client_side_decorations_suppress_the_border_on_wayland_only() {
+        assert_eq!(
+            string_of(&default_options(DisplayBackend::Wayland, true), "border").as_deref(),
+            Some("no")
+        );
+        assert_eq!(
+            string_of(&default_options(DisplayBackend::Wayland, false), "border").as_deref(),
+            Some("yes")
+        );
+        for display in [DisplayBackend::X11, DisplayBackend::Other] {
+            assert_eq!(
+                string_of(&default_options(display, true), "border").as_deref(),
+                Some("yes"),
+                "{}",
+                display as u8
+            );
+        }
+    }
+
+    /// With no windowing system of ours to route through, mpv must not read
+    /// the keyboard or the cursor itself either.
+    #[test]
+    fn a_backend_we_do_not_drive_also_loses_vo_cursor_and_keyboard_input() {
+        let other = default_options(DisplayBackend::Other, false);
+        assert_eq!(string_of(&other, "input-vo-cursor").as_deref(), Some("no"));
+        assert_eq!(string_of(&other, "input-keyboard").as_deref(), Some("no"));
+        for display in [DisplayBackend::Wayland, DisplayBackend::X11] {
+            let opts = default_options(display, false);
+            assert!(value_of(&opts, "input-vo-cursor").is_none());
+            assert!(value_of(&opts, "input-keyboard").is_none());
+        }
+    }
+
+    // ---- boot options -----------------------------------------------------
+
+    /// libmpv defaults `config=no`, the opposite of the mpv CLI, so the
+    /// user's own mpv.conf would never be read without this.
+    #[test]
+    fn boot_options_always_load_the_users_config_and_skip_ytdl() {
+        let opts = boot_options(&BootSettings::default());
+        assert_eq!(names(&opts), ["config", "ytdl"]);
+        assert_eq!(string_of(&opts, "config").as_deref(), Some("yes"));
+        assert_eq!(string_of(&opts, "ytdl").as_deref(), Some("no"));
+    }
+
+    #[test]
+    fn boot_options_carry_every_field_the_caller_set() {
+        let settings = BootSettings {
+            hwdec: Some("d3d11va".into()),
+            user_agent: Some("Astrofin/1".into()),
+            audio_passthrough: Some("ac3,dts-hd".into()),
+            audio_exclusive: true,
+            audio_channels: Some("7.1".into()),
+            geometry: Some("1280x720+10+20".into()),
+            wid: 4242,
+            force_window_position: true,
+            window_maximized_at_boot: true,
+        };
+        let opts = boot_options(&settings);
+        assert_eq!(string_of(&opts, "hwdec").as_deref(), Some("d3d11va"));
+        assert_eq!(
+            string_of(&opts, "user-agent").as_deref(),
+            Some("Astrofin/1")
+        );
+        assert_eq!(
+            string_of(&opts, "audio-spdif").as_deref(),
+            Some("ac3,dts-hd")
+        );
+        assert_eq!(string_of(&opts, "audio-channels").as_deref(), Some("7.1"));
+        assert_eq!(
+            string_of(&opts, "geometry").as_deref(),
+            Some("1280x720+10+20")
+        );
+        assert_eq!(string_of(&opts, "wid").as_deref(), Some("4242"));
+        assert_eq!(
+            string_of(&opts, "force-window-position").as_deref(),
+            Some("yes")
+        );
+        assert_eq!(string_of(&opts, "window-maximized").as_deref(), Some("yes"));
+        // Exclusive audio is the one flag-typed option.
+        assert_eq!(
+            value_of(&opts, "audio-exclusive"),
+            Some(&Opt::Flag("audio-exclusive", true))
+        );
+    }
+
+    /// An empty passthrough or channel string means "not configured"; writing
+    /// it would turn spdif on with no codecs, or force a layout of "".
+    #[test]
+    fn an_empty_audio_string_is_not_written_at_all() {
+        let settings = BootSettings {
+            audio_passthrough: Some(String::new()),
+            audio_channels: Some(String::new()),
+            ..BootSettings::default()
+        };
+        let opts = boot_options(&settings);
+        assert!(value_of(&opts, "audio-spdif").is_none());
+        assert!(value_of(&opts, "audio-channels").is_none());
+    }
+
+    /// `wid` 0 is the sentinel for "mpv owns its own window"; writing it
+    /// would ask mpv to embed into window handle zero.
+    #[test]
+    fn a_zero_window_id_is_left_to_mpv() {
+        assert!(value_of(&boot_options(&BootSettings::default()), "wid").is_none());
+        let embedded = BootSettings {
+            wid: -1,
+            ..BootSettings::default()
+        };
+        assert_eq!(
+            string_of(&boot_options(&embedded), "wid").as_deref(),
+            Some("-1")
+        );
+    }
+
+    /// The false flags are absent rather than written as "no": mpv's own
+    /// default already is off, and this keeps the boot log short.
+    #[test]
+    fn flags_left_off_produce_no_option_at_all() {
+        let opts = boot_options(&BootSettings::default());
+        for name in [
+            "force-window-position",
+            "window-maximized",
+            "audio-exclusive",
+        ] {
+            assert!(value_of(&opts, name).is_none(), "{name}");
+        }
+    }
+
+    /// An empty string is a value the caller chose (`--hwdec=`); only a null
+    /// pointer means "unset". The two must not collapse.
+    #[test]
+    fn decoding_a_boot_struct_keeps_null_apart_from_empty() {
+        let empty = CString::new("").expect("cstring");
+        let hwdec = CString::new("auto").expect("cstring");
+        let mut boot = empty_boot();
+        boot.hwdec = hwdec.as_ptr();
+        boot.user_agent = empty.as_ptr();
+
+        let decoded = unsafe { BootSettings::from_boot(&boot) };
+        assert_eq!(decoded.hwdec.as_deref(), Some("auto"));
+        assert_eq!(decoded.user_agent.as_deref(), Some(""));
+        assert_eq!(decoded.geometry, None);
+
+        let opts = boot_options(&decoded);
+        assert_eq!(string_of(&opts, "hwdec").as_deref(), Some("auto"));
+        assert_eq!(string_of(&opts, "user-agent").as_deref(), Some(""));
+        assert!(value_of(&opts, "geometry").is_none());
+    }
+
+    #[test]
+    fn decoding_an_all_null_boot_struct_configures_nothing() {
+        let decoded = unsafe { BootSettings::from_boot(&empty_boot()) };
+        assert_eq!(decoded, BootSettings::default());
+    }
 }

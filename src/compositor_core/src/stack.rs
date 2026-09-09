@@ -91,6 +91,8 @@ impl<T: Copy + PartialEq> Default for SurfaceStack<T> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     // Use distinct integers as stand-in surface handles.
@@ -165,5 +167,59 @@ mod tests {
         let drained = s.take_stack();
         assert_eq!(drained, vec![h(10), h(11)]);
         assert!(!s.is_main(h(10)));
+    }
+
+    #[test]
+    fn default_is_an_empty_registry() {
+        let d: SurfaceStack<usize> = SurfaceStack::default();
+        assert!(d.stack().is_empty());
+        assert!(d.live().is_empty());
+        assert!(!d.is_main(h(1)));
+    }
+
+    #[test]
+    fn take_stack_leaves_the_live_set_alone() {
+        let mut s = SurfaceStack::new();
+        s.register(h(1));
+        s.register(h(2));
+        s.replace_stack(&[h(1), h(2)]);
+        let drained = s.take_stack();
+        assert_eq!(drained, vec![h(1), h(2)]);
+        assert!(s.stack().is_empty());
+        // The surfaces are still allocated; only the stacking order was taken.
+        assert_eq!(s.live(), &[h(1), h(2)]);
+    }
+
+    #[test]
+    fn deregistering_an_unknown_handle_changes_nothing() {
+        let mut s = SurfaceStack::new();
+        s.register(h(1));
+        s.replace_stack(&[h(1)]);
+        s.deregister(h(99));
+        assert_eq!(s.live(), &[h(1)]);
+        assert_eq!(s.stack(), &[h(1)]);
+        assert!(s.is_main(h(1)));
+    }
+
+    #[test]
+    fn replace_stack_can_promote_a_surface_that_was_never_registered() {
+        // macOS restacks from the view hierarchy, which is the authority on
+        // order; `live` only answers "is this handle still allocated".
+        let mut s = SurfaceStack::new();
+        s.replace_stack(&[h(7)]);
+        assert!(s.is_main(h(7)));
+        assert!(s.live().is_empty());
+    }
+
+    #[test]
+    fn deregister_drops_every_copy_of_a_handle() {
+        let mut s = SurfaceStack::new();
+        s.register(h(1));
+        s.register(h(1));
+        s.replace_stack(&[h(1), h(1)]);
+        s.deregister(h(1));
+        assert!(s.live().is_empty());
+        assert!(s.stack().is_empty());
+        assert!(!s.is_main(h(1)));
     }
 }

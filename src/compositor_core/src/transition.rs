@@ -139,6 +139,8 @@ impl TransitionGate {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     #[test]
@@ -259,5 +261,48 @@ mod tests {
         g.end();
         assert!(!g.in_transition());
         assert_eq!(g.expected(), None);
+    }
+
+    #[test]
+    fn begin_is_idempotent_and_keeps_the_armed_size() {
+        let mut g = TransitionGate::new();
+        g.begin();
+        g.set_expected((1920, 1080));
+        g.begin();
+        assert!(g.in_transition());
+        assert_eq!(g.expected(), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn set_expected_outside_a_transition_ignores_the_capture_guard() {
+        let mut g = TransitionGate::new();
+        g.begin_capturing((1280, 720));
+        g.end();
+        // The guard only applies mid-transition; `end` dropped the capture.
+        g.set_expected((1280, 720));
+        assert_eq!(g.expected(), Some((1280, 720)));
+    }
+
+    #[test]
+    fn a_matching_present_outside_a_transition_still_disarms_the_size() {
+        // macOS arms the expected size from a resize notification that may
+        // land before `begin`; the clear-on-match is not gated on the flag.
+        let mut g = TransitionGate::new();
+        g.set_expected((1920, 1080));
+        assert!(g.note_present_size((1920, 1080)));
+        assert_eq!(g.expected(), None);
+        assert!(!g.in_transition());
+    }
+
+    #[test]
+    fn x11_end_then_present_passes_frames_through() {
+        let mut g = TransitionGate::new();
+        g.begin_capturing((1280, 720));
+        g.end();
+        // Even the captured pre-resize size presents once the gate is down.
+        assert_eq!(
+            g.main_present_decision((1280, 720)),
+            PresentDecision::Present
+        );
     }
 }

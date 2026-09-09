@@ -103,3 +103,144 @@ fn report() {
          demuxer_fw_bytes={fw}"
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex as TestMutex;
+
+    /// The counters are process-global, so the tests that read them take
+    /// turns. `report` resets all of them at once, which is what makes this
+    /// necessary rather than merely tidy.
+    static SERIAL: TestMutex<()> = TestMutex::new(());
+
+    fn reset() {
+        for cell in [
+            &PAINT_SW,
+            &PAINT_ACCEL,
+            &PRESENT_SW,
+            &PRESENT_ACCEL,
+            &MPV_EVENT_QLEN,
+            &COORD_QLEN,
+            &FW_BYTES,
+        ] {
+            cell.store(0, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn start_can_be_called_by_every_producer_without_spawning_twice() {
+        // Idempotent by contract: each producer calls it, whichever comes up
+        // first. A second reporter thread would double every log line.
+        // The reporter thread is detached and only speaks once a minute, so
+        // what is observable here is that repeated calls neither panic nor
+        // park the caller, and that the counters are untouched by starting.
+        let _g = SERIAL.lock();
+        reset();
+        start();
+        start();
+        start();
+        assert_eq!(PAINT_SW.load(Ordering::Relaxed), 0);
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn note_paint_counts_software_and_accelerated_separately() {
+        let _g = SERIAL.lock();
+        reset();
+        note_paint(false);
+        note_paint(false);
+        note_paint(true);
+        assert_eq!(PAINT_SW.load(Ordering::Relaxed), 2);
+        assert_eq!(PAINT_ACCEL.load(Ordering::Relaxed), 1);
+        // The paint counters are not the presented counters.
+        assert_eq!(PRESENT_SW.load(Ordering::Relaxed), 0);
+        assert_eq!(PRESENT_ACCEL.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn note_paint_presented_counts_only_the_paints_that_survived_the_gates() {
+        let _g = SERIAL.lock();
+        reset();
+        note_paint(true);
+        note_paint(true);
+        note_paint_presented(true);
+        assert_eq!(PAINT_ACCEL.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            PRESENT_ACCEL.load(Ordering::Relaxed),
+            1,
+            "one of the two paints was dropped before the compositor"
+        );
+        note_paint_presented(false);
+        assert_eq!(PRESENT_SW.load(Ordering::Relaxed), 1);
+    }
+
+    /// A backlog is interesting at its worst, not at the moment it was last
+    /// sampled, so the channel gauges keep the maximum.
+    #[test]
+    fn note_mpv_event_qlen_keeps_the_high_water_mark() {
+        let _g = SERIAL.lock();
+        reset();
+        note_mpv_event_qlen(3);
+        note_mpv_event_qlen(9);
+        note_mpv_event_qlen(1);
+        assert_eq!(MPV_EVENT_QLEN.load(Ordering::Relaxed), 9);
+        assert_eq!(COORD_QLEN.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn note_coordinator_qlen_keeps_the_high_water_mark() {
+        let _g = SERIAL.lock();
+        reset();
+        note_coordinator_qlen(0);
+        note_coordinator_qlen(7);
+        note_coordinator_qlen(2);
+        assert_eq!(COORD_QLEN.load(Ordering::Relaxed), 7);
+        assert_eq!(MPV_EVENT_QLEN.load(Ordering::Relaxed), 0);
+    }
+
+    /// `fw-bytes` is a gauge: the newest value wins. mpv reports -1 when the
+    /// demuxer has no cache state yet, which must not wrap to 2^64-1.
+    #[test]
+    fn note_fw_bytes_takes_the_latest_value_and_clamps_a_negative_one() {
+        let _g = SERIAL.lock();
+        reset();
+        note_fw_bytes(5_000_000);
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 5_000_000);
+        note_fw_bytes(1_000);
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 1_000, "gauge, not a max");
+        note_fw_bytes(-1);
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 0);
+        note_fw_bytes(i64::MIN);
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 0);
+    }
+
+    /// Rates are per-report-period, so the counters drain; the demuxer gauge
+    /// is a level and must survive a report.
+    #[test]
+    fn report_drains_the_rate_counters_and_leaves_the_gauge_alone() {
+        let _g = SERIAL.lock();
+        reset();
+        note_paint(false);
+        note_paint(true);
+        note_paint_presented(false);
+        note_paint_presented(true);
+        note_mpv_event_qlen(4);
+        note_coordinator_qlen(6);
+        note_fw_bytes(42);
+
+        report();
+
+        for cell in [
+            &PAINT_SW,
+            &PAINT_ACCEL,
+            &PRESENT_SW,
+            &PRESENT_ACCEL,
+            &MPV_EVENT_QLEN,
+            &COORD_QLEN,
+        ] {
+            assert_eq!(cell.load(Ordering::Relaxed), 0);
+        }
+        assert_eq!(FW_BYTES.load(Ordering::Relaxed), 42);
+    }
+}

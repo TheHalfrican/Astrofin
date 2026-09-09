@@ -1,6 +1,6 @@
 # Test-suite plan
 
-Status: phases 0 and 1 done 2026-09-09; phase 2 next. Owner decisions are recorded in §1;
+Status: phases 0-2 done 2026-09-09; phase 3 (frontend) next. Owner decisions are recorded in §1;
 agents executing a phase read §3 for the working rules and §4 for the phase
 they are on. Update the status line and the phase table as work lands.
 
@@ -85,7 +85,7 @@ functions = 0.72** over 136 files, which is the floor in
 |---|---|---|---|
 | 0 | Measurement and tooling: `xtask test-ratio`, exemption list, cargo-audit + cargo-deny, CodeQL, `just test-js` and audit in CI, `just coverage` | `test/phase-0-infra` | done 2026-09-09 (baseline 514/713 = 0.72, 133 exempt files) |
 | 1 | Security audit of untrusted-input surfaces, tests and fixes for findings | `test/phase-1-security` | done 2026-09-09: 15+13+20 findings, 9 fixed in code, rest recorded in §6 |
-| 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend-<crate>` | planned |
+| 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend` | done 2026-09-09: every non-exempt Rust file at or above 1.0 |
 | 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | planned |
 | 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | planned |
 | 5 | Platform glue: pure extractions in `windows`, `macos`, `wayland`, `x11`, `gpu_paint`, `jfn_cef`; finalise exemptions | `test/phase-5-platform` | planned |
@@ -183,3 +183,15 @@ Recorded, needing a design decision before they change behaviour:
 - `paths::ensure` swallows `create_dir_all` errors; a relative
   `ASTROFIN_CONFIG_DIR` follows each process's cwd.
 - A secret split across two log records is not redacted.
+
+Found during phase 2 (also design calls):
+
+- instance-ipc on Windows: rebinding immediately after `Listener::shutdown()`
+  can find the name still taken while the probe gets `ENOENT` rather than
+  `ConnectionRefused`, so it classifies as failed instead of stale.
+- `Mailbox::wait`'s `take` closure mutates under the lock but does not
+  notify; a two-sided handshake must publish with `update` on both sides.
+- Ratio counting: trait-impl methods (`Write`, `Drop`, `Visit`, ...) count as
+  public surface; kept, since each impl is a behaviour worth a test.
+- `Platform::install_shutdown_handler`'s Unix default installs real signal
+  handlers and is not exercised in tests.

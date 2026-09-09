@@ -247,4 +247,53 @@ mod tests {
         assert_eq!(menu_initial_row(&items, 3), MENU_DISMISSED);
         assert_eq!(menu_initial_row(&items, MENU_DISMISSED), MENU_DISMISSED);
     }
+
+    #[test]
+    fn the_delivery_of_a_menu_kind_comes_from_the_installed_platform() {
+        crate::tests::installed_platform();
+        assert!(matches!(
+            menu_delivery(MenuKind::Dropdown),
+            MenuDelivery::Page
+        ));
+        assert!(matches!(
+            menu_delivery(MenuKind::ContextMenu),
+            MenuDelivery::Composited
+        ));
+    }
+
+    #[test]
+    fn only_a_page_delivered_dropdown_needs_the_select_menu_script() {
+        crate::tests::installed_platform();
+        assert_eq!(menu_scripts(MenuKind::Dropdown), &[MenuScript::SelectMenu]);
+        // A composited context menu is drawn by the platform, so the page
+        // needs no script for it.
+        assert!(menu_scripts(MenuKind::ContextMenu).is_empty());
+    }
+
+    #[test]
+    fn a_resolved_selection_does_not_fire_again_when_it_drops() {
+        let (seen, sel) = recorder();
+        sel.resolve(3);
+        // `resolve` consumed the value, so the drop path cannot fire a second
+        // time: exactly one delivery reaches the callback.
+        assert_eq!(seen.lock().ok().map(|v| v.clone()), Some(vec![3]));
+    }
+
+    #[test]
+    fn a_dismissed_id_is_a_legal_resolution() {
+        let (seen, sel) = recorder();
+        sel.resolve(MENU_DISMISSED);
+        assert_eq!(
+            seen.lock().ok().map(|v| v.clone()),
+            Some(vec![MENU_DISMISSED])
+        );
+    }
+
+    #[test]
+    fn an_initial_row_of_the_last_item_survives() {
+        let items = [item(0, true, false), item(1, true, false)];
+        assert_eq!(menu_initial_row(&items, 1), 1);
+        // One past the end is out of range, not a selectable row.
+        assert_eq!(menu_initial_row(&items, 2), MENU_DISMISSED);
+    }
 }

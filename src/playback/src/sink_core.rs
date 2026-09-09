@@ -206,3 +206,180 @@ mod harness {
 }
 
 pub use harness::{Phase, QueuedSink, map_kind_to_phase, run_sink, stop};
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::test_support;
+    use crate::types::{PlaybackEvent, PlaybackEventKind};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    // ---- transport commands -----------------------------------------
+
+    #[test]
+    fn next_and_previous_route_to_the_js_host_input() {
+        let _g = test_support::lock();
+        let js = test_support::JsRecorder::install();
+        execute(MediaCommand::Next);
+        assert_eq!(
+            js.only(),
+            "if(window._nativeHostInput) window._nativeHostInput(['next']);"
+        );
+        execute(MediaCommand::Previous);
+        assert_eq!(
+            js.only(),
+            "if(window._nativeHostInput) window._nativeHostInput(['previous']);"
+        );
+    }
+
+    #[test]
+    fn play_pause_and_stop_go_to_mpv_and_never_to_the_page() {
+        let _g = test_support::lock();
+        let js = test_support::JsRecorder::install();
+        for cmd in [
+            MediaCommand::Play,
+            MediaCommand::Pause,
+            MediaCommand::PlayPause,
+            MediaCommand::Stop,
+        ] {
+            execute(cmd);
+        }
+        assert!(js.take().is_empty());
+    }
+
+    #[test]
+    fn seek_to_ms_asks_the_ui_for_an_absolute_position() {
+        let _g = test_support::lock();
+        let js = test_support::JsRecorder::install();
+        seek_to_ms(1_234);
+        assert_eq!(
+            js.only(),
+            "if(window._nativeSeek) window._nativeSeek(1234);"
+        );
+        seek_to_ms(0);
+        assert_eq!(js.only(), "if(window._nativeSeek) window._nativeSeek(0);");
+    }
+
+    // ---- position throttle -------------------------------------------
+
+    #[test]
+    fn a_fresh_throttle_lets_the_first_push_through() {
+        let mut t = PositionThrottle::new();
+        assert!(t.due(Instant::now(), false));
+    }
+
+    #[test]
+    fn pushes_inside_the_interval_are_dropped() {
+        let mut t = PositionThrottle::new();
+        let t0 = Instant::now();
+        assert!(t.due(t0, false));
+        assert!(!t.due(t0 + Duration::from_millis(999), false));
+        assert!(t.due(t0 + PositionThrottle::INTERVAL, false));
+    }
+
+    #[test]
+    fn force_next_lets_exactly_one_push_bypass_the_interval() {
+        let mut t = PositionThrottle::new();
+        let t0 = Instant::now();
+        assert!(t.due(t0, false));
+        t.force_next();
+        assert!(t.due(t0 + Duration::from_millis(1), false));
+        // The flag is spent; the interval applies again.
+        assert!(!t.due(t0 + Duration::from_millis(2), false));
+    }
+
+    #[test]
+    fn an_explicit_force_bypasses_the_interval_without_arming_anything() {
+        let mut t = PositionThrottle::new();
+        let t0 = Instant::now();
+        assert!(t.due(t0, false));
+        assert!(t.due(t0 + Duration::from_millis(1), true));
+        assert!(!t.due(t0 + Duration::from_millis(2), false));
+    }
+
+    #[test]
+    fn a_default_throttle_behaves_like_a_new_one() {
+        let mut d = PositionThrottle::default();
+        let t0 = Instant::now();
+        assert!(d.due(t0, false));
+        assert!(!d.due(t0 + Duration::from_millis(500), false));
+    }
+
+    // ---- kind to phase -----------------------------------------------
+
+    #[test]
+    fn event_kinds_collapse_to_the_three_transport_phases() {
+        assert!(map_kind_to_phase(PlaybackEventKind::Started) == Phase::Playing);
+        assert!(map_kind_to_phase(PlaybackEventKind::Paused) == Phase::Paused);
+        // A load lands paused: mpv opens the file paused and the transport
+        // must not advertise playback before the first frame.
+        assert!(map_kind_to_phase(PlaybackEventKind::TrackLoaded) == Phase::Paused);
+        for kind in [
+            PlaybackEventKind::Finished,
+            PlaybackEventKind::Canceled,
+            PlaybackEventKind::Error,
+            // Anything the transports have no phase for reads as stopped.
+            PlaybackEventKind::PositionChanged,
+            PlaybackEventKind::MetadataChanged,
+        ] {
+            assert!(map_kind_to_phase(kind) == Phase::Stopped);
+        }
+    }
+
+    // ---- consumer-thread harness --------------------------------------
+
+    struct FakeSink(mpsc::Sender<&'static str>);
+
+    impl QueuedSink for FakeSink {
+        fn init(&mut self) {
+            let _ = self.0.send("init");
+        }
+        fn deliver(&mut self, _ev: &PlaybackEvent) {
+            let _ = self.0.send("deliver");
+        }
+        fn teardown(&mut self) {
+            let _ = self.0.send("teardown");
+        }
+    }
+
+    fn next(rx: &mpsc::Receiver<&'static str>) -> &'static str {
+        rx.recv_timeout(test_support::WORKER_TIMEOUT)
+            .expect("the sink thread went quiet")
+    }
+
+    #[test]
+    fn run_sink_builds_the_sink_on_its_own_thread_and_stop_tears_it_down() {
+        let _g = test_support::lock();
+        stop();
+        let (tx, rx) = mpsc::channel();
+        run_sink("jfn-test-media-sink", move || FakeSink(tx));
+        assert_eq!(next(&rx), "init");
+        stop();
+        assert_eq!(next(&rx), "teardown");
+    }
+
+    #[test]
+    fn a_second_run_sink_while_one_is_live_is_ignored() {
+        let _g = test_support::lock();
+        stop();
+        let (tx, rx) = mpsc::channel();
+        let first = tx.clone();
+        run_sink("jfn-test-media-sink-a", move || FakeSink(first));
+        assert_eq!(next(&rx), "init");
+        run_sink("jfn-test-media-sink-b", move || FakeSink(tx));
+        // The second build closure never ran, so no second `init` arrives.
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        stop();
+        assert_eq!(next(&rx), "teardown");
+    }
+
+    #[test]
+    fn stopping_when_no_sink_is_running_is_a_no_op() {
+        let _g = test_support::lock();
+        stop();
+        stop();
+    }
+}

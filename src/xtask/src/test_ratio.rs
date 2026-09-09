@@ -1428,4 +1428,99 @@ t.test('method call not counted', () => {});
         let args = TestRatioArgs::default();
         run(&args).expect("test-ratio must succeed on the checked-out repo");
     }
+
+    #[test]
+    fn cfg_test_module_does_not_hide_later_public_functions() {
+        let counts = count_rust(
+            "#[cfg(test)]
+mod tests {
+    pub fn helper() {}
+}
+pub fn after() {}
+",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            counts,
+            Counts {
+                public_fns: 1,
+                tests: 0
+            }
+        );
+    }
+
+    #[test]
+    fn trait_impl_methods_count_as_public_without_a_pub_keyword() {
+        let trait_impl = count_rust(
+            "pub struct S;
+trait T { fn f(&self); }
+impl T for S {
+    fn f(&self) {}
+}
+",
+            false,
+        )
+        .unwrap();
+        assert_eq!(trait_impl.public_fns, 1);
+
+        let inherent = count_rust(
+            "pub struct S;
+impl S {
+    fn f(&self) {}
+}
+",
+            false,
+        )
+        .unwrap();
+        assert_eq!(inherent.public_fns, 0);
+    }
+
+    #[test]
+    fn helpers_nested_inside_a_test_function_are_not_public() {
+        let counts = count_rust(
+            "#[test]
+fn behaviour() {
+    pub fn helper() {}
+    struct S;
+    impl S { pub fn m(&self) {} }
+}
+",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            counts,
+            Counts {
+                public_fns: 0,
+                tests: 1
+            }
+        );
+    }
+
+    #[test]
+    fn impl_blocks_inside_a_cfg_test_module_add_no_public_surface() {
+        let counts = count_rust(
+            "#[cfg(test)]
+mod tests {
+    pub struct Fixture;
+    impl Fixture {
+        pub fn build() -> Self { Fixture }
+    }
+    impl Default for Fixture {
+        fn default() -> Self { Fixture }
+    }
+}
+",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            counts,
+            Counts {
+                public_fns: 0,
+                tests: 0
+            }
+        );
+    }
 }

@@ -262,4 +262,160 @@ mod tests {
         let n = unsafe { Node::from_raw(&root) };
         assert_eq!(n.as_array().map(|a| a.len()), Some(0));
     }
+
+    #[test]
+    fn strings_are_copied_out_and_a_null_pointer_becomes_empty() {
+        let owned = CString::new("ewa_lanczossharp").expect("cstring");
+        let mut n = raw_none();
+        n.format = sys::mpv_format::MPV_FORMAT_STRING;
+        n.u.string = owned.as_ptr() as *mut _;
+        assert_eq!(
+            unsafe { Node::from_raw(&n) },
+            Node::String("ewa_lanczossharp".into())
+        );
+
+        // libmpv can hand out a STRING node with no payload.
+        n.u.string = std::ptr::null_mut();
+        assert_eq!(unsafe { Node::from_raw(&n) }, Node::String(String::new()));
+    }
+
+    #[test]
+    fn byte_arrays_are_copied_and_an_absent_buffer_decodes_to_empty() {
+        let bytes: Vec<u8> = vec![0xde, 0xad, 0x00, 0xbe, 0xef];
+        let ba = sys::mpv_byte_array {
+            data: bytes.as_ptr() as *mut _,
+            size: bytes.len(),
+        };
+        let mut n = raw_none();
+        n.format = sys::mpv_format::MPV_FORMAT_BYTE_ARRAY;
+        n.u.ba = &ba as *const _ as *mut _;
+        assert_eq!(
+            unsafe { Node::from_raw(&n) },
+            Node::ByteArray(bytes.clone())
+        );
+
+        // A NUL byte inside is data, not a terminator.
+        assert_eq!(
+            unsafe { Node::from_raw(&n) },
+            Node::ByteArray(vec![0xde, 0xad, 0x00, 0xbe, 0xef])
+        );
+
+        let empty = sys::mpv_byte_array {
+            data: bytes.as_ptr() as *mut _,
+            size: 0,
+        };
+        n.u.ba = &empty as *const _ as *mut _;
+        assert_eq!(unsafe { Node::from_raw(&n) }, Node::ByteArray(Vec::new()));
+
+        n.u.ba = std::ptr::null_mut();
+        assert_eq!(unsafe { Node::from_raw(&n) }, Node::ByteArray(Vec::new()));
+    }
+
+    /// A format this build of libmpv did not have when the bindings were
+    /// generated must decode to `None`, never panic.
+    #[test]
+    fn an_unknown_format_decodes_to_none() {
+        let mut n = raw_none();
+        n.format = sys::mpv_format(9999);
+        assert_eq!(unsafe { Node::from_raw(&n) }, Node::None);
+    }
+
+    #[test]
+    fn nested_containers_decode_recursively() {
+        // { "tracks": [ 1, 2 ] }
+        let mut inner_values = vec![raw_int(1), raw_int(2)];
+        let inner = sys::mpv_node_list {
+            num: 2,
+            values: inner_values.as_mut_ptr(),
+            keys: std::ptr::null_mut(),
+        };
+        let mut array_node = raw_none();
+        array_node.format = sys::mpv_format::MPV_FORMAT_NODE_ARRAY;
+        array_node.u.list = &inner as *const _ as *mut _;
+
+        let key = CString::new("tracks").expect("cstring");
+        let mut keys: Vec<*mut std::os::raw::c_char> = vec![key.as_ptr() as *mut _];
+        let mut outer_values = vec![array_node];
+        let outer = sys::mpv_node_list {
+            num: 1,
+            values: outer_values.as_mut_ptr(),
+            keys: keys.as_mut_ptr(),
+        };
+        let mut root = raw_none();
+        root.format = sys::mpv_format::MPV_FORMAT_NODE_MAP;
+        root.u.list = &outer as *const _ as *mut _;
+
+        let decoded = unsafe { Node::from_raw(&root) };
+        let tracks = decoded.get("tracks").and_then(|v| v.as_array());
+        assert_eq!(
+            tracks.map(|a| a.iter().filter_map(Node::as_int).collect::<Vec<_>>()),
+            Some(vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn as_str_only_matches_a_string_node() {
+        assert_eq!(Node::String("mkv".into()).as_str(), Some("mkv"));
+        assert_eq!(Node::Int(3).as_str(), None);
+        assert_eq!(Node::None.as_str(), None);
+    }
+
+    #[test]
+    fn as_int_only_matches_an_int_node() {
+        assert_eq!(Node::Int(-7).as_int(), Some(-7));
+        // No coercion: a double that happens to be whole is still not an int.
+        assert_eq!(Node::Double(7.0).as_int(), None);
+        assert_eq!(Node::String("7".into()).as_int(), None);
+    }
+
+    #[test]
+    fn as_double_only_matches_a_double_node() {
+        assert_eq!(Node::Double(1.5).as_double(), Some(1.5));
+        assert_eq!(Node::Int(1).as_double(), None);
+        assert_eq!(Node::Flag(true).as_double(), None);
+    }
+
+    #[test]
+    fn as_flag_only_matches_a_flag_node() {
+        assert_eq!(Node::Flag(false).as_flag(), Some(false));
+        assert_eq!(Node::Flag(true).as_flag(), Some(true));
+        // mpv's FLAG is a distinct format from INT64; 1 is not `true` here.
+        assert_eq!(Node::Int(1).as_flag(), None);
+    }
+
+    #[test]
+    fn as_array_only_matches_an_array_node() {
+        let arr = Node::Array(vec![Node::Int(1)]);
+        assert_eq!(arr.as_array().map(Vec::len), Some(1));
+        assert!(Node::Map(vec![]).as_array().is_none());
+        assert!(Node::None.as_array().is_none());
+    }
+
+    #[test]
+    fn as_map_only_matches_a_map_node() {
+        let map = Node::Map(vec![("k".into(), Node::Int(1))]);
+        assert_eq!(map.as_map().map(Vec::len), Some(1));
+        assert!(Node::Array(vec![]).as_map().is_none());
+        assert!(Node::None.as_map().is_none());
+    }
+
+    #[test]
+    fn get_returns_none_for_a_missing_key_and_for_a_non_map() {
+        let map = Node::Map(vec![
+            ("w".into(), Node::Int(1920)),
+            ("h".into(), Node::Int(1080)),
+        ]);
+        assert_eq!(map.get("h").and_then(Node::as_int), Some(1080));
+        assert!(map.get("depth").is_none());
+        assert!(map.get("").is_none());
+        assert!(Node::Array(vec![Node::Int(1)]).get("w").is_none());
+        assert!(Node::None.get("w").is_none());
+    }
+
+    /// mpv node maps are a list, not a hash: a duplicate key keeps the first.
+    #[test]
+    fn get_returns_the_first_of_two_equal_keys() {
+        let map = Node::Map(vec![("k".into(), Node::Int(1)), ("k".into(), Node::Int(2))]);
+        assert_eq!(map.get("k").and_then(Node::as_int), Some(1));
+    }
 }

@@ -105,3 +105,98 @@ impl Instance {
             .map_err(|e| io::Error::new(e.kind(), format!("write {}: {e}", path.display())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("temp dir")
+    }
+
+    #[test]
+    fn a_first_run_mints_an_instance_and_persists_it() {
+        let dir = temp_dir();
+        let minted = Instance::for_config_dir(dir.path()).expect("mint");
+        let file = dir.path().join(FILE_NAME);
+        assert!(file.is_file(), "the minted instance must be written out");
+
+        let reloaded = Instance::for_config_dir(dir.path()).expect("reload");
+        assert_eq!(minted.id().to_string(), reloaded.id().to_string());
+    }
+
+    #[test]
+    fn an_unparsable_instance_file_is_replaced_with_a_fresh_one() {
+        let dir = temp_dir();
+        let file = dir.path().join(FILE_NAME);
+        std::fs::write(&file, b"{ not json").expect("seed");
+
+        let minted = Instance::for_config_dir(dir.path()).expect("mint over garbage");
+        let reloaded = Instance::for_config_dir(dir.path()).expect("reload");
+        assert_eq!(minted.id().to_string(), reloaded.id().to_string());
+    }
+
+    #[test]
+    fn an_instance_file_holding_a_bad_uuid_is_replaced_too() {
+        let dir = temp_dir();
+        let file = dir.path().join(FILE_NAME);
+        std::fs::write(&file, br#"{"id":"not-a-uuid"}"#).expect("seed");
+
+        let minted = Instance::for_config_dir(dir.path()).expect("mint over a bad id");
+        let raw = std::fs::read_to_string(&file).expect("read back");
+        assert!(raw.contains(&minted.id().to_string()));
+    }
+
+    #[test]
+    fn a_missing_config_dir_surfaces_the_write_error() {
+        let dir = temp_dir();
+        let missing = dir.path().join("no").join("such").join("dir");
+        assert!(Instance::for_config_dir(&missing).is_err());
+    }
+
+    #[test]
+    fn an_id_displays_and_serializes_as_the_simple_uuid_form() {
+        let dir = temp_dir();
+        let instance = Instance::for_config_dir(dir.path()).expect("mint");
+        let shown = instance.id().to_string();
+        assert_eq!(shown.len(), 32, "{shown} must be the unhyphenated form");
+        assert!(shown.chars().all(|c| c.is_ascii_hexdigit()));
+        // Deref reaches the wrapped uuid itself.
+        assert_eq!(instance.id().simple().to_string(), shown);
+
+        let json = serde_json::to_string(&instance).expect("serialize");
+        assert_eq!(json, format!(r#"{{"id":"{shown}"}}"#));
+    }
+
+    #[test]
+    fn a_stored_instance_round_trips_through_json() {
+        let dir = temp_dir();
+        let instance = Instance::for_config_dir(dir.path()).expect("mint");
+        let json = serde_json::to_string(&instance).expect("serialize");
+        let back: Instance = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.id().to_string(), instance.id().to_string());
+    }
+
+    #[test]
+    fn the_hyphenated_uuid_form_is_accepted_and_a_malformed_one_is_not() {
+        let hyphenated: Instance =
+            serde_json::from_str(r#"{"id":"67e55044-10b1-426f-9247-bb680e5fe0c8"}"#)
+                .expect("hyphenated uuid");
+        assert_eq!(
+            hyphenated.id().to_string(),
+            "67e5504410b1426f9247bb680e5fe0c8"
+        );
+
+        for bad in [
+            r#"{"id":""}"#,
+            r#"{"id":"nope"}"#,
+            r#"{"id":"67e55044-10b1-426f-9247-bb680e5fe0c"}"#,
+            r#"{"id":42}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Instance>(bad).is_err(),
+                "{bad} must not parse"
+            );
+        }
+    }
+}

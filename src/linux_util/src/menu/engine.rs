@@ -759,6 +759,8 @@ fn run(emitter: &Emitter) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use std::sync::OnceLock;
     use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -1112,5 +1114,278 @@ mod tests {
         assert_eq!(scroll_step(120, 28), 28);
         assert_eq!(scroll_step(-120, 28), -28);
         assert_eq!(scroll_step(0, 28), 0);
+    }
+    // --- helpers for the pointer / keyboard / scroll tests -------------------
+
+    fn item_with_id(id: c_int) -> MenuItem {
+        MenuItem {
+            id,
+            label: format!("Item {id}"),
+            enabled: true,
+            separator: false,
+        }
+    }
+
+    /// Feeds a layout of `count` equal, selectable rows — what the render
+    /// thread's `Shape` job would deliver for `count` items — with an optional
+    /// bottom clamp so the menu has something to scroll.
+    fn deliver_rows(menu: &SoftwareMenu, count: usize, row_h: i32, clamp_ph: Option<i32>) {
+        let rows: Vec<crate::menu::render::Row> = (0..count)
+            .map(|i| crate::menu::render::Row {
+                item: i,
+                y: i as i32 * row_h,
+                h: row_h,
+                separator: false,
+                enabled: true,
+            })
+            .collect();
+        let selectable: Vec<usize> = (0..count).collect();
+        let height = count as i32 * row_h;
+        menu.emitter.update(move |s| {
+            if let Some(generation) = s.generation {
+                on_layout(
+                    s,
+                    generation,
+                    Layout::for_test(100, height, rows, selectable),
+                    MenuMetrics {
+                        scale: 1.0,
+                        clamp_ph,
+                    },
+                );
+            }
+            None
+        });
+    }
+
+    fn generation_of(menu: &SoftwareMenu) -> Generation {
+        menu.emitter
+            .mailbox
+            .peek(|s| s.generation)
+            .expect("a live generation")
+    }
+
+    fn active_row(menu: &SoftwareMenu) -> Option<i32> {
+        menu.emitter
+            .mailbox
+            .peek(|s| s.menu.as_ref().map(|m| m.fsm.active))
+    }
+
+    fn scroll_offset(menu: &SoftwareMenu) -> Option<i32> {
+        menu.emitter
+            .mailbox
+            .peek(|s| s.menu.as_ref().map(|m| m.scroll))
+    }
+
+    // --- lifecycle -----------------------------------------------------------
+
+    #[test]
+    fn spawn_starts_an_idle_render_thread_that_shutdown_joins() {
+        let menu = SoftwareMenu::spawn(Arc::new(NoopSurface));
+        assert!(!menu.is_active());
+        assert!(!menu.is_engaged());
+        assert!(!menu.has_menu());
+        // Returns only once the render thread has observed the flag and exited.
+        menu.shutdown();
+        assert!(menu.thread.lock().is_none());
+    }
+
+    #[test]
+    fn warm_leaves_an_idle_menu_untouched() {
+        let menu = menu_with_thread(true);
+        menu.warm();
+        assert!(!menu.is_active());
+        assert!(!menu.is_engaged());
+        assert!(!menu.has_menu());
+    }
+
+    #[test]
+    fn shutdown_resolves_a_pending_selection_as_dismissed() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        menu.shutdown();
+        assert_eq!(rx.try_recv(), Ok(MENU_DISMISSED));
+        assert!(!menu.has_menu());
+    }
+
+    #[test]
+    fn a_menu_is_only_active_once_its_layout_has_arrived() {
+        let menu = menu_with_thread(true);
+        let (req, _rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        assert!(!menu.is_active(), "no pixels, no active menu");
+        assert!(menu.is_engaged(), "but the popup is already claimed");
+        deliver_rows(&menu, 1, 20, None);
+        assert!(menu.is_active());
+    }
+
+    #[test]
+    fn an_external_close_ends_the_session_and_resolves_the_selection() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        deliver_rows(&menu, 1, 20, None);
+        menu.on_done(generation_of(&menu));
+        assert_eq!(rx.try_recv(), Ok(MENU_DISMISSED));
+        assert!(!menu.is_active());
+        assert!(!menu.has_menu());
+    }
+
+    #[test]
+    fn a_stale_generation_never_closes_the_live_menu() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        deliver_rows(&menu, 1, 20, None);
+        let stale = Generation::new(generation_of(&menu).get() + 1).expect("nonzero");
+        menu.on_done(stale);
+        menu.on_ready(stale);
+        assert!(rx.try_recv().is_err(), "the menu is still open");
+        assert!(menu.has_menu());
+    }
+
+    // --- pointer -------------------------------------------------------------
+
+    #[test]
+    fn motion_highlights_the_row_under_the_pointer_and_clears_it_again() {
+        let menu = menu_with_thread(true);
+        let (req, _rx) = request(vec![item_with_id(7), item_with_id(8)]);
+        menu.open(req);
+        deliver_rows(&menu, 2, 20, None);
+        menu.motion(MenuPoint::Physical { x: 10.0, y: 25.0 });
+        assert_eq!(active_row(&menu), Some(1));
+        menu.motion(MenuPoint::Physical { x: 10.0, y: 5.0 });
+        assert_eq!(active_row(&menu), Some(0));
+        // Off the rows, nothing is highlighted.
+        menu.motion(MenuPoint::Physical { x: 10.0, y: 500.0 });
+        assert_eq!(active_row(&menu), Some(MENU_DISMISSED));
+    }
+
+    #[test]
+    fn a_press_on_a_row_resolves_that_rows_id() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![item_with_id(7), item_with_id(8)]);
+        menu.open(req);
+        deliver_rows(&menu, 2, 20, None);
+        menu.press(MenuPoint::Physical { x: 10.0, y: 25.0 });
+        assert_eq!(rx.try_recv(), Ok(8));
+        assert!(!menu.has_menu());
+    }
+
+    #[test]
+    fn a_press_outside_the_menu_dismisses_it() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![item_with_id(7)]);
+        menu.open(req);
+        deliver_rows(&menu, 1, 20, None);
+        menu.press(MenuPoint::Physical { x: 500.0, y: 500.0 });
+        assert_eq!(rx.try_recv(), Ok(MENU_DISMISSED));
+    }
+
+    #[test]
+    fn pointer_events_before_the_first_layout_are_ignored() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![item_with_id(7)]);
+        menu.open(req);
+        menu.motion(MenuPoint::Physical { x: 10.0, y: 5.0 });
+        menu.press(MenuPoint::Physical { x: 10.0, y: 5.0 });
+        assert!(rx.try_recv().is_err(), "nothing resolved");
+        assert!(menu.has_menu());
+    }
+
+    // --- keyboard ------------------------------------------------------------
+
+    #[test]
+    fn arrow_keys_move_the_highlight_and_enter_resolves_it() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![item_with_id(7), item_with_id(8)]);
+        menu.open(req);
+        deliver_rows(&menu, 2, 20, None);
+        menu.key(interaction_fsm::XK_DOWN);
+        assert_eq!(active_row(&menu), Some(0));
+        menu.key(interaction_fsm::XK_DOWN);
+        assert_eq!(active_row(&menu), Some(1));
+        menu.key(interaction_fsm::XK_RETURN);
+        assert_eq!(rx.try_recv(), Ok(8));
+    }
+
+    #[test]
+    fn escape_dismisses_a_menu_that_has_no_pixels_yet() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        force_active(&menu);
+        menu.key(interaction_fsm::XK_ESCAPE);
+        assert_eq!(rx.try_recv(), Ok(MENU_DISMISSED));
+    }
+
+    #[test]
+    fn keys_are_ignored_until_the_menu_is_active() {
+        let menu = menu_with_thread(true);
+        let (req, rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        menu.key(interaction_fsm::XK_ESCAPE);
+        menu.dismiss();
+        assert!(rx.try_recv().is_err(), "nothing resolved");
+        assert!(menu.has_menu());
+    }
+
+    // --- paint and scroll ----------------------------------------------------
+
+    #[test]
+    fn expose_asks_for_a_repaint_only_once_the_menu_has_pixels() {
+        let menu = menu_with_thread(true);
+        let (req, _rx) = request(vec![selectable_item()]);
+        menu.open(req);
+        // Before the layout: the render thread has taken the Shape job and the
+        // expose must not queue work it cannot do.
+        menu.emitter.update(|s| {
+            s.job = None;
+            None
+        });
+        menu.expose();
+        assert_eq!(menu.emitter.mailbox.peek(|s| s.job), None);
+
+        deliver_rows(&menu, 1, 20, None);
+        menu.emitter.update(|s| {
+            s.job = None;
+            None
+        });
+        menu.expose();
+        assert_eq!(menu.emitter.mailbox.peek(|s| s.job), Some(RenderJob::Paint));
+    }
+
+    #[test]
+    fn scrolling_a_clamped_menu_moves_it_by_whole_rows_and_stops_at_the_ends() {
+        let menu = menu_with_thread(true);
+        let items: Vec<MenuItem> = (0..5).map(item_with_id).collect();
+        let (mut req, _rx) = request(items);
+        req.width = 120; // only a width-constrained menu is ever clamped
+        menu.open(req);
+        // 5 rows of 20 clamped to 60: 40px of travel.
+        deliver_rows(&menu, 5, 20, Some(60));
+        assert_eq!(scroll_offset(&menu), Some(0));
+
+        menu.scroll(-120); // one detent down
+        assert_eq!(scroll_offset(&menu), Some(20));
+        menu.scroll(-120);
+        assert_eq!(scroll_offset(&menu), Some(40));
+        menu.scroll(-120);
+        assert_eq!(scroll_offset(&menu), Some(40), "stops at the bottom");
+
+        menu.scroll(120); // one detent up
+        assert_eq!(scroll_offset(&menu), Some(20));
+        menu.scroll(1200);
+        assert_eq!(scroll_offset(&menu), Some(0), "stops at the top");
+    }
+
+    #[test]
+    fn a_menu_that_fits_its_window_never_scrolls() {
+        let menu = menu_with_thread(true);
+        let (req, _rx) = request(vec![item_with_id(7), item_with_id(8)]);
+        menu.open(req);
+        deliver_rows(&menu, 2, 20, None);
+        menu.scroll(-120);
+        assert_eq!(scroll_offset(&menu), Some(0));
     }
 }

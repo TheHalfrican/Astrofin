@@ -351,6 +351,8 @@ fn apply_buffering_change(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     fn has(events: &[PlaybackEvent], kind: PlaybackEventKind) -> bool {
@@ -764,5 +766,127 @@ mod tests {
         assert!(b.is_empty());
         let c = sm.on_media_type(MediaType::Audio);
         assert_eq!(c.len(), 1);
+    }
+
+    // ---- the remaining property digests ------------------------------
+
+    #[test]
+    fn a_file_load_queues_the_track_selection_action_once() {
+        let mut sm = PlaybackStateMachine::new();
+        assert!(sm.consume_actions().is_empty());
+        sm.on_file_loaded();
+        let actions = sm.consume_actions();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].kind,
+            PlaybackActionKind::ApplyPendingTrackSelectionAndPlay
+        );
+        // Consumed: the coordinator must not re-run it on the next batch.
+        assert!(sm.consume_actions().is_empty());
+    }
+
+    #[test]
+    fn the_first_video_frame_promotes_a_requested_play_to_playing() {
+        let mut sm = PlaybackStateMachine::new();
+        sm.on_media_type(MediaType::Video);
+        sm.on_file_loaded();
+        // mpv unpauses before the first frame is up: still Starting.
+        let out = sm.on_pause_changed(false);
+        assert!(out.is_empty());
+        assert_eq!(sm.snapshot().phase, PlaybackPhase::Starting);
+
+        let out = sm.on_video_frame_available(true);
+        assert!(has(&out, PlaybackEventKind::Started));
+        assert_eq!(sm.snapshot().phase, PlaybackPhase::Playing);
+        // Edge-triggered: the same value again says nothing new.
+        assert!(sm.on_video_frame_available(true).is_empty());
+    }
+
+    #[test]
+    fn a_frame_that_arrives_while_buffering_does_not_promote() {
+        let mut sm = PlaybackStateMachine::new();
+        sm.on_media_type(MediaType::Video);
+        sm.on_file_loaded();
+        sm.on_pause_changed(false);
+        sm.on_paused_for_cache(true);
+        assert!(sm.on_video_frame_available(true).is_empty());
+        assert_eq!(sm.snapshot().phase, PlaybackPhase::Starting);
+    }
+
+    #[test]
+    fn a_speed_change_is_edge_triggered() {
+        let mut sm = PlaybackStateMachine::new();
+        let out = sm.on_speed(1.5);
+        assert!(has(&out, PlaybackEventKind::RateChanged));
+        assert_eq!(sm.snapshot().rate, 1.5);
+        assert!(sm.on_speed(1.5).is_empty());
+        assert!(has(&sm.on_speed(1.0), PlaybackEventKind::RateChanged));
+    }
+
+    #[test]
+    fn a_duration_change_is_edge_triggered() {
+        let mut sm = PlaybackStateMachine::new();
+        let out = sm.on_duration(90_000_000);
+        assert!(has(&out, PlaybackEventKind::DurationChanged));
+        assert_eq!(sm.snapshot().duration_us, 90_000_000);
+        assert!(sm.on_duration(90_000_000).is_empty());
+        // A live stream reporting no duration is a change like any other.
+        assert!(has(&sm.on_duration(0), PlaybackEventKind::DurationChanged));
+    }
+
+    #[test]
+    fn entering_fullscreen_records_the_maximized_flag_and_leaving_clears_it() {
+        let mut sm = PlaybackStateMachine::new();
+        let out = sm.on_fullscreen(true, true);
+        assert!(has(&out, PlaybackEventKind::FullscreenChanged));
+        assert!(sm.snapshot().fullscreen);
+        assert!(sm.snapshot().maximized_before_fullscreen);
+        // Edge-triggered on the fullscreen flag alone.
+        assert!(sm.on_fullscreen(true, false).is_empty());
+        assert!(sm.snapshot().maximized_before_fullscreen);
+
+        let out = sm.on_fullscreen(false, true);
+        assert!(has(&out, PlaybackEventKind::FullscreenChanged));
+        assert!(!sm.snapshot().fullscreen);
+        assert!(!sm.snapshot().maximized_before_fullscreen);
+    }
+
+    #[test]
+    fn buffered_ranges_are_edge_triggered_on_the_whole_list() {
+        let mut sm = PlaybackStateMachine::new();
+        let ranges = vec![PlaybackBufferedRange {
+            start_ticks: 0,
+            end_ticks: 25_000_000,
+        }];
+        let out = sm.on_buffered_ranges(ranges.clone());
+        assert!(has(&out, PlaybackEventKind::BufferedRangesChanged));
+        assert_eq!(sm.snapshot().buffered, ranges);
+        assert!(sm.on_buffered_ranges(ranges).is_empty());
+        assert!(has(
+            &sm.on_buffered_ranges(Vec::new()),
+            PlaybackEventKind::BufferedRangesChanged
+        ));
+    }
+
+    #[test]
+    fn a_display_hz_change_is_edge_triggered() {
+        let mut sm = PlaybackStateMachine::new();
+        let out = sm.on_display_hz(59.94);
+        assert!(has(&out, PlaybackEventKind::DisplayHzChanged));
+        assert_eq!(sm.snapshot().display_hz, 59.94);
+        assert!(sm.on_display_hz(59.94).is_empty());
+        assert!(has(
+            &sm.on_display_hz(120.0),
+            PlaybackEventKind::DisplayHzChanged
+        ));
+    }
+
+    #[test]
+    fn the_snapshot_is_a_copy_the_caller_cannot_write_back() {
+        let mut sm = PlaybackStateMachine::new();
+        sm.on_duration(1_000);
+        let mut snap = sm.snapshot();
+        snap.duration_us = 0;
+        assert_eq!(sm.snapshot().duration_us, 1_000);
     }
 }

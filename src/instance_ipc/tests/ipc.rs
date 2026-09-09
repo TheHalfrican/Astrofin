@@ -383,3 +383,32 @@ fn many_concurrent_clients_are_all_answered() {
     answers.sort_unstable();
     assert_eq!(answers, (0..32usize).collect::<Vec<_>>());
 }
+
+/// `clean_drop_frees_name` proves the same thing through the filesystem, but
+/// it can only run where the name *is* a file. Everywhere else the observable
+/// guarantee is that the name stops answering a probe.
+#[test]
+fn shutdown_stops_the_name_answering_a_probe() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+
+    let listener = serving(&rt, &instance, echo_len);
+    // While it is up, a second bind is refused.
+    assert!(matches!(
+        rt.block_on(Listener::try_start::<Req, Resp>(&instance, echo_len)),
+        Start::AlreadyRunning
+    ));
+
+    rt.block_on(listener.shutdown());
+
+    // After the shutdown the probe no longer finds a server, so a second
+    // start is never told the instance is already running.
+    let after = rt.block_on(Listener::try_start::<Req, Resp>(&instance, echo_len));
+    assert!(
+        !matches!(after, Start::AlreadyRunning),
+        "the name still answered a probe after shutdown"
+    );
+    if let Start::Started(l) = after {
+        rt.block_on(l.shutdown());
+    }
+}

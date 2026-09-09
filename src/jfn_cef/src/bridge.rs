@@ -151,3 +151,93 @@ pub fn install() {
     jfn_platform_abi::install_browser_bridge(Box::new(CefBrowserBridge));
     jfn_platform_abi::set_decorations_listener(crate::browsers::jfn_browsers_push_csd_state_all);
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    /// Every bridge method resolves the active layer itself. With no layer
+    /// registry initialised there is no active layer, which is exactly the
+    /// state the `input` and `macos` crates dispatch into during early boot
+    /// and late shutdown: each call must drop the event, not dereference a
+    /// null layer.
+    #[test]
+    fn key_events_are_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.send_key_event(0, 0, 65, 65, false, b'a'.into(), b'a'.into());
+    }
+
+    #[test]
+    fn mouse_clicks_are_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.send_mouse_click(10, 20, 0, 0, false, 1);
+        CefBrowserBridge.send_mouse_click(10, 20, 0, 0, true, 1);
+    }
+
+    #[test]
+    fn mouse_moves_are_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.send_mouse_move(10, 20, 0, false);
+        CefBrowserBridge.send_mouse_move(-1, -1, 0, true);
+    }
+
+    #[test]
+    fn mouse_wheel_events_are_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.send_mouse_wheel(10, 20, 0, 0, -120);
+    }
+
+    #[test]
+    fn set_focus_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.set_focus(true);
+        CefBrowserBridge.set_focus(false);
+    }
+
+    #[test]
+    fn history_navigation_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.navigate_history(true);
+        CefBrowserBridge.navigate_history(false);
+    }
+
+    #[test]
+    fn undo_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.undo();
+    }
+
+    #[test]
+    fn redo_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.redo();
+    }
+
+    #[test]
+    fn cut_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.cut();
+    }
+
+    #[test]
+    fn copy_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.copy();
+    }
+
+    #[test]
+    fn paste_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.paste();
+    }
+
+    #[test]
+    fn select_all_is_dropped_while_no_layer_is_active() {
+        CefBrowserBridge.select_all();
+    }
+
+    #[test]
+    fn has_active_is_false_before_any_layer_is_registered() {
+        assert!(!CefBrowserBridge.has_active());
+    }
+
+    #[test]
+    fn install_publishes_the_bridge_to_the_platform_abi() {
+        // `install_browser_bridge` panics on a second install, so this is the
+        // one test that calls it.
+        install();
+        let bridge = jfn_platform_abi::browser_bridge().expect("bridge installed");
+        assert!(!bridge.has_active());
+    }
+}

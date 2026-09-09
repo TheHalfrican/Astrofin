@@ -143,41 +143,50 @@ fn manager_loop() {
     }
 }
 
+/// What a lifecycle transition asks of the rest of the app. Split out of
+/// [`transition`] so the FSM itself is a pure function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Effect {
+    /// Fan a visibility change out to every live CEF browser.
+    SetHiddenAll(bool),
+    /// Run the shutdown drain.
+    Shutdown,
+}
+
 /// Apply one message to the lifecycle FSM. Returns the new state; the
 /// caller observes terminal `ShuttingDown` to exit the loop. Side effects
 /// happen inline (CEF visibility fan-out, shutdown drain).
 fn transition(state: LifecycleState, msg: ManagerMsg) -> LifecycleState {
+    let (next, effect) = next_state(state, msg);
+    match effect {
+        Some(Effect::SetHiddenAll(hidden)) => {
+            jfn_cef::browsers::jfn_browsers_set_hidden_all(hidden);
+        }
+        Some(Effect::Shutdown) => run_shutdown(),
+        None => {}
+    }
+    next
+}
+
+/// The pure half of [`transition`]: one message folded into the state, plus
+/// the effect the caller must perform. No globals, so it is unit-testable.
+fn next_state(state: LifecycleState, msg: ManagerMsg) -> (LifecycleState, Option<Effect>) {
     use LifecycleState::*;
     match (state, msg) {
         // Shutdown is terminal and idempotent — once seen, ignore everything
         // else and don't re-enter the drain.
-        (ShuttingDown, _) => ShuttingDown,
-        (_, ManagerMsg::Shutdown) => {
-            run_shutdown();
-            ShuttingDown
-        }
+        (ShuttingDown, _) => (ShuttingDown, None),
+        (_, ManagerMsg::Shutdown) => (ShuttingDown, Some(Effect::Shutdown)),
         // Visibility flips while running. Suspended is *not* downgraded by a
         // visibility event — the system must explicitly Resume first.
-        (Running, ManagerMsg::SetVisible(false)) => {
-            jfn_cef::browsers::jfn_browsers_set_hidden_all(true);
-            Hidden
-        }
-        (Hidden, ManagerMsg::SetVisible(true)) => {
-            jfn_cef::browsers::jfn_browsers_set_hidden_all(false);
-            Running
-        }
-        (Running | Hidden, ManagerMsg::Suspend) => {
-            if state == Running {
-                jfn_cef::browsers::jfn_browsers_set_hidden_all(true);
-            }
-            Suspended
-        }
-        (Suspended, ManagerMsg::Resume) => {
-            jfn_cef::browsers::jfn_browsers_set_hidden_all(false);
-            Running
-        }
+        (Running, ManagerMsg::SetVisible(false)) => (Hidden, Some(Effect::SetHiddenAll(true))),
+        (Hidden, ManagerMsg::SetVisible(true)) => (Running, Some(Effect::SetHiddenAll(false))),
+        // Hidden is already hidden to CEF; only Running needs the fan-out.
+        (Running, ManagerMsg::Suspend) => (Suspended, Some(Effect::SetHiddenAll(true))),
+        (Hidden, ManagerMsg::Suspend) => (Suspended, None),
+        (Suspended, ManagerMsg::Resume) => (Running, Some(Effect::SetHiddenAll(false))),
         // No-op: already in the requested posture, or a stray event.
-        _ => state,
+        _ => (state, None),
     }
 }
 
@@ -191,4 +200,158 @@ fn run_shutdown() {
     jfn_playback::shutdown::jfn_shutdown_fanout();
     jfn_cef::browsers::jfn_browsers_close_all_blocking();
     jfn_platform_abi::get().wake_main_loop();
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::LifecycleState::*;
+    use super::*;
+    use std::time::Duration;
+
+    /// `manager()` is process-wide, so the two tests that post to its queue
+    /// take this first. Nothing here ever calls [`jfn_manager_start`]: the
+    /// loop it spawns would fan out to CEF and the platform backend, neither
+    /// of which exists in a unit-test process.
+    static QUEUE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn take_queue() -> Vec<ManagerMsg> {
+        let m = manager();
+        m.wake.drain();
+        let mut q = m.queue.lock();
+        std::mem::take(&mut *q).into_iter().collect()
+    }
+
+    /// Runs `post` while a thread is parked in `wake.wait()`, and reports
+    /// whether the park was released. Never leaves the thread parked.
+    fn wakes_a_parked_manager(post: impl FnOnce()) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            manager().wake.wait();
+            let _ = tx.send(());
+        });
+        post();
+        let woken = rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        if !woken {
+            manager().wake.signal();
+        }
+        let _ = waiter.join();
+        woken
+    }
+
+    #[test]
+    fn hiding_a_running_app_hides_every_browser() {
+        assert_eq!(
+            next_state(Running, ManagerMsg::SetVisible(false)),
+            (Hidden, Some(Effect::SetHiddenAll(true)))
+        );
+    }
+
+    #[test]
+    fn showing_a_hidden_app_shows_every_browser_again() {
+        assert_eq!(
+            next_state(Hidden, ManagerMsg::SetVisible(true)),
+            (Running, Some(Effect::SetHiddenAll(false)))
+        );
+    }
+
+    #[test]
+    fn a_repeated_visibility_event_changes_nothing() {
+        assert_eq!(
+            next_state(Running, ManagerMsg::SetVisible(true)),
+            (Running, None)
+        );
+        assert_eq!(
+            next_state(Hidden, ManagerMsg::SetVisible(false)),
+            (Hidden, None)
+        );
+    }
+
+    #[test]
+    fn suspending_hides_the_browsers_only_when_they_were_still_shown() {
+        assert_eq!(
+            next_state(Running, ManagerMsg::Suspend),
+            (Suspended, Some(Effect::SetHiddenAll(true)))
+        );
+        // Already hidden: suspending must not re-post the same fan-out.
+        assert_eq!(next_state(Hidden, ManagerMsg::Suspend), (Suspended, None));
+    }
+
+    #[test]
+    fn a_visibility_event_never_downgrades_a_suspended_app() {
+        for visible in [true, false] {
+            assert_eq!(
+                next_state(Suspended, ManagerMsg::SetVisible(visible)),
+                (Suspended, None),
+                "SetVisible({visible})"
+            );
+        }
+        // Only Resume gets out of Suspended.
+        assert_eq!(
+            next_state(Suspended, ManagerMsg::Resume),
+            (Running, Some(Effect::SetHiddenAll(false)))
+        );
+    }
+
+    #[test]
+    fn a_resume_without_a_suspend_is_ignored() {
+        assert_eq!(next_state(Running, ManagerMsg::Resume), (Running, None));
+        assert_eq!(next_state(Hidden, ManagerMsg::Resume), (Hidden, None));
+    }
+
+    #[test]
+    fn shutdown_runs_the_drain_once_from_any_state() {
+        for state in [Running, Hidden, Suspended] {
+            assert_eq!(
+                next_state(state, ManagerMsg::Shutdown),
+                (ShuttingDown, Some(Effect::Shutdown)),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shutting_down_is_terminal_and_never_re_enters_the_drain() {
+        for msg in [
+            ManagerMsg::Shutdown,
+            ManagerMsg::Suspend,
+            ManagerMsg::Resume,
+            ManagerMsg::SetVisible(true),
+            ManagerMsg::SetVisible(false),
+        ] {
+            assert_eq!(next_state(ShuttingDown, msg), (ShuttingDown, None));
+        }
+    }
+
+    #[test]
+    fn send_queues_messages_in_order_and_wakes_the_manager() {
+        let _g = QUEUE_LOCK.lock();
+        let _ = take_queue();
+        let woken = wakes_a_parked_manager(|| {
+            jfn_manager_send(ManagerMsg::SetVisible(false));
+            jfn_manager_send(ManagerMsg::Resume);
+        });
+        let queued = take_queue();
+        assert!(woken, "send did not wake the manager");
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [ManagerMsg::SetVisible(false), ManagerMsg::Resume]
+            ),
+            "queue did not keep post order"
+        );
+    }
+
+    #[test]
+    fn notify_shutdown_wakes_the_manager_without_queueing_anything() {
+        let _g = QUEUE_LOCK.lock();
+        let _ = take_queue();
+        let woken = wakes_a_parked_manager(jfn_manager_notify_shutdown);
+        let queued = take_queue();
+        assert!(woken, "notify_shutdown did not wake the manager");
+        // A signal handler cannot lock the queue, so the wake carries no
+        // message; manager_loop synthesizes Shutdown from the flag instead.
+        assert!(queued.is_empty(), "notify_shutdown queued a message");
+    }
 }

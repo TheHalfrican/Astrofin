@@ -5,13 +5,20 @@
 
 use clap::{ArgAction, Parser};
 
-const ENV_LOG_LEVEL: &str = "ASTROFIN_LOG_LEVEL";
-const ENV_LOG_FILE: &str = "ASTROFIN_LOG_FILE";
+pub(crate) const ENV_LOG_LEVEL: &str = "ASTROFIN_LOG_LEVEL";
+pub(crate) const ENV_LOG_FILE: &str = "ASTROFIN_LOG_FILE";
 const ENV_CONFIG_DIR: &str = jfn_paths::ENV_CONFIG_DIR;
 const ENV_CACHE_DIR: &str = jfn_paths::ENV_CACHE_DIR;
 
 #[cfg(test)]
-const ENV_BACKED: &[&str] = &[ENV_LOG_LEVEL, ENV_LOG_FILE, ENV_CONFIG_DIR, ENV_CACHE_DIR];
+pub(crate) const ENV_BACKED: &[&str] =
+    &[ENV_LOG_LEVEL, ENV_LOG_FILE, ENV_CONFIG_DIR, ENV_CACHE_DIR];
+
+/// The process environment is global and clap reads it at parse time, so every
+/// test in this crate that sets or clears an `ASTROFIN_*` variable — here and
+/// in `app` — serializes on this one lock.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// astrofin — Jellyfin native desktop client.
 ///
@@ -83,11 +90,6 @@ pub struct Cli {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
-    use std::sync::Mutex;
-
-    // clap reads process env at parse time, so env-mutating tests and the
-    // tests that assert env-backed flags are unset must serialize on this.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard(&'static str);
     impl EnvGuard {

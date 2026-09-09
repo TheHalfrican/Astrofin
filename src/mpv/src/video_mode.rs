@@ -824,4 +824,216 @@ mod tests {
         memo.clear();
         assert!(memo.should_apply(&anime));
     }
+
+    // ---- process-global state ---------------------------------------------
+
+    /// `state()` is process-global, so the tests that read or seed it take
+    /// turns and put back what they found.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    struct StateGuard;
+
+    impl Drop for StateGuard {
+        fn drop(&mut self) {
+            let mut st = state().lock();
+            st.selected = VideoMode::default();
+            st.mode = VideoMode::default();
+            st.baseline = Baseline::default();
+            st.applied.clear();
+        }
+    }
+
+    /// Take the serial lock and reset the module state to its start-up value,
+    /// restoring it again when the test ends (panic included).
+    fn fresh_state() -> (parking_lot::MutexGuard<'static, ()>, StateGuard) {
+        let guard = SERIAL.lock();
+        let reset = StateGuard;
+        {
+            let mut st = state().lock();
+            st.selected = VideoMode::default();
+            st.mode = VideoMode::default();
+            st.baseline = Baseline::default();
+            st.applied.clear();
+        }
+        (guard, reset)
+    }
+
+    fn string_reply(text: &str) -> crate::PropertyValue {
+        crate::PropertyValue::String(text.to_string())
+    }
+
+    #[test]
+    fn current_and_selected_both_start_on_auto() {
+        let _g = fresh_state();
+        assert_eq!(selected(), VideoMode::Auto);
+        assert_eq!(current(), VideoMode::Auto);
+    }
+
+    /// `current` is the mode mpv is running — a per-title resolution moves it
+    /// while `selected`, the choice for the whole run, stays put.
+    #[test]
+    fn current_follows_a_resolution_while_selected_stays_on_the_run_choice() {
+        let _g = fresh_state();
+        state().lock().mode = VideoMode::Animation;
+        assert_eq!(current(), VideoMode::Animation);
+        assert_eq!(selected(), VideoMode::Auto);
+    }
+
+    /// Either the chosen directory holds the mode's whole chain, or it is the
+    /// bundled copy — never a user directory with half the shaders in it.
+    #[test]
+    fn shader_dir_only_picks_the_user_copy_when_it_holds_the_whole_chain() {
+        for mode in [VideoMode::Auto, VideoMode::LiveAction, VideoMode::Animation] {
+            let dir = mode.shader_dir();
+            let complete = mode.shader_files().iter().all(|f| dir.join(f).is_file());
+            let bundled = dir.ends_with(mode.bundled_subdir());
+            assert!(
+                complete || bundled,
+                "{}: {} is neither complete nor the bundled dir",
+                mode.as_str(),
+                dir.display()
+            );
+        }
+        // Off has no files, so the "user has them all" branch can never fire.
+        assert!(VideoMode::Off.shader_files().is_empty());
+    }
+
+    // ---- baseline replies --------------------------------------------------
+
+    #[test]
+    fn each_baseline_reply_latches_its_own_property() {
+        let _g = fresh_state();
+        assert!(consume_reply(BASELINE_GLSL_REPLY, &string_reply("a.glsl")));
+        assert!(consume_reply(
+            BASELINE_SCALE_REPLY,
+            &string_reply("spline36")
+        ));
+        assert!(consume_reply(
+            BASELINE_DSCALE_REPLY,
+            &string_reply("mitchell")
+        ));
+
+        let st = state().lock();
+        assert_eq!(st.baseline.glsl_shaders.as_deref(), Some("a.glsl"));
+        assert_eq!(st.baseline.scale.as_deref(), Some("spline36"));
+        assert_eq!(st.baseline.dscale.as_deref(), Some("mitchell"));
+        assert!(st.baseline.complete());
+    }
+
+    /// Animation takes its scalers from the baseline, so a baseline that is
+    /// only two thirds latched must not read as complete.
+    #[test]
+    fn the_baseline_is_incomplete_until_all_three_replies_have_landed() {
+        let _g = fresh_state();
+        assert!(!state().lock().baseline.complete());
+        consume_reply(BASELINE_GLSL_REPLY, &string_reply(""));
+        assert!(!state().lock().baseline.complete());
+        consume_reply(BASELINE_SCALE_REPLY, &string_reply(""));
+        assert!(!state().lock().baseline.complete());
+        consume_reply(BASELINE_DSCALE_REPLY, &string_reply(""));
+        assert!(state().lock().baseline.complete());
+    }
+
+    /// An unavailable property answers with something that is not a string.
+    /// Latching it as empty is deliberate: leaving it unset would block every
+    /// later restore behind a baseline that can never complete.
+    #[test]
+    fn a_reply_with_no_string_still_latches_as_empty() {
+        let _g = fresh_state();
+        assert!(consume_reply(
+            BASELINE_SCALE_REPLY,
+            &crate::PropertyValue::None
+        ));
+        assert_eq!(state().lock().baseline.scale.as_deref(), Some(""));
+    }
+
+    /// The read-back exists only to log what mpv accepted; it is claimed so
+    /// the event pump stops routing it, but it is not part of the baseline.
+    #[test]
+    fn the_readback_reply_is_claimed_without_touching_the_baseline() {
+        let _g = fresh_state();
+        assert!(consume_reply(
+            READBACK_REPLY,
+            &string_reply("a.glsl;b.glsl")
+        ));
+        let st = state().lock();
+        assert_eq!(st.baseline.glsl_shaders, None);
+        assert_eq!(st.baseline.scale, None);
+        assert_eq!(st.baseline.dscale, None);
+    }
+
+    #[test]
+    fn a_reply_belonging_to_another_module_is_left_alone() {
+        let _g = fresh_state();
+        assert!(!consume_reply(
+            crate::api::BACKGROUND_COLOR_REPLY,
+            &string_reply("#FF000000")
+        ));
+        assert!(!consume_reply(0, &string_reply("x")));
+        assert!(!consume_reply(9999, &string_reply("x")));
+    }
+
+    /// Every async reply id in the crate has to be distinct, or one module
+    /// swallows another's answer.
+    #[test]
+    fn the_reply_ids_do_not_collide_with_the_background_colour_read() {
+        let ids = [
+            crate::api::BACKGROUND_COLOR_REPLY,
+            BASELINE_GLSL_REPLY,
+            BASELINE_SCALE_REPLY,
+            BASELINE_DSCALE_REPLY,
+            READBACK_REPLY,
+        ];
+        let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    }
+
+    // ---- the handle-less paths ---------------------------------------------
+
+    #[test]
+    fn apply_current_is_a_no_op_before_the_handle_exists() {
+        let _g = fresh_state();
+        apply_current(VideoMode::Animation);
+        assert_eq!(current(), VideoMode::Auto, "nothing may be recorded");
+        assert_eq!(selected(), VideoMode::Auto);
+    }
+
+    #[test]
+    fn boot_is_a_no_op_before_the_handle_exists() {
+        let _g = fresh_state();
+        boot(VideoMode::Off);
+        assert_eq!(selected(), VideoMode::Auto);
+        assert!(!state().lock().baseline.complete());
+    }
+
+    /// An explicit mode — stored or from `--video-mode` — is a statement
+    /// about every title, so a per-title resolution must not undo it.
+    #[test]
+    fn a_resolution_is_refused_unless_the_run_is_on_auto() {
+        let _g = fresh_state();
+        for chosen in [VideoMode::LiveAction, VideoMode::Animation, VideoMode::Off] {
+            state().lock().selected = chosen;
+            assert!(
+                !apply_resolved(VideoMode::Animation, "genre", "Cowboy Bebop"),
+                "{}",
+                chosen.as_str()
+            );
+            assert_eq!(current(), VideoMode::Auto, "the chain must not switch");
+        }
+    }
+
+    /// Auto is the thing being resolved, not an answer to it.
+    #[test]
+    fn a_resolution_of_auto_is_refused() {
+        let _g = fresh_state();
+        assert!(!apply_resolved(VideoMode::Auto, "library", "Movies"));
+        assert_eq!(current(), VideoMode::Auto);
+    }
+
+    #[test]
+    fn a_resolution_before_the_handle_exists_reports_that_it_did_nothing() {
+        let _g = fresh_state();
+        assert_eq!(selected(), VideoMode::Auto, "the run is on auto");
+        assert!(!apply_resolved(VideoMode::LiveAction, "tag", "Dune"));
+    }
 }

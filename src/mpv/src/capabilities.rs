@@ -180,4 +180,25 @@ mod tests {
         assert!(codecs.iter().any(|c| c.kind == MediaKind::Video));
         assert!(codecs.iter().any(|c| c.kind == MediaKind::Audio));
     }
+
+    /// Decoders come from the linked libavcodec and need no mpv core at all;
+    /// only the demuxer list does, so without a handle it stays empty rather
+    /// than the whole answer being lost.
+    #[test]
+    fn query_without_a_handle_still_lists_decoders() {
+        let caps = query(None);
+        assert!(!caps.decoders.is_empty());
+        assert!(
+            caps.demuxers.is_empty(),
+            "demuxer-lavf-list is only readable through a handle"
+        );
+    }
+
+    #[test]
+    fn query_raw_with_a_null_handle_answers_exactly_as_query_none_does() {
+        let owned = query(None);
+        let raw = unsafe { query_raw(std::ptr::null_mut()) };
+        assert_eq!(owned, raw);
+        assert_ne!(raw, Capabilities::default());
+    }
 }

@@ -173,13 +173,46 @@ fn stored_video_mode() -> jfn_mpv::VideoMode {
     mode
 }
 
+/// The `settings.json` layer of [`resolve_startup_options`], read in one place
+/// so [`resolve_from_saved`] is a pure function of (saved settings, argv).
+#[derive(Default)]
+struct SavedOptions {
+    hwdec: String,
+    video_mode: jfn_mpv::VideoMode,
+    audio_passthrough: String,
+    audio_channels: String,
+    log_level: String,
+    audio_exclusive: bool,
+}
+
+fn saved_options() -> SavedOptions {
+    SavedOptions {
+        hwdec: jfn_config::hwdec(),
+        video_mode: stored_video_mode(),
+        audio_passthrough: jfn_config::audio_passthrough(),
+        audio_channels: jfn_config::audio_channels(),
+        log_level: jfn_config::log_level(),
+        audio_exclusive: jfn_config::audio_exclusive(),
+    }
+}
+
 fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
-    let saved_hwdec = jfn_config::hwdec();
-    let saved_video_mode = stored_video_mode();
-    let saved_pass = jfn_config::audio_passthrough();
-    let saved_chans = jfn_config::audio_channels();
-    let saved_log_level = jfn_config::log_level();
-    let saved_audio_exclusive = jfn_config::audio_exclusive();
+    resolve_from_saved(saved_options(), cli)
+}
+
+/// Flag > environment variable > `settings.json` > built-in default, for every
+/// startup option. The environment layer is clap's: the four `ASTROFIN_*`
+/// variables are already folded into `cli` by the time this runs, which is why
+/// a variable outranks a saved setting and a flag outranks both.
+fn resolve_from_saved(saved: SavedOptions, cli: &cli::Cli) -> StartupOptions {
+    let SavedOptions {
+        hwdec: saved_hwdec,
+        video_mode: saved_video_mode,
+        audio_passthrough: saved_pass,
+        audio_channels: saved_chans,
+        log_level: saved_log_level,
+        audio_exclusive: saved_audio_exclusive,
+    } = saved;
 
     let mpv_hwdec_default = jfn_mpv::HWDEC_DEFAULT.to_string();
 
@@ -1085,5 +1118,460 @@ mod startup_server_url_tests {
         ] {
             assert_eq!(startup_server_url(bad.into()), "", "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_startup_options_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::cli::{ENV_BACKED, ENV_LOCK, ENV_LOG_FILE, ENV_LOG_LEVEL};
+    use jfn_mpv::VideoMode;
+
+    /// Holds the crate-wide env lock and restores every `ASTROFIN_*` variable
+    /// clap reads, so a variable set here — or one that happens to be set in
+    /// the developer's shell — can never leak into another test.
+    struct EnvScope {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvScope {
+        fn new() -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let saved = ENV_BACKED
+                .iter()
+                .map(|&key| {
+                    let previous = std::env::var(key).ok();
+                    unsafe { std::env::remove_var(key) };
+                    (key, previous)
+                })
+                .collect();
+            EnvScope { _lock: lock, saved }
+        }
+
+        fn set(&self, key: &str, value: &str) {
+            unsafe { std::env::set_var(key, value) };
+        }
+    }
+
+    impl Drop for EnvScope {
+        fn drop(&mut self) {
+            for (key, previous) in &self.saved {
+                match previous {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
+    fn parse_cli(args: &[&str]) -> cli::Cli {
+        cli::Cli::try_parse_from(args.iter().copied()).expect("argv parses")
+    }
+
+    /// A profile that has never chosen anything: every setting at its default.
+    fn unset() -> SavedOptions {
+        SavedOptions::default()
+    }
+
+    fn resolve(saved: SavedOptions, args: &[&str]) -> StartupOptions {
+        resolve_from_saved(saved, &parse_cli(args))
+    }
+
+    // ---- hwdec -------------------------------------------------------------
+
+    #[test]
+    fn hwdec_falls_back_to_the_mpv_default_when_nothing_is_configured() {
+        let _env = EnvScope::new();
+        assert_eq!(
+            resolve(unset(), &["astrofin"]).hwdec,
+            jfn_mpv::HWDEC_DEFAULT
+        );
+    }
+
+    #[test]
+    fn hwdec_comes_from_settings_when_no_flag_is_given() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            hwdec: "auto".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).hwdec, "auto");
+    }
+
+    #[test]
+    fn the_hwdec_flag_wins_over_the_settings_value() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            hwdec: "auto".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin", "--hwdec", "no"]).hwdec, "no");
+    }
+
+    #[test]
+    fn an_unknown_hwdec_is_replaced_by_the_mpv_default() {
+        let _env = EnvScope::new();
+        // From a hand-edited settings.json …
+        let saved = SavedOptions {
+            hwdec: "not-a-decoder".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).hwdec, jfn_mpv::HWDEC_DEFAULT);
+        // … and from the command line, which clap does not validate either.
+        assert_eq!(
+            resolve(unset(), &["astrofin", "--hwdec=not-a-decoder"]).hwdec,
+            jfn_mpv::HWDEC_DEFAULT
+        );
+    }
+
+    // ---- video mode --------------------------------------------------------
+
+    #[test]
+    fn the_video_mode_defaults_to_auto() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).video_mode, VideoMode::Auto);
+    }
+
+    #[test]
+    fn the_video_mode_comes_from_settings_when_no_flag_is_given() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            video_mode: VideoMode::Animation,
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin"]).video_mode,
+            VideoMode::Animation
+        );
+    }
+
+    #[test]
+    fn the_video_mode_flag_wins_over_the_settings_value() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            video_mode: VideoMode::Animation,
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin", "--video-mode", "off"]).video_mode,
+            VideoMode::Off
+        );
+    }
+
+    #[test]
+    fn an_unparseable_video_mode_flag_keeps_the_stored_mode() {
+        let _env = EnvScope::new();
+        for flag in ["--video-mode=nonsense", "--video-mode="] {
+            let saved = SavedOptions {
+                video_mode: VideoMode::Animation,
+                ..unset()
+            };
+            assert_eq!(
+                resolve(saved, &["astrofin", flag]).video_mode,
+                VideoMode::Animation,
+                "{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_video_mode_flag_still_accepts_the_pre_rename_spellings() {
+        let _env = EnvScope::new();
+        for (flag, expected) in [
+            ("movies", VideoMode::LiveAction),
+            ("anime", VideoMode::Animation),
+        ] {
+            assert_eq!(
+                resolve(unset(), &["astrofin", "--video-mode", flag]).video_mode,
+                expected,
+                "{flag}"
+            );
+        }
+    }
+
+    // ---- audio passthrough -------------------------------------------------
+
+    #[test]
+    fn audio_passthrough_is_empty_when_nothing_is_configured() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).audio_passthrough, "");
+    }
+
+    #[test]
+    fn audio_passthrough_comes_from_settings_when_no_flag_is_given() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_passthrough: "ac3,eac3".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).audio_passthrough, "ac3,eac3");
+    }
+
+    #[test]
+    fn the_audio_passthrough_flag_wins_over_the_settings_value() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_passthrough: "ac3,eac3".into(),
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin", "--audio-passthrough", "truehd"]).audio_passthrough,
+            "truehd"
+        );
+    }
+
+    #[test]
+    fn dts_hd_drops_bare_dts_whichever_layer_the_list_came_from() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_passthrough: "ac3,dts,dts-hd".into(),
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin"]).audio_passthrough,
+            "ac3,dts-hd"
+        );
+        assert_eq!(
+            resolve(unset(), &["astrofin", "--audio-passthrough=dts,dts-hd"]).audio_passthrough,
+            "dts-hd"
+        );
+    }
+
+    #[test]
+    fn normalize_passthrough_leaves_a_list_without_dts_hd_alone() {
+        assert_eq!(normalize_passthrough("ac3,dts,eac3"), "ac3,dts,eac3");
+        assert_eq!(normalize_passthrough(""), "");
+    }
+
+    #[test]
+    fn normalize_passthrough_drops_only_the_bare_dts_entry() {
+        assert_eq!(normalize_passthrough("dts-hd"), "dts-hd");
+        assert_eq!(normalize_passthrough("dts,dts-hd"), "dts-hd");
+        assert_eq!(
+            normalize_passthrough("ac3,dts,dts-hd,truehd"),
+            "ac3,dts-hd,truehd"
+        );
+    }
+
+    // ---- audio channels ----------------------------------------------------
+
+    #[test]
+    fn audio_channels_are_empty_when_nothing_is_configured() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).audio_channels, "");
+    }
+
+    #[test]
+    fn audio_channels_come_from_settings_when_no_flag_is_given() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_channels: "5.1".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).audio_channels, "5.1");
+    }
+
+    #[test]
+    fn the_audio_channels_flag_wins_over_the_settings_value() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_channels: "5.1".into(),
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin", "--audio-channels", "stereo"]).audio_channels,
+            "stereo"
+        );
+    }
+
+    // ---- exclusive audio ---------------------------------------------------
+
+    #[test]
+    fn exclusive_audio_is_off_unless_something_asks_for_it() {
+        let _env = EnvScope::new();
+        assert!(!resolve(unset(), &["astrofin"]).audio_exclusive);
+    }
+
+    #[test]
+    fn exclusive_audio_can_be_turned_on_by_settings_or_by_the_flag() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            audio_exclusive: true,
+            ..unset()
+        };
+        assert!(resolve(saved, &["astrofin"]).audio_exclusive);
+        assert!(resolve(unset(), &["astrofin", "--audio-exclusive"]).audio_exclusive);
+    }
+
+    #[test]
+    fn no_flag_can_turn_exclusive_audio_back_off() {
+        let _env = EnvScope::new();
+        // The flag is a set-only switch, so a stored `true` survives every argv.
+        let saved = SavedOptions {
+            audio_exclusive: true,
+            ..unset()
+        };
+        assert!(resolve(saved, &["astrofin", "--hwdec=auto"]).audio_exclusive);
+    }
+
+    // ---- log level (flag > variable > settings) ----------------------------
+
+    #[test]
+    fn an_unset_log_level_is_left_empty_for_the_logging_default() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).log_level, "");
+        // init_logging is what turns the empty string into a filter.
+        assert_eq!(DEFAULT_LOG_FILTER, "info");
+    }
+
+    #[test]
+    fn the_log_level_comes_from_settings_when_no_flag_or_variable_is_set() {
+        let _env = EnvScope::new();
+        let saved = SavedOptions {
+            log_level: "warn".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).log_level, "warn");
+    }
+
+    #[test]
+    fn the_log_level_variable_wins_over_the_settings_value() {
+        let env = EnvScope::new();
+        env.set(ENV_LOG_LEVEL, "debug");
+        let saved = SavedOptions {
+            log_level: "warn".into(),
+            ..unset()
+        };
+        assert_eq!(resolve(saved, &["astrofin"]).log_level, "debug");
+    }
+
+    #[test]
+    fn the_log_level_flag_wins_over_the_variable_and_the_settings_value() {
+        let env = EnvScope::new();
+        env.set(ENV_LOG_LEVEL, "debug");
+        let saved = SavedOptions {
+            log_level: "warn".into(),
+            ..unset()
+        };
+        assert_eq!(
+            resolve(saved, &["astrofin", "--log-level", "trace"]).log_level,
+            "trace"
+        );
+    }
+
+    #[test]
+    fn an_empty_log_level_variable_still_overrides_the_settings_value() {
+        let env = EnvScope::new();
+        env.set(ENV_LOG_LEVEL, "");
+        let saved = SavedOptions {
+            log_level: "warn".into(),
+            ..unset()
+        };
+        // Empty is not "absent": it reaches init_logging, which resolves it to
+        // DEFAULT_LOG_FILTER rather than to the saved setting.
+        assert_eq!(resolve(saved, &["astrofin"]).log_level, "");
+    }
+
+    // ---- log file (flag > variable, no settings key) -----------------------
+
+    #[test]
+    fn the_log_file_is_unset_when_neither_flag_nor_variable_is_given() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).log_file, None);
+    }
+
+    #[test]
+    fn the_log_file_variable_is_used_and_the_flag_wins_over_it() {
+        let env = EnvScope::new();
+        env.set(ENV_LOG_FILE, "from-env.log");
+        assert_eq!(
+            resolve(unset(), &["astrofin"]).log_file.as_deref(),
+            Some("from-env.log")
+        );
+        assert_eq!(
+            resolve(unset(), &["astrofin", "--log-file", "from-flag.log"])
+                .log_file
+                .as_deref(),
+            Some("from-flag.log")
+        );
+    }
+
+    #[test]
+    fn an_explicitly_empty_log_file_stays_empty_rather_than_unset() {
+        let _env = EnvScope::new();
+        // `--log-file=` is how file logging is turned off; it must not read as
+        // "no flag given" and fall back to the default log path.
+        assert_eq!(
+            resolve(unset(), &["astrofin", "--log-file="])
+                .log_file
+                .as_deref(),
+            Some("")
+        );
+    }
+
+    // ---- CEF flags ---------------------------------------------------------
+
+    #[test]
+    fn gpu_compositing_is_only_disabled_by_the_flag() {
+        let _env = EnvScope::new();
+        // No settings key is consulted here: the flag is the whole input.
+        assert!(!resolve(unset(), &["astrofin"]).disable_gpu_compositing);
+        assert!(
+            resolve(unset(), &["astrofin", "--disable-gpu-compositing"]).disable_gpu_compositing
+        );
+    }
+
+    #[test]
+    fn the_remote_debugging_port_is_zero_unless_the_flag_gives_one() {
+        let _env = EnvScope::new();
+        assert_eq!(resolve(unset(), &["astrofin"]).remote_debugging_port, 0);
+        assert_eq!(
+            resolve(unset(), &["astrofin", "--remote-debug-port", "9222"]).remote_debugging_port,
+            9222
+        );
+    }
+
+    // ---- everything at once ------------------------------------------------
+
+    #[test]
+    fn a_full_command_line_overrides_every_stored_setting() {
+        let env = EnvScope::new();
+        env.set(ENV_LOG_LEVEL, "from-env");
+        env.set(ENV_LOG_FILE, "from-env.log");
+        let saved = SavedOptions {
+            hwdec: "auto".into(),
+            video_mode: VideoMode::Animation,
+            audio_passthrough: "ac3".into(),
+            audio_channels: "5.1".into(),
+            log_level: "warn".into(),
+            audio_exclusive: false,
+        };
+        let opts = resolve(
+            saved,
+            &[
+                "astrofin",
+                "--hwdec=no",
+                "--video-mode=live-action",
+                "--audio-passthrough=truehd",
+                "--audio-channels=stereo",
+                "--audio-exclusive",
+                "--log-level=trace",
+                "--log-file=run.log",
+                "--disable-gpu-compositing",
+                "--remote-debug-port=9222",
+            ],
+        );
+        assert_eq!(opts.hwdec, "no");
+        assert_eq!(opts.video_mode, VideoMode::LiveAction);
+        assert_eq!(opts.audio_passthrough, "truehd");
+        assert_eq!(opts.audio_channels, "stereo");
+        assert!(opts.audio_exclusive);
+        assert_eq!(opts.log_level, "trace");
+        assert_eq!(opts.log_file.as_deref(), Some("run.log"));
+        assert!(opts.disable_gpu_compositing);
+        assert_eq!(opts.remote_debugging_port, 9222);
     }
 }

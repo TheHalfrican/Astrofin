@@ -450,3 +450,312 @@ fn ingest_events(rx: Receiver<Event>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::ingest::{IngestCtx, observe_id};
+    use crate::test_support;
+    use jfn_mpv::Node;
+    use jfn_platform_abi::{PhysicalSize, Scale};
+    use parking_lot::Mutex;
+
+    static FULLSCREEN_LOG: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+    static SHUTDOWN_LOG: Mutex<usize> = Mutex::new(0);
+
+    fn prop(id: u64, value: PropertyValue) -> Event {
+        Event::PropertyChange {
+            id,
+            name: String::new(),
+            value,
+        }
+    }
+
+    fn ingest(event: &Event) -> u8 {
+        jfn_playback_ingest_mpv_event_owned(event, 1.0, None)
+    }
+
+    /// Puts the handler slots back to inert values. They have no "clear"
+    /// entry point by design (they are installed once at boot), so a test
+    /// that installs one restores a no-op instead.
+    fn reset_handlers() {
+        jfn_playback_set_scale_provider(|| 1.0);
+        jfn_playback_set_macos_logical_provider(|| None);
+        jfn_playback_set_fullscreen_handler(|_| {});
+        jfn_playback_set_shutdown_handler(|| {});
+    }
+
+    // ---- ingest entry point ---------------------------------------------
+
+    #[test]
+    fn the_window_extent_comes_from_the_osd_dimensions_digest() {
+        let _g = test_support::lock();
+        let node = Node::Map(vec![
+            ("w".into(), Node::Int(3840)),
+            ("h".into(), Node::Int(2160)),
+        ]);
+        let flags = jfn_playback_ingest_mpv_event_owned(
+            &prop(observe_id::OSD_DIMS, PropertyValue::Node(node)),
+            2.0,
+            None,
+        );
+        assert_eq!(flags, 0);
+        let extent = jfn_playback_window_extent().expect("an extent");
+        assert_eq!(extent.physical(), PhysicalSize { w: 3840, h: 2160 });
+        assert_eq!(extent.scale(), Scale(2.0));
+    }
+
+    #[test]
+    fn a_shutdown_event_raises_the_shutdown_flag_bit() {
+        let _g = test_support::lock();
+        assert_eq!(ingest(&Event::Shutdown), INGEST_FLAG_SHUTDOWN);
+        // Anything else leaves the bit clear.
+        assert_eq!(ingest(&Event::FileLoaded), 0);
+        assert_eq!(ingest(&Event::Seek), 0);
+    }
+
+    #[test]
+    fn the_window_id_is_absent_until_mpv_reports_a_non_zero_one() {
+        let _g = test_support::lock();
+        ingest(&prop(observe_id::WINDOW_ID, PropertyValue::Int(0)));
+        assert_eq!(jfn_playback_window_id(), None);
+        ingest(&prop(observe_id::WINDOW_ID, PropertyValue::Int(0x1234)));
+        assert_eq!(jfn_playback_window_id(), Some(0x1234));
+        ingest(&prop(observe_id::WINDOW_ID, PropertyValue::Int(0)));
+        assert_eq!(jfn_playback_window_id(), None);
+    }
+
+    #[test]
+    fn the_fullscreen_mirror_follows_mpvs_property() {
+        let _g = test_support::lock();
+        ingest(&prop(observe_id::FULLSCREEN, PropertyValue::Flag(true)));
+        assert!(jfn_playback_fullscreen());
+        ingest(&prop(observe_id::FULLSCREEN, PropertyValue::Flag(false)));
+        assert!(!jfn_playback_fullscreen());
+    }
+
+    #[test]
+    fn the_maximized_mirror_follows_mpvs_property() {
+        let _g = test_support::lock();
+        ingest(&prop(observe_id::WINDOW_MAX, PropertyValue::Flag(true)));
+        assert!(jfn_playback_window_maximized());
+        ingest(&prop(observe_id::WINDOW_MAX, PropertyValue::Flag(false)));
+        assert!(!jfn_playback_window_maximized());
+    }
+
+    #[test]
+    fn the_display_scale_mirror_follows_mpvs_property() {
+        let _g = test_support::lock();
+        ingest(&prop(
+            observe_id::DISPLAY_SCALE,
+            PropertyValue::Double(3.25),
+        ));
+        assert_eq!(jfn_playback_display_scale(), 3.25);
+        ingest(&prop(observe_id::DISPLAY_SCALE, PropertyValue::Double(1.0)));
+        assert_eq!(jfn_playback_display_scale(), 1.0);
+    }
+
+    #[test]
+    fn seeding_the_display_hz_overwrites_the_cache() {
+        let _g = test_support::lock();
+        jfn_playback_set_display_hz(59.94);
+        assert_eq!(jfn_playback_display_hz(), 59.94);
+        jfn_playback_set_display_hz(0.0);
+        assert_eq!(jfn_playback_display_hz(), 0.0);
+    }
+
+    // ---- window-mode reconcile -------------------------------------------
+
+    #[test]
+    fn reconciling_the_window_mode_takes_it_from_the_platform_snapshot() {
+        let _g = test_support::lock();
+        test_support::set_stub_window_mode(true, false);
+        jfn_playback_reconcile_window_mode();
+        assert!(jfn_playback_fullscreen());
+        assert!(!jfn_playback_window_maximized());
+
+        test_support::set_stub_window_mode(false, true);
+        jfn_playback_reconcile_window_mode();
+        assert!(!jfn_playback_fullscreen());
+        assert!(jfn_playback_window_maximized());
+
+        test_support::set_stub_window_mode(false, false);
+        jfn_playback_reconcile_window_mode();
+        assert!(!jfn_playback_fullscreen());
+        assert!(!jfn_playback_window_maximized());
+    }
+
+    #[test]
+    fn entering_fullscreen_reads_the_stored_maximized_flag_before_it_is_cleared() {
+        // A fullscreen snapshot always carries maximized == false, so the
+        // order of the two digests is what makes `was_maximized` truthful.
+        let _g = test_support::lock();
+        test_support::set_stub_window_mode(false, true);
+        jfn_playback_reconcile_window_mode();
+        assert!(jfn_playback_window_maximized());
+
+        let outs = {
+            use crate::ingest::ingest_property_for_ffi;
+            let ctx = CallerCtx {
+                scale: 1.0,
+                mac: None,
+            };
+            ingest_property_for_ffi(
+                observe_id::FULLSCREEN,
+                &PropertyValue::Flag(true),
+                state(),
+                &ctx,
+            )
+        };
+        let mut saw = false;
+        for out in outs {
+            if let crate::ingest::IngestOut::Input(crate::ffi::Input::Fullscreen {
+                fullscreen,
+                was_maximized,
+            }) = out
+            {
+                assert!(fullscreen);
+                assert!(was_maximized);
+                saw = true;
+            }
+        }
+        assert!(saw, "expected a Fullscreen input");
+        test_support::set_stub_window_mode(false, false);
+        jfn_playback_reconcile_window_mode();
+    }
+
+    // ---- dispatch ---------------------------------------------------------
+
+    #[test]
+    fn dispatch_only_reports_the_terminal_output() {
+        let _g = test_support::lock();
+        use crate::ingest::IngestOut;
+        assert_eq!(dispatch(Vec::new()), 0);
+        assert_eq!(
+            dispatch(vec![IngestOut::Input(crate::ffi::Input::FileLoaded)]),
+            0
+        );
+        assert_eq!(dispatch(vec![IngestOut::Shutdown]), INGEST_FLAG_SHUTDOWN);
+    }
+
+    // ---- libmpv-backed entry points, with no handle -----------------------
+
+    #[test]
+    fn observing_properties_without_an_mpv_handle_reports_failure() {
+        let _g = test_support::lock();
+        assert!(!jfn_playback_observe_mpv_properties(BACKEND_WAYLAND));
+        assert!(!jfn_playback_observe_mpv_properties(BACKEND_X11));
+        assert!(!jfn_playback_observe_mpv_properties(2));
+    }
+
+    #[test]
+    fn seeding_display_hz_without_an_mpv_handle_leaves_the_cache_alone() {
+        let _g = test_support::lock();
+        jfn_playback_set_display_hz(48.0);
+        jfn_playback_seed_display_hz_sync();
+        assert_eq!(jfn_playback_display_hz(), 48.0);
+        jfn_playback_set_display_hz(0.0);
+    }
+
+    #[test]
+    fn starting_the_event_thread_without_an_mpv_handle_reports_failure() {
+        let _g = test_support::lock();
+        jfn_playback_stop_mpv_event_thread();
+        assert!(!jfn_playback_start_mpv_event_thread());
+    }
+
+    #[test]
+    fn stopping_an_event_thread_that_never_started_is_a_no_op() {
+        let _g = test_support::lock();
+        jfn_playback_stop_mpv_event_thread();
+        jfn_playback_stop_mpv_event_thread();
+    }
+
+    // ---- side-channel providers and handlers ------------------------------
+
+    #[test]
+    fn the_scale_provider_supplies_the_per_event_scale() {
+        let _g = test_support::lock();
+        jfn_playback_set_scale_provider(|| 2.5);
+        assert_eq!(snapshot_scale(), 2.5);
+        reset_handlers();
+        assert_eq!(snapshot_scale(), 1.0);
+    }
+
+    #[test]
+    fn a_non_positive_scale_falls_back_to_one() {
+        let _g = test_support::lock();
+        jfn_playback_set_scale_provider(|| 0.0);
+        assert_eq!(snapshot_scale(), 1.0);
+        jfn_playback_set_scale_provider(|| -3.0);
+        assert_eq!(snapshot_scale(), 1.0);
+        reset_handlers();
+    }
+
+    #[test]
+    fn the_macos_logical_provider_supplies_the_override() {
+        let _g = test_support::lock();
+        jfn_playback_set_macos_logical_provider(|| Some((1280, 720)));
+        assert_eq!(snapshot_macos_logical(), Some((1280, 720)));
+        reset_handlers();
+        assert_eq!(snapshot_macos_logical(), None);
+    }
+
+    #[test]
+    fn the_fullscreen_handler_is_invoked_with_the_flag_mpv_reported() {
+        let _g = test_support::lock();
+        FULLSCREEN_LOG.lock().clear();
+        jfn_playback_set_fullscreen_handler(|f| FULLSCREEN_LOG.lock().push(f));
+        invoke_fullscreen_handler(true);
+        invoke_fullscreen_handler(false);
+        assert_eq!(FULLSCREEN_LOG.lock().clone(), vec![true, false]);
+        reset_handlers();
+    }
+
+    #[test]
+    fn the_shutdown_handler_is_invoked_once_per_call() {
+        let _g = test_support::lock();
+        *SHUTDOWN_LOG.lock() = 0;
+        jfn_playback_set_shutdown_handler(|| *SHUTDOWN_LOG.lock() += 1);
+        invoke_shutdown_handler();
+        invoke_shutdown_handler();
+        assert_eq!(*SHUTDOWN_LOG.lock(), 2);
+        reset_handlers();
+    }
+
+    #[test]
+    fn installing_a_provider_again_replaces_the_previous_one() {
+        let _g = test_support::lock();
+        jfn_playback_set_scale_provider(|| 2.0);
+        jfn_playback_set_scale_provider(|| 4.0);
+        assert_eq!(snapshot_scale(), 4.0);
+        reset_handlers();
+    }
+
+    // ---- the per-event context ---------------------------------------------
+
+    #[test]
+    fn the_caller_context_reports_the_scale_it_was_built_with() {
+        let ctx = CallerCtx {
+            scale: 1.75,
+            mac: None,
+        };
+        assert_eq!(ctx.scale(), 1.75);
+    }
+
+    #[test]
+    fn the_caller_context_reports_the_macos_logical_override() {
+        let ctx = CallerCtx {
+            scale: 2.0,
+            mac: Some((1440, 900)),
+        };
+        assert_eq!(ctx.macos_logical_size(), Some((1440, 900)));
+        let none = CallerCtx {
+            scale: 2.0,
+            mac: None,
+        };
+        assert_eq!(none.macos_logical_size(), None);
+    }
+}

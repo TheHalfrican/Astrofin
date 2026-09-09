@@ -236,3 +236,470 @@ unsafe fn cstr_to_string(p: *const std::os::raw::c_char) -> String {
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_void};
+
+    fn event(id: sys::mpv_event_id) -> sys::mpv_event {
+        sys::mpv_event {
+            event_id: id,
+            error: 0,
+            reply_userdata: 0,
+            data: std::ptr::null_mut(),
+        }
+    }
+
+    fn property(
+        name: &CString,
+        format: sys::mpv_format,
+        data: *mut c_void,
+    ) -> sys::mpv_event_property {
+        sys::mpv_event_property {
+            name: name.as_ptr(),
+            format,
+            data,
+        }
+    }
+
+    // ---- PropertyValue::from_raw ------------------------------------------
+
+    #[test]
+    fn a_null_property_pointer_decodes_to_no_value() {
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(std::ptr::null()) },
+            PropertyValue::None
+        );
+    }
+
+    /// mpv sends a payload-less property change when the property became
+    /// unavailable (no file loaded, for instance).
+    #[test]
+    fn a_property_with_no_payload_decodes_to_no_value() {
+        let name = CString::new("time-pos").expect("cstring");
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_DOUBLE,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(unsafe { PropertyValue::from_raw(&p) }, PropertyValue::None);
+    }
+
+    #[test]
+    fn a_flag_property_decodes_any_non_zero_as_true() {
+        let name = CString::new("pause").expect("cstring");
+        for (raw, expected) in [(0i32, false), (1, true), (-1, true), (42, true)] {
+            let mut v = raw;
+            let p = property(
+                &name,
+                sys::mpv_format::MPV_FORMAT_FLAG,
+                &mut v as *mut _ as *mut c_void,
+            );
+            assert_eq!(
+                unsafe { PropertyValue::from_raw(&p) },
+                PropertyValue::Flag(expected),
+                "raw {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn int_and_double_properties_decode_by_format() {
+        let name = CString::new("chapter").expect("cstring");
+        let mut i = -3i64;
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_INT64,
+            &mut i as *mut _ as *mut c_void,
+        );
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(&p) },
+            PropertyValue::Int(-3)
+        );
+
+        let mut d = 1.25f64;
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_DOUBLE,
+            &mut d as *mut _ as *mut c_void,
+        );
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(&p) },
+            PropertyValue::Double(1.25)
+        );
+    }
+
+    /// A STRING payload is a pointer *to* the char pointer, and libmpv may
+    /// leave that inner pointer null.
+    #[test]
+    fn a_string_property_is_copied_out_and_a_null_inner_pointer_is_empty() {
+        let name = CString::new("ab-loop-a").expect("cstring");
+        let value = CString::new("no").expect("cstring");
+        let mut inner: *const c_char = value.as_ptr();
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_STRING,
+            &mut inner as *mut _ as *mut c_void,
+        );
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(&p) },
+            PropertyValue::String("no".into())
+        );
+
+        let mut null_inner: *const c_char = std::ptr::null();
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_STRING,
+            &mut null_inner as *mut _ as *mut c_void,
+        );
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(&p) },
+            PropertyValue::String(String::new())
+        );
+    }
+
+    #[test]
+    fn a_node_property_is_deep_copied_into_an_owned_node() {
+        let name = CString::new("demuxer-cache-state").expect("cstring");
+        let mut node: sys::mpv_node = unsafe { std::mem::zeroed() };
+        node.format = sys::mpv_format::MPV_FORMAT_INT64;
+        node.u.int64 = 7;
+        let p = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_NODE,
+            &mut node as *mut _ as *mut c_void,
+        );
+        assert_eq!(
+            unsafe { PropertyValue::from_raw(&p) },
+            PropertyValue::Node(Node::Int(7))
+        );
+    }
+
+    #[test]
+    fn a_property_format_we_do_not_handle_decodes_to_no_value() {
+        let name = CString::new("x").expect("cstring");
+        let mut byte = 0u8;
+        let p = property(
+            &name,
+            sys::mpv_format(9999),
+            &mut byte as *mut _ as *mut c_void,
+        );
+        assert_eq!(unsafe { PropertyValue::from_raw(&p) }, PropertyValue::None);
+    }
+
+    // ---- Event::from_raw --------------------------------------------------
+
+    #[test]
+    fn a_null_event_pointer_decodes_to_none() {
+        assert_eq!(unsafe { Event::from_raw(std::ptr::null()) }, Event::None);
+    }
+
+    /// The payload-free ids are pure tags; a mix-up between any two of them
+    /// would silently reroute the whole playback state machine.
+    #[test]
+    fn the_payload_free_ids_map_one_to_one() {
+        for (id, expected) in [
+            (sys::mpv_event_id::MPV_EVENT_NONE, Event::None),
+            (sys::mpv_event_id::MPV_EVENT_SHUTDOWN, Event::Shutdown),
+            (sys::mpv_event_id::MPV_EVENT_START_FILE, Event::StartFile),
+            (sys::mpv_event_id::MPV_EVENT_FILE_LOADED, Event::FileLoaded),
+            (
+                sys::mpv_event_id::MPV_EVENT_VIDEO_RECONFIG,
+                Event::VideoReconfig,
+            ),
+            (
+                sys::mpv_event_id::MPV_EVENT_AUDIO_RECONFIG,
+                Event::AudioReconfig,
+            ),
+            (sys::mpv_event_id::MPV_EVENT_SEEK, Event::Seek),
+            (
+                sys::mpv_event_id::MPV_EVENT_PLAYBACK_RESTART,
+                Event::PlaybackRestart,
+            ),
+            (
+                sys::mpv_event_id::MPV_EVENT_QUEUE_OVERFLOW,
+                Event::QueueOverflow,
+            ),
+        ] {
+            let ev = event(id);
+            assert_eq!(unsafe { Event::from_raw(&ev) }, expected, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn an_event_id_this_build_does_not_know_keeps_its_number() {
+        let ev = event(sys::mpv_event_id(9001));
+        assert_eq!(unsafe { Event::from_raw(&ev) }, Event::Other(9001));
+    }
+
+    #[test]
+    fn a_log_message_carries_prefix_level_and_text() {
+        let prefix = CString::new("cplayer").expect("cstring");
+        let level = CString::new("v").expect("cstring");
+        let text = CString::new("Playing: x.mkv\n").expect("cstring");
+        let mut payload = sys::mpv_event_log_message {
+            prefix: prefix.as_ptr(),
+            level: level.as_ptr(),
+            text: text.as_ptr(),
+            log_level: sys::mpv_log_level::MPV_LOG_LEVEL_V,
+        };
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_LOG_MESSAGE);
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::LogMessage(LogMessage {
+                prefix: "cplayer".into(),
+                level: LogLevel::Verbose,
+                // Trimming belongs to the forwarder, not to the decoder.
+                text: "Playing: x.mkv\n".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_log_message_with_null_strings_decodes_to_empty_ones() {
+        let mut payload = sys::mpv_event_log_message {
+            prefix: std::ptr::null(),
+            level: std::ptr::null(),
+            text: std::ptr::null(),
+            log_level: sys::mpv_log_level::MPV_LOG_LEVEL_NONE,
+        };
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_LOG_MESSAGE);
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::LogMessage(LogMessage {
+                prefix: String::new(),
+                level: LogLevel::Off,
+                text: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_get_property_reply_carries_the_reply_id_name_error_and_value() {
+        let name = CString::new("background-color").expect("cstring");
+        let value = CString::new("#FF000000").expect("cstring");
+        let mut inner: *const c_char = value.as_ptr();
+        let mut payload = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_STRING,
+            &mut inner as *mut _ as *mut c_void,
+        );
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_GET_PROPERTY_REPLY);
+        ev.reply_userdata = 5;
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::GetPropertyReply {
+                reply: 5,
+                error: 0,
+                value: PropertyValue::String("#FF000000".into()),
+                name: "background-color".into(),
+            }
+        );
+    }
+
+    /// A failed async read arrives with a negative `error` and no payload at
+    /// all; the name must still not be invented from a null pointer.
+    #[test]
+    fn a_failed_get_property_reply_keeps_its_error_and_an_empty_name() {
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_GET_PROPERTY_REPLY);
+        ev.reply_userdata = 2;
+        ev.error = -8;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::GetPropertyReply {
+                reply: 2,
+                error: -8,
+                value: PropertyValue::None,
+                name: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn set_property_and_command_replies_carry_only_the_id_and_error() {
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_SET_PROPERTY_REPLY);
+        ev.reply_userdata = 11;
+        ev.error = -4;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::SetPropertyReply {
+                reply: 11,
+                error: -4
+            }
+        );
+
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_COMMAND_REPLY);
+        ev.reply_userdata = 12;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::CommandReply {
+                reply: 12,
+                error: 0
+            }
+        );
+    }
+
+    #[test]
+    fn end_file_maps_every_reason_libmpv_defines() {
+        for (raw, expected) in [
+            (
+                sys::mpv_end_file_reason::MPV_END_FILE_REASON_EOF,
+                EndFileReason::Eof,
+            ),
+            (
+                sys::mpv_end_file_reason::MPV_END_FILE_REASON_STOP,
+                EndFileReason::Stop,
+            ),
+            (
+                sys::mpv_end_file_reason::MPV_END_FILE_REASON_QUIT,
+                EndFileReason::Quit,
+            ),
+            (
+                sys::mpv_end_file_reason::MPV_END_FILE_REASON_REDIRECT,
+                EndFileReason::Redirect,
+            ),
+        ] {
+            let mut payload: sys::mpv_event_end_file = unsafe { std::mem::zeroed() };
+            payload.reason = raw;
+            let mut ev = event(sys::mpv_event_id::MPV_EVENT_END_FILE);
+            ev.data = &mut payload as *mut _ as *mut c_void;
+            assert_eq!(
+                unsafe { Event::from_raw(&ev) },
+                Event::EndFile(expected),
+                "{raw:?}"
+            );
+        }
+    }
+
+    /// Only the ERROR reason carries a code, and it has to survive to the UI:
+    /// that is what turns a dead stream into a message rather than an EOF.
+    #[test]
+    fn end_file_with_an_error_keeps_the_error_code() {
+        let mut payload: sys::mpv_event_end_file = unsafe { std::mem::zeroed() };
+        payload.reason = sys::mpv_end_file_reason::MPV_END_FILE_REASON_ERROR;
+        payload.error = -13;
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_END_FILE);
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::EndFile(EndFileReason::Error(crate::error::Error::new(-13)))
+        );
+    }
+
+    #[test]
+    fn an_unknown_end_file_reason_keeps_its_number() {
+        let mut payload: sys::mpv_event_end_file = unsafe { std::mem::zeroed() };
+        payload.reason = sys::mpv_end_file_reason(77);
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_END_FILE);
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::EndFile(EndFileReason::Unknown(77))
+        );
+    }
+
+    #[test]
+    fn a_client_message_copies_every_argument_in_order() {
+        let a = CString::new("key-binding").expect("cstring");
+        let b = CString::new("play").expect("cstring");
+        let mut args: Vec<*const c_char> = vec![a.as_ptr(), b.as_ptr()];
+        let mut payload = sys::mpv_event_client_message {
+            num_args: 2,
+            args: args.as_mut_ptr(),
+        };
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_CLIENT_MESSAGE);
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::ClientMessage(vec!["key-binding".into(), "play".into()])
+        );
+    }
+
+    #[test]
+    fn a_client_message_with_no_arguments_decodes_to_an_empty_list() {
+        for num_args in [0, -1] {
+            let mut payload = sys::mpv_event_client_message {
+                num_args,
+                args: std::ptr::null_mut(),
+            };
+            let mut ev = event(sys::mpv_event_id::MPV_EVENT_CLIENT_MESSAGE);
+            ev.data = &mut payload as *mut _ as *mut c_void;
+            assert_eq!(
+                unsafe { Event::from_raw(&ev) },
+                Event::ClientMessage(Vec::new()),
+                "num_args {num_args}"
+            );
+        }
+    }
+
+    /// The observe id is what lets a consumer dispatch without comparing
+    /// property names, so it must come through untouched beside the name.
+    #[test]
+    fn a_property_change_carries_the_observe_id_the_name_and_the_value() {
+        let name = CString::new("pause").expect("cstring");
+        let mut flag = 1i32;
+        let mut payload = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_FLAG,
+            &mut flag as *mut _ as *mut c_void,
+        );
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_PROPERTY_CHANGE);
+        ev.reply_userdata = 42;
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::PropertyChange {
+                id: 42,
+                name: "pause".into(),
+                value: PropertyValue::Flag(true),
+            }
+        );
+    }
+
+    #[test]
+    fn a_property_change_with_no_payload_still_names_the_property() {
+        let name = CString::new("time-pos").expect("cstring");
+        let mut payload = property(
+            &name,
+            sys::mpv_format::MPV_FORMAT_DOUBLE,
+            std::ptr::null_mut(),
+        );
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_PROPERTY_CHANGE);
+        ev.reply_userdata = 9;
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::PropertyChange {
+                id: 9,
+                name: "time-pos".into(),
+                value: PropertyValue::None,
+            }
+        );
+    }
+
+    /// A hook takes its reply id from the payload, not from `reply_userdata`;
+    /// answering with the wrong one stalls mpv's playback loop.
+    #[test]
+    fn a_hook_takes_its_reply_id_from_the_payload() {
+        let name = CString::new("on_load").expect("cstring");
+        let mut payload = sys::mpv_event_hook {
+            name: name.as_ptr(),
+            id: 314,
+        };
+        let mut ev = event(sys::mpv_event_id::MPV_EVENT_HOOK);
+        ev.reply_userdata = 1;
+        ev.data = &mut payload as *mut _ as *mut c_void;
+        assert_eq!(
+            unsafe { Event::from_raw(&ev) },
+            Event::Hook {
+                reply: 314,
+                name: "on_load".into(),
+            }
+        );
+    }
+}

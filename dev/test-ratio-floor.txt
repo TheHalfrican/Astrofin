@@ -2,5 +2,6 @@
 # `cargo xtask test-ratio --check` (docs/test-plan.md §2).
 # Baseline measured 2026-09-09: 514 tests / 713 public functions = 0.72.
 # Raised to 1.00 after phase 1 (748 / 726 = 1.03, 2026-09-09).
+# Raised to 1.50 after phase 2 (1430 / 720 = 1.99, 2026-09-09).
 # This number only ever moves up.
-1.00
+1.50

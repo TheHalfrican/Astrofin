@@ -1005,4 +1005,123 @@ mod tests {
             assert!(seen.insert(open), "duplicate color for {l:?}");
         }
     }
+    // --- process lifecycle -------------------------------------------------
+
+    /// `STATE` and the global tracing dispatcher are process-wide, so the two
+    /// lifecycle tests below serialise and each leaves the logger shut down.
+    static LIFECYCLE: StdMutex<()> = StdMutex::new(());
+
+    #[test]
+    fn log_init_opens_the_named_file_and_shutdown_clears_the_active_path() {
+        let _g = LIFECYCLE.lock();
+        jfn_log_shutdown();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("astrofin.log");
+        let path_str = path.to_string_lossy().into_owned();
+
+        jfn_log_init(&path_str, "debug");
+        assert_eq!(active_path(), path_str);
+        assert!(path.exists(), "the log file is created at init");
+        log(CATEGORY_CEF, LEVEL_INFO, "hello from the lifecycle test");
+
+        jfn_log_shutdown();
+        assert_eq!(
+            active_path(),
+            "",
+            "the active path is cleared once the workers are flushed"
+        );
+    }
+
+    #[test]
+    fn a_second_init_is_ignored_while_one_is_active() {
+        let _g = LIFECYCLE.lock();
+        jfn_log_shutdown();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = dir.path().join("first.log").to_string_lossy().into_owned();
+        let second = dir.path().join("second.log").to_string_lossy().into_owned();
+
+        jfn_log_init(&first, "");
+        jfn_log_init(&second, "trace");
+        assert_eq!(
+            active_path(),
+            first,
+            "the dispatcher is already installed; the second init is a no-op"
+        );
+        assert!(
+            !dir.path().join("second.log").exists(),
+            "the second init must not open a file either"
+        );
+        jfn_log_shutdown();
+    }
+
+    #[test]
+    fn shutting_down_twice_is_harmless() {
+        let _g = LIFECYCLE.lock();
+        jfn_log_shutdown();
+        jfn_log_shutdown();
+        assert_eq!(active_path(), "");
+    }
+
+    #[test]
+    fn log_init_falls_back_to_info_for_a_blank_or_unparseable_filter() {
+        // Both are normalised inside init; the observable effect is that init
+        // still completes and installs state rather than bailing.
+        let _g = LIFECYCLE.lock();
+        jfn_log_shutdown();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("blank.log").to_string_lossy().into_owned();
+        jfn_log_init(&path, "   ");
+        assert_eq!(active_path(), path);
+        jfn_log_shutdown();
+
+        let path = dir.path().join("bogus.log").to_string_lossy().into_owned();
+        jfn_log_init(&path, "=not a filter=");
+        assert_eq!(active_path(), path);
+        jfn_log_shutdown();
+    }
+
+    #[test]
+    fn log_init_with_an_empty_path_logs_to_the_console_only() {
+        let _g = LIFECYCLE.lock();
+        jfn_log_shutdown();
+        jfn_log_init("", "info");
+        assert_eq!(active_path(), "");
+        jfn_log_shutdown();
+    }
+
+    // --- writer plumbing ---------------------------------------------------
+
+    #[test]
+    fn rotating_file_flush_pushes_the_bytes_to_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("flush.log");
+        let mut rf = RotatingFile::open(path.clone(), MAX_FILE_BYTES, MAX_BACKUPS)
+            .expect("open rotating file");
+        rf.write_all(b"one record\n").expect("write");
+        rf.flush().expect("flush");
+        let read = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(read, "one record\n");
+    }
+
+    #[test]
+    fn a_redact_guard_forwards_nothing_until_it_is_dropped() {
+        let sink = VecSink(Arc::new(StdMutex::new(Vec::new())));
+        let make = RedactMake(sink.clone());
+        {
+            let mut w = make.make_writer();
+            w.write_all(b"a partial ").expect("write");
+            w.write_all(b"record\n").expect("write");
+            // `flush` is a no-op: the whole record must be censored as one
+            // buffer, so nothing may leave before Drop.
+            w.flush().expect("flush");
+            assert!(sink.0.lock().is_empty(), "nothing forwarded before drop");
+        }
+        assert_eq!(&*sink.0.lock(), b"a partial record\n");
+    }
+
+    #[test]
+    fn msg_visitor_records_only_the_message_field() {
+        let out = emit_through_layer("visitor payload", false);
+        assert!(out.contains("visitor payload"), "{out}");
+    }
 }
