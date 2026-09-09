@@ -613,3 +613,190 @@ pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Optio
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    const PROFILES: &[&[NativeFunction]] = &[
+        WEB_FUNCTIONS,
+        OVERLAY_FUNCTIONS,
+        ABOUT_FUNCTIONS,
+        WINDOW_FUNCTIONS,
+    ];
+
+    // --- NativeFunction -----------------------------------------------------
+
+    #[test]
+    fn every_declared_function_name_round_trips() {
+        for profile in PROFILES {
+            for f in *profile {
+                assert_eq!(
+                    NativeFunction::from_name(f.name()),
+                    Some(*f),
+                    "{} must parse back",
+                    f.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_function_from_name_rejects_anything_else() {
+        for name in [
+            "",
+            " playerLoad",
+            "playerload",
+            "PlayerLoad",
+            "playerLoad()",
+            "playerLoad\0",
+            "__proto__",
+            "constructor",
+            "toString",
+            "playerLoad\u{2028}",
+        ] {
+            assert!(
+                NativeFunction::from_name(name).is_none(),
+                "{name:?} must not resolve to a native function"
+            );
+        }
+        assert!(NativeFunction::from_name(&"a".repeat(1 << 16)).is_none());
+    }
+
+    #[test]
+    fn the_web_profile_does_not_expose_the_about_or_overlay_functions() {
+        // A jellyfin-web page can only send the message names bound into its
+        // own `jmpNative`; `aboutOpenPath` (which hands a path to the desktop
+        // URL handler) and `navigateMain` (which repoints the main browser)
+        // must not be among them.
+        for privileged in [
+            NativeFunction::AboutOpenPath,
+            NativeFunction::AboutDismiss,
+            NativeFunction::NavigateMain,
+            NativeFunction::DismissOverlay,
+            NativeFunction::GetSavedServerUrl,
+            NativeFunction::CheckServerConnectivity,
+        ] {
+            assert!(
+                !WEB_FUNCTIONS.contains(&privileged),
+                "{} must stay off the web profile",
+                privileged.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_about_profile_exposes_only_its_two_functions() {
+        assert_eq!(
+            ABOUT_FUNCTIONS,
+            &[NativeFunction::AboutOpenPath, NativeFunction::AboutDismiss]
+        );
+    }
+
+    // --- InjectedScript / InjectedStyle -------------------------------------
+
+    #[test]
+    fn every_injected_script_file_name_round_trips() {
+        for s in WEB_SCRIPTS {
+            assert_eq!(InjectedScript::from_name(s.file_name()), Some(*s));
+        }
+        for s in [
+            InjectedScript::Csd,
+            InjectedScript::SelectMenu,
+            InjectedScript::AstrofinTheme,
+            InjectedScript::MpvStats,
+        ] {
+            assert_eq!(InjectedScript::from_name(s.file_name()), Some(s));
+        }
+    }
+
+    #[test]
+    fn injected_script_from_name_rejects_anything_else() {
+        for name in [
+            "",
+            "native-shim",
+            "native-shim.js.js",
+            "../native-shim.js",
+            "/native-shim.js",
+            "NATIVE-SHIM.JS",
+            "native-shim.js\0",
+        ] {
+            assert!(InjectedScript::from_name(name).is_none(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn every_injected_style_file_name_round_trips() {
+        for s in WEB_STYLES {
+            assert_eq!(InjectedStyle::from_name(s.file_name()), Some(*s));
+        }
+        assert!(InjectedStyle::from_name("astrofin-theme.css.map").is_none());
+        assert!(InjectedStyle::from_name("").is_none());
+    }
+
+    #[test]
+    fn select_menu_is_the_only_platform_menu_script() {
+        assert_eq!(
+            InjectedScript::from_menu(MenuScript::SelectMenu),
+            InjectedScript::SelectMenu
+        );
+    }
+
+    // --- build_for_kind -----------------------------------------------------
+    //
+    // Only the kinds that do not consult the installed `Platform`; the "web"
+    // kind calls `jfn_platform_abi::menu_scripts`, which panics before
+    // `install()` and so belongs to the E2E suite.
+
+    #[test]
+    fn build_for_kind_rejects_an_unknown_kind() {
+        for kind in ["", "web ", "Web", "overlay\0", "../web", "player"] {
+            assert!(build_for_kind(kind, false).is_none(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn build_for_kind_overlay_adds_the_window_controls_and_csd() {
+        let info = build_for_kind("overlay", true).unwrap();
+        assert!(info.shared_textures_enabled());
+        for f in OVERLAY_FUNCTIONS {
+            assert!(info.functions().contains(f));
+        }
+        for f in WINDOW_FUNCTIONS {
+            assert!(info.functions().contains(f));
+        }
+        assert!(!info.functions().contains(&NativeFunction::PlayerLoad));
+        assert_eq!(info.scripts(), &[InjectedScript::Csd]);
+        assert!(info.styles().is_empty());
+        assert!(info.device_profile_json().is_none());
+        assert!(info.window_decorations().is_none());
+        assert!(info.window_decoration_options().is_empty());
+    }
+
+    #[test]
+    fn build_for_kind_about_exposes_no_player_functions() {
+        let info = build_for_kind("about", false).unwrap();
+        assert!(!info.shared_textures_enabled());
+        assert!(info.functions().contains(&NativeFunction::AboutOpenPath));
+        assert!(!info.functions().contains(&NativeFunction::SetSettingValue));
+        assert!(!info.functions().contains(&NativeFunction::SaveServerUrl));
+    }
+
+    // --- device profile -----------------------------------------------------
+
+    #[test]
+    fn device_profile_json_setter_ignores_null_empty_and_non_utf8() {
+        let bytes: [u8; 3] = [0xff, 0xfe, 0xfd];
+        unsafe {
+            jfn_cef_set_device_profile_json(std::ptr::null(), 12);
+            jfn_cef_set_device_profile_json(b"{}".as_ptr() as *const c_char, 0);
+            jfn_cef_set_device_profile_json(bytes.as_ptr() as *const c_char, bytes.len());
+        }
+        assert!(
+            DEVICE_PROFILE_JSON.get().is_none(),
+            "no rejected payload may reach the renderer"
+        );
+    }
+}

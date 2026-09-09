@@ -14,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
@@ -510,14 +511,48 @@ pub fn settings_init(path: &Path) {
 pub fn settings_load() -> bool {
     let mut st = state().lock();
     let path = st.path.clone();
-    let Ok(contents) = fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(file) = serde_json::from_str::<SettingsFile>(&contents) else {
+    let Some(file) = read_file(&path) else {
         return false;
     };
     st.data.overlay(file);
     true
+}
+
+/// [`settings_load`] without the process-global store, so the file half can be
+/// tested against a temp directory.
+///
+/// `None` covers everything the *parser* rejects: a missing file, a
+/// directory, bytes that are not UTF-8, a truncated or empty document, nesting
+/// past serde_json's recursion limit — and, less obviously, a duplicate key or
+/// a numeric literal outside the `f64` range, both of which fail the whole
+/// document before [`lenient`] ever sees the field. What [`lenient`] does
+/// absorb, key by key, is an unknown key, a key of the wrong type, and a
+/// number that does not fit its own field; those keep their defaults and the
+/// rest of the file still loads.
+fn read_file(path: &Path) -> Option<SettingsFile> {
+    let contents = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(target: "Config", "settings file {} unreadable: {e}", path.display());
+            return None;
+        }
+    };
+    match serde_json::from_str::<SettingsFile>(&contents) {
+        Ok(file) => Some(file),
+        Err(e) => {
+            // Loud on purpose: the file is hand-edited, and a whole-document
+            // failure (duplicate key, out-of-range number, truncation) means
+            // every setting silently falls back to its default and the next
+            // save overwrites the file with those defaults.
+            tracing::warn!(
+                target: "Config",
+                "settings file {} ignored, every setting at its default: {e}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Serialize current state and atomically write to the configured path.
@@ -1017,5 +1052,406 @@ mod tests {
     fn clears_override_when_whitespace_padded_default() {
         let padded = format!("  {}  ", PLATFORM);
         assert_eq!(normalize_device_name(&padded, PLATFORM), "");
+    }
+
+    // =================================================================
+    // Hostile settings.json
+    // =================================================================
+
+    use super::{read_file, save_data};
+
+    fn seed(name: &str, body: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join(name);
+        std::fs::write(&path, body).expect("write");
+        (tmp, path)
+    }
+
+    #[test]
+    fn read_file_loads_a_well_formed_document() {
+        let (_tmp, path) = seed("settings.json", br#"{"serverUrl":"http://host"}"#);
+        let file = read_file(&path).expect("parsed");
+        let mut data = SettingsData::default();
+        data.overlay(file);
+        assert_eq!(data.server_url, "http://host");
+    }
+
+    #[test]
+    fn read_file_rejects_a_missing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(read_file(&tmp.path().join("absent.json")).is_none());
+    }
+
+    #[test]
+    fn read_file_rejects_a_directory_where_the_file_belongs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.json");
+        std::fs::create_dir(&path).expect("mkdir");
+        assert!(read_file(&path).is_none());
+    }
+
+    #[test]
+    fn read_file_rejects_an_empty_or_truncated_document() {
+        let (_a, empty) = seed("settings.json", b"");
+        assert!(read_file(&empty).is_none());
+
+        let (_b, truncated) = seed("settings.json", br#"{"serverUrl":"http"#);
+        assert!(read_file(&truncated).is_none());
+
+        let (_c, half) = seed("settings.json", br#"{"serverUrl":"http://host","#);
+        assert!(read_file(&half).is_none());
+    }
+
+    #[test]
+    fn read_file_rejects_bytes_that_are_not_utf8() {
+        let (_tmp, path) = seed("settings.json", &[b'{', 0xff, 0xfe, b'}']);
+        assert!(read_file(&path).is_none());
+    }
+
+    /// Serde can build a struct out of a *sequence* as well as a map, so a
+    /// top-level array is read as "every key at its default" instead of as an
+    /// error. Harmless — nothing is carried over — but it means
+    /// `settings_load` answers `true` for a file that is not a settings
+    /// document. Every other top-level shape is refused.
+    #[test]
+    fn a_top_level_array_loads_as_all_defaults_and_other_shapes_are_refused() {
+        for body in [&b"[]"[..], &b"[1,2,3]"[..]] {
+            let (_tmp, path) = seed("settings.json", body);
+            let mut data = SettingsData::default();
+            data.overlay(read_file(&path).expect("an array fills the struct positionally"));
+            assert_eq!(data.server_url, "");
+            assert!(data.hide_scrollbar);
+        }
+
+        for body in [&b"\"x\""[..], &b"42"[..], &b"null"[..], &b"true"[..]] {
+            let (_tmp, path) = seed("settings.json", body);
+            assert!(read_file(&path).is_none(), "{body:?}");
+        }
+    }
+
+    /// serde_json stops at its recursion limit, so a pathological document is
+    /// a parse error rather than a blown stack.
+    #[test]
+    fn read_file_rejects_pathologically_nested_json_without_overflowing() {
+        let body = format!("{{\"serverUrl\":{}}}", "[".repeat(100_000));
+        let (_tmp, path) = seed("settings.json", body.as_bytes());
+        assert!(read_file(&path).is_none());
+
+        let arrays = format!("{}{}", "[".repeat(50_000), "]".repeat(50_000));
+        let (_tmp2, path2) = seed("settings.json", arrays.as_bytes());
+        assert!(read_file(&path2).is_none());
+    }
+
+    /// A byte-order mark is not JSON. It loses the file's settings rather than
+    /// corrupting them: every key falls back to its default.
+    #[test]
+    fn read_file_rejects_a_bom_prefixed_document() {
+        let mut body = vec![0xef, 0xbb, 0xbf];
+        body.extend_from_slice(br#"{"serverUrl":"http://host"}"#);
+        let (_tmp, path) = seed("settings.json", &body);
+        assert!(read_file(&path).is_none());
+    }
+
+    /// Not last-one-wins: a repeated key is a hard parse error, raised by the
+    /// derived `Deserialize` before [`lenient`] ever sees the field. The whole
+    /// document is lost and every setting silently falls back to its default —
+    /// which matters because `videoModeLibraries` is documented as
+    /// hand-edited. Asserted as it is, not as it should be.
+    #[test]
+    fn a_duplicate_key_fails_the_whole_document() {
+        let (_tmp, path) = seed(
+            "settings.json",
+            br#"{"serverUrl":"http://first","serverUrl":"http://last"}"#,
+        );
+        assert!(read_file(&path).is_none());
+    }
+
+    /// Same class, same consequence: a numeric literal that does not fit an
+    /// `f64` is a *parser* error, so `lenient` never gets to drop just that
+    /// key. One bad literal resets the profile.
+    #[test]
+    fn a_number_outside_the_f64_range_fails_the_whole_document() {
+        let (_tmp, path) = seed(
+            "settings.json",
+            br#"{"windowScale":1e400,"serverUrl":"http://host"}"#,
+        );
+        assert!(read_file(&path).is_none());
+    }
+
+    #[test]
+    fn numbers_that_do_not_fit_their_field_are_ignored() {
+        let data = loaded(
+            r#"{"windowWidth":99999999999999999999,"windowHeight":-99999999999999999999,
+                "windowX":1.5,"serverUrl":"http://host"}"#,
+        );
+        assert_eq!(data.window.width, 0);
+        assert_eq!(data.window.height, 0);
+        assert_eq!(data.window.x, -1);
+        assert_eq!(data.server_url, "http://host");
+    }
+
+    #[test]
+    fn integer_extremes_that_do_fit_are_taken_as_given() {
+        let data = loaded(r#"{"windowWidth":2147483647,"windowX":-2147483648}"#);
+        assert_eq!(data.window.width, i32::MAX);
+        assert_eq!(data.window.x, i32::MIN);
+    }
+
+    /// A scale big enough to overflow `f32` but not `f64` does load, and it
+    /// is written back as `null` (serde_json's spelling for a non-finite
+    /// number), which the next load ignores. It degrades to the default
+    /// instead of persisting a poisoned value — but it *is* handed to the
+    /// window code as an infinity first.
+    #[test]
+    fn an_f32_overflowing_window_scale_is_written_back_as_null() {
+        let data = loaded(r#"{"windowScale":1e39}"#);
+        assert!(data.window.scale.is_infinite());
+
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""windowScale":null"#), "{text}");
+        assert_eq!(loaded(&text).window.scale, 0.0);
+    }
+
+    /// Negative and zero scales load verbatim; nothing in this crate rejects
+    /// them.
+    #[test]
+    fn a_negative_window_scale_loads_and_is_dropped_on_save() {
+        let data = loaded(r#"{"windowScale":-2.0}"#);
+        assert!((data.window.scale - -2.0).abs() < f32::EPSILON);
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(!text.contains("windowScale"), "{text}");
+    }
+
+    #[test]
+    fn a_null_value_leaves_the_field_at_its_default() {
+        let data = loaded(r#"{"serverUrl":null,"hideScrollbar":null,"windowWidth":null}"#);
+        assert_eq!(data.server_url, "");
+        assert!(data.hide_scrollbar);
+        assert_eq!(data.window.width, 0);
+    }
+
+    /// The map is hand-edited, so every shape of key has to survive a
+    /// round-trip without touching anything else.
+    #[test]
+    fn video_mode_libraries_accepts_any_string_key() {
+        let odd = r#"{"videoModeLibraries":{"":"animation","__proto__":"off",
+            "a b/c\\d":"live-action","é中":"auto"},"serverUrl":"http://host"}"#;
+        let data = loaded(odd);
+        assert_eq!(data.video_mode_libraries.len(), 4);
+        assert_eq!(
+            data.video_mode_libraries.get("").map(String::as_str),
+            Some("animation")
+        );
+        assert_eq!(
+            data.video_mode_libraries
+                .get("__proto__")
+                .map(String::as_str),
+            Some("off")
+        );
+        assert_eq!(data.server_url, "http://host");
+
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert_eq!(
+            loaded(&text).video_mode_libraries,
+            data.video_mode_libraries
+        );
+    }
+
+    /// One bad entry drops the whole map rather than half of it: a partial
+    /// override map would silently change which shaders a library plays with.
+    #[test]
+    fn video_mode_libraries_of_the_wrong_shape_is_dropped_whole() {
+        for body in [
+            r#"{"videoModeLibraries":{"a":1}}"#,
+            r#"{"videoModeLibraries":{"a":{"b":"c"}}}"#,
+            r#"{"videoModeLibraries":["a","b"]}"#,
+            r#"{"videoModeLibraries":"animation"}"#,
+        ] {
+            let data = loaded(body);
+            assert!(data.video_mode_libraries.is_empty(), "{body}");
+        }
+    }
+
+    /// The value is never validated against the known presets — the web UI
+    /// and the mpv side both resolve unknown names to the default.
+    #[test]
+    fn unknown_video_mode_and_transcode_notice_values_survive_the_load() {
+        let data = loaded(r#"{"videoMode":"../../etc/passwd","transcodeNotice":"<script>"}"#);
+        assert_eq!(data.video_mode, "../../etc/passwd");
+        assert_eq!(data.transcode_notice, "<script>");
+    }
+
+    #[test]
+    fn a_device_name_of_only_multibyte_characters_truncates_on_a_boundary() {
+        let name = "\u{4e2d}".repeat(40);
+        let data = loaded(&format!(r#"{{"deviceName":"{name}"}}"#));
+        assert!(data.device_name.len() <= 64);
+        assert_eq!(data.device_name.chars().count(), 21);
+        assert!(data.device_name.chars().all(|c| c == '\u{4e2d}'));
+    }
+
+    // =================================================================
+    // Persistence
+    // =================================================================
+
+    #[test]
+    fn save_data_writes_pretty_json_with_a_trailing_newline() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.json");
+        let data = SettingsData {
+            server_url: "http://host".into(),
+            ..SettingsData::default()
+        };
+
+        assert!(save_data(&path, &data));
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.ends_with("}\n"), "{text:?}");
+        assert!(
+            text.contains("\n  \"serverUrl\": \"http://host\""),
+            "{text}"
+        );
+        assert!(read_file(&path).is_some());
+    }
+
+    #[test]
+    fn save_data_reports_failure_instead_of_panicking_when_the_directory_is_gone() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("gone").join("settings.json");
+        assert!(!save_data(&path, &SettingsData::default()));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_full_settings_document_round_trips_through_the_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.json");
+        let data = SettingsData {
+            server_url: "http://host".into(),
+            hwdec: "vaapi".into(),
+            video_mode: "animation".into(),
+            video_mode_migrated: true,
+            video_mode_libraries: BTreeMap::from([("lib1".into(), "animation".into())]),
+            transcode_notice: "any".into(),
+            audio_passthrough: "eac3".into(),
+            audio_channels: "stereo".into(),
+            log_level: "debug".into(),
+            device_name: "box".into(),
+            window: super::JfnWindowGeometry {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+                logical_width: 5,
+                logical_height: 6,
+                scale: 1.5,
+                maximized: true,
+            },
+            audio_exclusive: true,
+            disable_gpu_compositing: true,
+            transparent_titlebar: false,
+            force_transcoding: true,
+            window_decorations: Some(WindowDecorations::ServerThemed),
+            hide_scrollbar: false,
+        };
+
+        assert!(save_data(&path, &data));
+        let mut back = SettingsData::default();
+        back.overlay(read_file(&path).expect("parsed"));
+
+        assert_eq!(back.server_url, data.server_url);
+        assert_eq!(back.hwdec, data.hwdec);
+        assert_eq!(back.video_mode, data.video_mode);
+        assert!(back.video_mode_migrated);
+        assert_eq!(back.video_mode_libraries, data.video_mode_libraries);
+        assert_eq!(back.transcode_notice, data.transcode_notice);
+        assert_eq!(back.audio_passthrough, data.audio_passthrough);
+        assert_eq!(back.audio_channels, data.audio_channels);
+        assert_eq!(back.log_level, data.log_level);
+        assert_eq!(back.device_name, data.device_name);
+        assert_eq!(back.window.x, 1);
+        assert_eq!(back.window.height, 4);
+        assert!((back.window.scale - 1.5).abs() < f32::EPSILON);
+        assert!(back.window.maximized);
+        assert!(back.audio_exclusive);
+        assert!(back.disable_gpu_compositing);
+        assert!(!back.transparent_titlebar);
+        assert!(back.force_transcoding);
+        assert_eq!(
+            back.window_decorations,
+            Some(WindowDecorations::ServerThemed)
+        );
+        assert!(!back.hide_scrollbar);
+    }
+
+    /// The file is replaced, not written through: a symlink planted where
+    /// `settings.json` belongs cannot redirect the write.
+    #[cfg(unix)]
+    #[test]
+    fn save_data_replaces_a_symlinked_settings_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "do not touch").expect("seed");
+        let path = tmp.path().join("settings.json");
+        std::os::unix::fs::symlink(&victim, &path).expect("symlink");
+
+        assert!(save_data(&path, &SettingsData::default()));
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("read"),
+            "do not touch"
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .contains("serverUrl")
+        );
+    }
+
+    #[test]
+    fn cli_json_survives_values_that_would_break_out_of_a_json_string() {
+        let data = SettingsData {
+            device_name: "</script><script>alert(1)".into(),
+            video_mode: "a\"b\\c\nd".into(),
+            ..SettingsData::default()
+        };
+        let text = data.cli_json(&[]);
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+        assert_eq!(
+            parsed["deviceName"].as_str(),
+            Some("</script><script>alert(1)")
+        );
+        assert_eq!(parsed["videoMode"].as_str(), Some("a\"b\\c\nd"));
+        // serde_json does not escape `<`; whatever embeds this in a page must.
+        assert!(text.contains("</script>"), "{text}");
+    }
+
+    #[test]
+    fn truncate_device_name_never_splits_a_character() {
+        let mut s = "\u{1f600}".repeat(20); // 4 bytes each
+        super::truncate_device_name(&mut s);
+        assert_eq!(s.len(), 64);
+        assert_eq!(s.chars().count(), 16);
+
+        let mut short = "abc".to_string();
+        super::truncate_device_name(&mut short);
+        assert_eq!(short, "abc");
+
+        let mut empty = String::new();
+        super::truncate_device_name(&mut empty);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn default_device_name_fits_the_server_column() {
+        assert!(default_device_name().len() <= super::DEVICE_NAME_MAX);
+    }
+
+    #[test]
+    fn normalize_device_name_folds_every_whitespace_form() {
+        // Vertical tab and form feed are whitespace here; the rest of C0 is
+        // not, and is left for the server to reject.
+        assert_eq!(normalize_device_name("a\u{0b}\u{0c}b", PLATFORM), "a b");
+        assert_eq!(normalize_device_name("a\r\nb", PLATFORM), "a b");
     }
 }

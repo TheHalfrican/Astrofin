@@ -12,6 +12,10 @@ crate-type = ["rlib"]
 parking_lot.workspace = true
 tempfile.workspace = true
 
+[dev-dependencies]
+# Also a normal dependency, but integration tests only see dev-dependencies.
+tempfile.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 

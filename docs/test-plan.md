@@ -1,6 +1,6 @@
 # Test-suite plan
 
-Status: phase 0 done 2026-09-09; phase 1 next. Owner decisions are recorded in §1;
+Status: phases 0 and 1 done 2026-09-09; phase 2 next. Owner decisions are recorded in §1;
 agents executing a phase read §3 for the working rules and §4 for the phase
 they are on. Update the status line and the phase table as work lands.
 
@@ -84,7 +84,7 @@ functions = 0.72** over 136 files, which is the floor in
 | Phase | Scope | Branch | Status |
 |---|---|---|---|
 | 0 | Measurement and tooling: `xtask test-ratio`, exemption list, cargo-audit + cargo-deny, CodeQL, `just test-js` and audit in CI, `just coverage` | `test/phase-0-infra` | done 2026-09-09 (baseline 514/713 = 0.72, 133 exempt files) |
-| 1 | Security audit of untrusted-input surfaces, tests and fixes for findings | `test/phase-1-security` | planned |
+| 1 | Security audit of untrusted-input surfaces, tests and fixes for findings | `test/phase-1-security` | done 2026-09-09: 15+13+20 findings, 9 fixed in code, rest recorded in §6 |
 | 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend-<crate>` | planned |
 | 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | planned |
 | 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | planned |
@@ -146,3 +146,40 @@ runner (needs the runner to have a desktop session; verify before wiring).
 
 Fuzzing, property-testing crates, line-coverage gates, jellyfin-web itself,
 tvOS. Revisit after phase 5.
+
+## 6. Phase 1 findings left as recommendations
+
+Fixed in code and pinned by tests: non-http(s) URLs into the main layer,
+the saved server URL and the mpv media URLs; unescaped JS splices of the
+server URL and settings blob; unchecked IPC list reads; unbounded probe
+body and stale probe results; the `//web` base-URL collapse; redaction
+gaps; log file mode; unbounded instance-ipc frames; instance-id validation;
+empty `--config-dir`; silent settings reset (now logged).
+
+Recorded, needing a design decision before they change behaviour:
+
+- Probe redirects: the connect overlay saves and navigates to whatever host
+  a redirect chain ends on; the response is not bound to the host asked for.
+- Plain `http://` is the default for a bare host, with no warning that the
+  token then travels in clear.
+- `aboutOpenPath` launches the path through the shell unescaped; only the
+  about layer binds it and there is no `OnBeforeBrowse` handler pinning
+  which URLs a layer may navigate to.
+- `jmpNative` is bound per browser, not per origin, so any document the
+  main layer lands on gets the player IPC surface.
+- Handler log lines embed page strings without newline escaping.
+- `openConfigDir`, `appExit` and `setSettingValue` are unthrottled.
+- instance-ipc: no backoff on a persistent `accept()` error, no cap on
+  concurrent connections or idle timeout, and `Drop` does not wake a
+  `serve` task blocked in `recv`.
+- On Windows the pipe namespace is global: a squatter who learns the
+  instance id can make the app exit as "already running".
+- `settings.json`: a duplicate key or out-of-range number still fails the
+  whole document (now logged); `read_to_string` has no size cap;
+  `windowScale` is not validated; four accessors panic if no Platform is
+  installed and the renderer links the crate.
+- Legacy-profile import: symlinks are copied through on Windows without
+  symlink privilege; no size or free-space check.
+- `paths::ensure` swallows `create_dir_all` errors; a relative
+  `ASTROFIN_CONFIG_DIR` follows each process's cwd.
+- A secret split across two log records is not redacted.

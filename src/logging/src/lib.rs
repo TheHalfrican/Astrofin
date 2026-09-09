@@ -88,7 +88,7 @@ impl RotatingFile {
         // Start each run with a fresh file; prior run's contents shift into
         // the backup chain.
         shift_backups(&path, max_backups);
-        let file = File::create(&path)?;
+        let file = create_private(&path)?;
         Ok(Self {
             path,
             file,
@@ -101,10 +101,25 @@ impl RotatingFile {
     fn rotate(&mut self) -> io::Result<()> {
         self.file.flush()?;
         shift_backups(&self.path, self.max_backups);
-        self.file = File::create(&self.path)?;
+        self.file = create_private(&self.path)?;
         self.bytes_written = 0;
         Ok(())
     }
+}
+
+/// Create (or truncate) a log file readable by the owning user only. A log
+/// line can carry a token shape the redactor does not know yet, so the file
+/// must not be world-readable; on Unix `File::create` would leave it at
+/// 0644 & ~umask. Windows inherits the per-user ACL of `%LOCALAPPDATA%`.
+fn create_private(path: &Path) -> io::Result<File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
 }
 
 fn shift_backups(path: &Path, max_backups: usize) {
@@ -695,6 +710,27 @@ mod tests {
     }
 
     #[test]
+    fn create_private_truncates_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.log");
+        std::fs::write(&path, b"old contents").unwrap();
+        let mut f = super::create_private(&path).unwrap();
+        f.write_all(b"new").unwrap();
+        drop(f);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_private_is_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.log");
+        drop(super::create_private(&path).unwrap());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode was {mode:o}");
+    }
+    #[test]
     fn redact_make_writer_censors_before_forwarding() -> io::Result<()> {
         let sink = VecSink(Arc::new(StdMutex::new(Vec::new())));
         let make = RedactMake(sink.clone());
@@ -725,6 +761,68 @@ mod tests {
         }
         assert_eq!(&*sink.0.lock(), b"[mpv] hello\n");
         Ok(())
+    }
+
+    /// Emit `msg` through `log()` into a scoped subscriber wired exactly like
+    /// the real one (same event format, same redacting writer) and return the
+    /// bytes that reached the sink.
+    fn emit_through_layer(msg: &str, file_layer: bool) -> String {
+        let sink = VecSink(Arc::new(StdMutex::new(Vec::new())));
+        let dispatch: tracing::Dispatch = if file_layer {
+            let layer = fmt::layer()
+                .event_format(FileFormat)
+                .with_writer(RedactMake(sink.clone()));
+            Registry::default().with(layer).into()
+        } else {
+            let layer = fmt::layer()
+                .event_format(ConsoleFormat {
+                    trace_mode: false,
+                    color: false,
+                })
+                .with_writer(RedactMake(sink.clone()));
+            Registry::default().with(layer).into()
+        };
+        tracing::dispatcher::with_default(&dispatch, || {
+            log(CATEGORY_CEF, LEVEL_INFO, msg);
+        });
+        let bytes = sink.0.lock().clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn log_writes_the_category_target_and_the_message() {
+        let line = emit_through_layer("hello", false);
+        assert!(line.starts_with("[CEF] "), "unexpected line: {line:?}");
+        assert!(line.ends_with("hello\n"), "unexpected line: {line:?}");
+    }
+
+    #[test]
+    fn a_token_logged_through_log_reaches_neither_writer_in_clear() {
+        // Both writers wrap RedactMake, so a token has to be censored on the
+        // console *and* in the rotating file, not just one of them.
+        let hostile = concat!(
+            "GET http://u:PWSECRET@host/Items?api_key=KEYSECRET ",
+            r#"hdr X-Emby-Token: HDRSECRET body {"AccessToken":"JSONSECRET"}"#
+        );
+        for file_layer in [false, true] {
+            let line = emit_through_layer(hostile, file_layer);
+            for secret in ["PWSECRET", "KEYSECRET", "HDRSECRET", "JSONSECRET"] {
+                assert!(
+                    !line.contains(secret),
+                    "{secret} leaked (file_layer={file_layer}): {line}"
+                );
+            }
+            assert!(line.contains("api_key=xxx"), "not censored: {line}");
+        }
+    }
+
+    #[test]
+    fn a_message_is_flattened_to_one_record_before_redaction() {
+        // Redaction works per record, so a message that carries its own
+        // newlines must not smuggle a token onto a second, unscanned line:
+        // assert the whole thing is still censored as one buffer.
+        let line = emit_through_layer("first\n?api_key=SECRETVAL\nlast", true);
+        assert!(!line.contains("SECRETVAL"), "leaked: {line}");
     }
 
     #[test]

@@ -67,12 +67,20 @@ unsafe impl Send for Browsers {}
 
 static INSTANCE: Mutex<Option<Browsers>> = Mutex::new(None);
 
-pub fn jfn_browsers_init(frame_rate: f64, use_shared_textures: bool) {
-    let fr = if frame_rate > 0.0 {
+/// Nearest whole Hz, and 0 for anything that is not a usable rate — a
+/// non-positive value, or NaN, which compares false against every bound.
+/// `f64 as i32` saturates, so a nonsense display rate clamps instead of
+/// wrapping into a negative frame interval.
+fn round_frame_rate(frame_rate: f64) -> i32 {
+    if frame_rate > 0.0 {
         (frame_rate + 0.5) as i32
     } else {
         0
-    };
+    }
+}
+
+pub fn jfn_browsers_init(frame_rate: f64, use_shared_textures: bool) {
+    let fr = round_frame_rate(frame_rate);
     jfn_cef_set_default_frame_rate(fr);
     jfn_cef_set_use_shared_textures(use_shared_textures);
     *INSTANCE.lock() = Some(Browsers {
@@ -274,7 +282,7 @@ pub fn jfn_browsers_set_refresh_rate(hz: f64) {
     if hz <= 0.0 {
         return;
     }
-    let target = (hz + 0.5) as i32;
+    let target = round_frame_rate(hz);
     let layers: Vec<*mut JfnCefLayer> = {
         let mut g = INSTANCE.lock();
         let Some(b) = g.as_mut() else { return };
@@ -415,4 +423,34 @@ fn restack(layers: &[*mut JfnCefLayer]) {
         }
     }
     jfn_platform_abi::get().restack(&ordered);
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn round_frame_rate_rounds_to_the_nearest_whole_hz() {
+        assert_eq!(round_frame_rate(60.0), 60);
+        assert_eq!(round_frame_rate(59.94), 60);
+        assert_eq!(round_frame_rate(23.976), 24);
+        assert_eq!(round_frame_rate(0.4), 0);
+        assert_eq!(round_frame_rate(0.6), 1);
+    }
+
+    #[test]
+    fn round_frame_rate_is_zero_for_an_unusable_rate() {
+        assert_eq!(round_frame_rate(0.0), 0);
+        assert_eq!(round_frame_rate(-60.0), 0);
+        assert_eq!(round_frame_rate(f64::NAN), 0);
+        assert_eq!(round_frame_rate(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn round_frame_rate_saturates_instead_of_wrapping() {
+        assert_eq!(round_frame_rate(f64::INFINITY), i32::MAX);
+        assert_eq!(round_frame_rate(1e300), i32::MAX);
+    }
 }

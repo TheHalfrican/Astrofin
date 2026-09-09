@@ -88,15 +88,62 @@ fn handle_message(message: BrowserMessage) -> bool {
         }
         "aboutOpenPath" => {
             let Some(args) = args else { return true };
-            let path = list_string(args, 0);
-            if path.is_empty() {
-                return true;
-            }
-            if let Some(p) = platform_ops::ops() {
-                p.open_external_url(&format!("file://{}", path));
+            if let Some(url) = about_open_path_url(&list_string(args, 0))
+                && let Some(p) = platform_ops::ops()
+            {
+                p.open_external_url(&url);
             }
             true
         }
         _ => false,
+    }
+}
+
+/// The `file://` URL `aboutOpenPath` hands to the desktop's URL handler, or
+/// `None` for an empty path.
+///
+/// Only the about layer binds `aboutOpenPath` (see
+/// `injection::ABOUT_FUNCTIONS`), and that layer only ever loads
+/// `app://resources/about.html`, so the path is one of the two the About box
+/// itself renders — not a value a jellyfin-web page can choose. The string is
+/// passed through unchanged: nothing here percent-encodes it, so a path
+/// containing `?`, `#` or a space reaches the handler as written.
+fn about_open_path_url(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    Some(format!("file://{path}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn about_open_path_url_prefixes_the_file_scheme() {
+        assert_eq!(
+            about_open_path_url("C:\\Users\\x\\AppData\\Roaming\\astrofin").as_deref(),
+            Some("file://C:\\Users\\x\\AppData\\Roaming\\astrofin")
+        );
+    }
+
+    #[test]
+    fn about_open_path_url_ignores_an_empty_path() {
+        // What a zero-argument `jmpNative.aboutOpenPath()` produces.
+        assert_eq!(about_open_path_url(""), None);
+    }
+
+    #[test]
+    fn about_open_path_url_does_not_sanitise_the_path() {
+        // Pinned as a known gap, not as desired behaviour: the string is
+        // spliced into a URL with no percent-encoding and no traversal check.
+        for raw in ["../../evil.exe", "a b#c?d", "\u{2028}", "x\"y"] {
+            assert_eq!(
+                about_open_path_url(raw).as_deref(),
+                Some(format!("file://{raw}").as_str())
+            );
+        }
     }
 }

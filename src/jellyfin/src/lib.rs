@@ -338,6 +338,9 @@ const DEFAULT_SCHEME: &str = "http://";
 /// Scheme prefixes normalized to lowercase; every other prefix passes through.
 const LOWERCASE_SCHEMES: [&str; 2] = ["http:", "https:"];
 
+/// The only two schemes this client will fetch from or navigate to.
+const HTTP_SCHEMES: [&str; 2] = ["http://", "https://"];
+
 const WEB_PATH_SEGMENT: &str = "/web";
 
 /// Trim surrounding whitespace, lowercase `Http:`/`Https:` scheme prefixes,
@@ -364,26 +367,63 @@ pub fn normalize_input(user_input: &str) -> String {
     }
 }
 
+/// Byte offset of the authority (host) within `url`: just past `://` when a
+/// scheme separator is present, 0 otherwise.
+fn authority_start(url: &str) -> usize {
+    url.find(SCHEME_SEPARATOR)
+        .map_or(0, |i| i + SCHEME_SEPARATOR.len())
+}
+
 /// Reduce a URL to its server base:
-///   - if the URL contains `/web` (case-insensitive) in its path, truncate
-///     at the last occurrence;
+///   - if the URL contains `/web` (case-insensitive) *after the scheme
+///     separator*, truncate at the last occurrence;
 ///   - otherwise return the origin (everything up to the first `/` after
 ///     `://`, or the whole string if there's no path).
+///
+/// The search deliberately starts at the authority: `http://web.example.com/`
+/// would otherwise match the `/web` inside `//web` and reduce to `http:/`.
 ///
 /// The result is a prefix slice of `url`: no percent-encoding, no punycode,
 /// no default-port stripping, no case folding of host or path.
 pub fn extract_base_url(url: &str) -> &str {
-    let lower = url.to_ascii_lowercase();
-    if let Some(pos) = lower.rfind(WEB_PATH_SEGMENT) {
-        return &url[..pos];
+    let host_start = authority_start(url);
+    let lower = url[host_start..].to_ascii_lowercase();
+    if let Some(rel) = lower.rfind(WEB_PATH_SEGMENT) {
+        return &url[..host_start + rel];
     }
-    let host_start = url
-        .find(SCHEME_SEPARATOR)
-        .map_or(0, |i| i + SCHEME_SEPARATOR.len());
     let end = url[host_start..]
         .find('/')
         .map_or(url.len(), |rel| host_start + rel);
     &url[..end]
+}
+
+/// True when `url` is an absolute `http://`/`https://` URL (scheme compared
+/// case-insensitively) with a non-empty authority and no whitespace or
+/// control character anywhere in it.
+///
+/// This is the gate for every URL the connect overlay hands to CEF — the
+/// probe request and the main browser's `load_url`. Anything else
+/// (`file:`, `data:`, `javascript:`, `app:`, `chrome:`, a bare `//host`)
+/// is rejected: the main layer has the native bridge injected into it, so a
+/// non-http(s) document loaded there would run with app privileges. The
+/// control-character rule additionally keeps a `\n` out of the log line that
+/// records the navigation.
+///
+/// Userinfo (`http://user:pw@host/`) is *not* rejected: servers behind basic
+/// auth are a supported deployment.
+pub fn is_http_url(url: &str) -> bool {
+    let Some(rest) = HTTP_SCHEMES.iter().find_map(|scheme| {
+        url.get(..scheme.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            .map(|_| &url[scheme.len()..])
+    }) else {
+        return false;
+    };
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    !rest[..authority_end].is_empty()
 }
 
 /// Validate that a Jellyfin `/System/Info/Public` response body is a JSON
@@ -852,5 +892,251 @@ mod tests {
     fn normalize_survives_multibyte_char_across_scheme_prefix() {
         assert_eq!(normalize_input("htt\u{2028}p"), "http://htt\u{2028}p");
         assert_eq!(normalize_input("みんな"), "http://みんな");
+    }
+
+    // ---- security audit, phase 1: hostile server-URL input ----
+
+    #[test]
+    fn normalize_passes_dangerous_schemes_through_untouched() {
+        // `normalize_input` is a formatter, not a validator: anything with a
+        // `://` survives verbatim. `is_http_url` is the gate that rejects
+        // these before they reach a CEF request or `load_url`.
+        for hostile in [
+            "file:///C:/Windows/win.ini",
+            "FILE://///attacker/share",
+            "app://resources/overlay.html",
+            "chrome://settings",
+            "devtools://devtools/bundled/inspector.html",
+            "data://x",
+        ] {
+            assert_eq!(normalize_input(hostile), hostile, "input {hostile:?}");
+            assert!(!is_http_url(hostile), "input {hostile:?} must not pass");
+        }
+    }
+
+    #[test]
+    fn normalize_turns_schemeless_hostile_input_into_an_http_url() {
+        // No `://` means the whole string becomes an http *host*, which is
+        // inert — `javascript:` and `data:` never survive as schemes.
+        assert_eq!(
+            normalize_input("javascript:alert(1)"),
+            "http://javascript:alert(1)"
+        );
+        assert_eq!(
+            normalize_input("data:text/html,<script>alert(1)</script>"),
+            "http://data:text/html,<script>alert(1)</script>"
+        );
+        assert!(!normalize_input("javascript:alert(1)").starts_with("javascript:"));
+    }
+
+    #[test]
+    fn normalize_keeps_userinfo_port_and_ipv6_literals() {
+        // Userinfo is preserved on purpose (basic-auth deployments); the
+        // phishing shape `real-host@evil-host` is a known accepted risk.
+        assert_eq!(
+            normalize_input("http://user:pw@host:8096/jellyfin"),
+            "http://user:pw@host:8096/jellyfin"
+        );
+        assert_eq!(normalize_input("user:pw@host"), "http://user:pw@host");
+        assert_eq!(normalize_input("[::1]:8096"), "http://[::1]:8096");
+        assert_eq!(
+            normalize_input("HTTPS://[2001:db8::1]:8920/web"),
+            "https://[2001:db8::1]:8920/web"
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_dot_segments_and_control_characters() {
+        // Neither is canonicalised here; `is_http_url` rejects the control
+        // characters and CEF's GURL resolves the dot segments.
+        assert_eq!(
+            normalize_input("http://host/a/../../etc/passwd"),
+            "http://host/a/../../etc/passwd"
+        );
+        assert_eq!(normalize_input("http://host/\u{0}x"), "http://host/\u{0}x");
+        // Interior whitespace survives trimming of the ends.
+        assert_eq!(normalize_input("  http://ho st  "), "http://ho st");
+    }
+
+    #[test]
+    fn normalize_handles_degenerate_and_very_long_input() {
+        assert_eq!(normalize_input(""), "http://");
+        assert_eq!(normalize_input("   "), "http://");
+        assert_eq!(normalize_input("://"), "://");
+        assert_eq!(normalize_input("http:"), "http://http:");
+        assert_eq!(
+            normalize_input("HTTP:/example.com"),
+            "http://http:/example.com"
+        );
+        let long = "a".repeat(200_000);
+        assert_eq!(normalize_input(&long).len(), long.len() + "http://".len());
+        let long_scheme = format!("HTTP://{}", "b".repeat(200_000));
+        assert!(normalize_input(&long_scheme).starts_with("http://b"));
+    }
+
+    #[test]
+    fn normalize_keeps_punycode_and_idn_bytes_verbatim() {
+        assert_eq!(
+            normalize_input("http://xn--n3h.example.com/web"),
+            "http://xn--n3h.example.com/web"
+        );
+        // No IDN folding: the unicode form is *not* converted to punycode, so
+        // the two spellings stay distinguishable in settings.json.
+        assert_ne!(
+            normalize_input("http://☃.example.com"),
+            "http://xn--n3h.example.com"
+        );
+    }
+
+    #[test]
+    fn is_http_url_accepts_only_absolute_http_and_https() {
+        assert!(is_http_url("http://host"));
+        assert!(is_http_url("https://host:8096/jellyfin/"));
+        assert!(is_http_url("HTTP://HOST/Web"));
+        assert!(is_http_url("http://[::1]:8096/"));
+        assert!(is_http_url("http://user:pw@host/"));
+        assert!(is_http_url("http://example.みんな/web"));
+    }
+
+    #[test]
+    fn is_http_url_rejects_other_schemes_and_relative_forms() {
+        for bad in [
+            "",
+            "host",
+            "//host",
+            "/web/index.html",
+            "file:///C:/Windows/win.ini",
+            "file://host/share",
+            "app://resources/overlay.html",
+            "chrome://settings",
+            "devtools://devtools",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "ftp://host",
+            "httpx://host",
+            "https:/host",
+            "http:host",
+        ] {
+            assert!(!is_http_url(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn is_http_url_rejects_empty_authority_and_embedded_whitespace() {
+        assert!(!is_http_url("http://"));
+        assert!(!is_http_url("https://"));
+        assert!(!is_http_url("http:///web"));
+        assert!(!is_http_url("http://?x=1"));
+        assert!(!is_http_url("http://#frag"));
+        // Log forging / header smuggling shapes.
+        assert!(!is_http_url("http://host/a\nERROR [Main] fake"));
+        assert!(!is_http_url("http://host/a\r\nX: y"));
+        assert!(!is_http_url("http://ho st/"));
+        assert!(!is_http_url("http://host/\u{0}"));
+        assert!(!is_http_url("http://host/\t"));
+    }
+
+    #[test]
+    fn extract_base_does_not_mistake_a_web_host_for_a_web_path() {
+        // Regression: the `/web` search used to run over the whole string, so
+        // the `//web` of `http://web.example.com` matched and the base
+        // collapsed to `http:/`.
+        assert_eq!(
+            extract_base_url("http://web.example.com/"),
+            "http://web.example.com"
+        );
+        assert_eq!(
+            extract_base_url("https://web.example.com:8096/jellyfin/web/index.html"),
+            "https://web.example.com:8096/jellyfin"
+        );
+        assert_eq!(
+            extract_base_url("https://WEB.example.com"),
+            "https://WEB.example.com"
+        );
+        assert_eq!(
+            extract_base_url("http://webmail.corp/"),
+            "http://webmail.corp"
+        );
+    }
+
+    #[test]
+    fn extract_base_keeps_hostile_authority_and_dot_segments_intact() {
+        // No canonicalisation happens here; whatever the redirect chain
+        // resolved to is what gets probed. Pinned so a change is deliberate.
+        assert_eq!(
+            extract_base_url("http://real.example.com@evil.example/web/"),
+            "http://real.example.com@evil.example"
+        );
+        assert_eq!(
+            extract_base_url("http://host/a/../../web/x"),
+            "http://host/a/../.."
+        );
+        assert_eq!(extract_base_url(""), "");
+        assert_eq!(extract_base_url("/web"), "");
+    }
+
+    #[test]
+    fn public_info_survives_hostile_bodies_without_panicking() {
+        // Non-UTF-8 bytes.
+        assert!(!is_valid_public_info(&[0xff, 0xfe, 0x00, 0x01]));
+        // HTML error page from a captive portal / reverse proxy.
+        assert!(!is_valid_public_info(
+            b"<!doctype html><html><body>404</body></html>"
+        ));
+        // Right shape, wrong types.
+        assert!(!is_valid_public_info(br#"{"Id":{"Id":"abc"}}"#));
+        assert!(!is_valid_public_info(br#"{"Id":["abc"]}"#));
+        assert!(
+            !is_valid_public_info(br#"{"id":"abc"}"#),
+            "Id is case-sensitive"
+        );
+        // Deep nesting must hit serde_json's recursion limit, not the stack.
+        let deep = format!("{}{}", "[".repeat(50_000), "]".repeat(50_000));
+        assert!(!is_valid_public_info(deep.as_bytes()));
+        // A huge but well-formed body is merely rejected (the caller caps the
+        // number of bytes it will ever accumulate).
+        let huge = format!(r#"{{"Id":"abc","pad":"{}"}}"#, "p".repeat(1_000_000));
+        assert!(is_valid_public_info(huge.as_bytes()));
+        let truncated = &huge.as_bytes()[..64 * 1024];
+        assert!(!is_valid_public_info(truncated));
+    }
+
+    #[test]
+    fn public_info_accepts_a_server_id_that_differs_from_the_one_asked_for() {
+        // Documented gap: the probe only asserts "some Jellyfin server lives
+        // here", never that it is the server the user typed. A redirect chain
+        // can therefore move the client to a different server id.
+        assert!(is_valid_public_info(
+            br#"{"Id":"0000000000000000000000000000ffff","ServerName":"somebody else"}"#
+        ));
+    }
+
+    #[test]
+    fn device_profile_escapes_a_hostile_device_name() {
+        // `device_name` is a fixed literal today, but the JSON this builds is
+        // spliced straight into injected JS, so the escaping has to hold.
+        let hostile = "a\"b\\c\nd</script><script>alert(1)</script>\u{0}e";
+        let s = build_device_profile(&[], &[], hostile, "1.0", false);
+        assert!(!s.contains("a\"b"), "raw quote survived: {s}");
+        assert!(!s.contains('\n'), "raw newline survived: {s}");
+        assert!(!s.contains('\u{0}'), "raw NUL survived: {s}");
+        let v: Value = serde_json::from_str(&s).unwrap_or(Value::Null);
+        assert_eq!(v["Name"].as_str(), Some(hostile));
+    }
+
+    #[test]
+    fn device_profile_never_emits_a_truncated_document() {
+        // `serde_json::to_string` cannot fail for this struct, but the call
+        // site swallows an error into `String::default()`; assert the happy
+        // path stays parseable for pathological codec names too.
+        let decoders = vec![
+            codec("h264\",\"evil\":\"", MediaKind::Video),
+            codec("\u{2028}aac", MediaKind::Audio),
+        ];
+        let s = build_device_profile(&decoders, &["mat\"roska".into()], "dev", "1.0", false);
+        assert!(!s.is_empty());
+        let v: Value = serde_json::from_str(&s).unwrap_or(Value::Null);
+        assert!(v.is_object(), "unparseable profile: {s}");
+        assert!(v.get("evil").is_none(), "codec name broke out: {s}");
     }
 }

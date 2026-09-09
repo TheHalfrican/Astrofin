@@ -81,7 +81,7 @@
     }
 
     // Saved settings from native (injected as placeholder, replaced at load time)
-    const _savedSettings = JSON.parse('__SETTINGS_JSON__');
+    const _savedSettings = JSON.parse(__SETTINGS_JSON__);
 
     // window.jmpInfo - settings and device info
     window.jmpInfo = {
@@ -97,7 +97,7 @@
             { key: 'advanced', order: 3 }
         ],
         settings: {
-            main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
+            main: { enableMPV: true, fullscreen: false, userWebClient: __SERVER_URL__ },
             playback: {
                 // settings.json omits hwdec when it equals the Rust-side default,
                 // which is per-OS (videotoolbox on macOS, no elsewhere); the

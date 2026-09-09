@@ -59,8 +59,26 @@ static RESOURCES: &[(&str, Embedded)] = &[
 
 fn lookup(url_path: &str) -> Option<&'static Embedded> {
     // URL key has the "resources/" prefix; strip it to match RESOURCES.
+    // Exact name match against a fixed table — no filesystem lookup, so a
+    // `..` or an absolute path in the URL simply misses.
     let name = url_path.strip_prefix("resources/")?;
     RESOURCES.iter().find(|(n, _)| *n == name).map(|(_, r)| r)
+}
+
+/// `app://resources/about.js?v=2#x` -> `resources/about.js`.
+///
+/// The URL comes from the page (any frame can request an `app://` URL, and
+/// the scheme is registered CORS- and fetch-enabled), so this only ever
+/// produces a lookup key for the table above; it never touches the disk.
+fn url_to_resource_path(url: &str) -> &str {
+    // Strip the scheme prefix and the query/fragment.
+    let after_scheme = match url.find("://") {
+        // `find` returns a char boundary and "://" is ASCII, so the slice
+        // index is always on a boundary.
+        Some(p) => &url[p + 3..],
+        None => url,
+    };
+    after_scheme.split(['?', '#']).next().unwrap_or("")
 }
 
 // Background color from src/color.h:40 — kBgColor{0x101010}.
@@ -141,23 +159,13 @@ wrap_scheme_handler_factory! {
             let request = request?;
             let url_uf = request.url();
             let url = crate::cef_string::userfree_to_string(&url_uf);
-
-            // Strip scheme prefix and query/fragment.
-            let after_scheme = url
-                .find("://")
-                .map(|p| &url[p + 3..])
-                .unwrap_or(&url);
-            let url_path = after_scheme
-                .split(['?', '#'])
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let url_path = url_to_resource_path(&url);
 
             let (bytes, mime): (Vec<u8>, &'static str) = if url_path == "resources/theme.css" {
                 (theme_css(), "text/css")
             } else if url_path == "resources/about.js" {
                 (about_js_payload(), "application/javascript")
-            } else if let Some(r) = lookup(&url_path) {
+            } else if let Some(r) = lookup(url_path) {
                 (r.bytes.to_vec(), r.mime)
             } else {
                 jfn_logging::log(
@@ -225,13 +233,15 @@ wrap_resource_handler! {
             _callback: Option<&mut ResourceReadCallback>,
         ) -> ::std::os::raw::c_int {
             let offset = self.inner.offset.load(Ordering::Relaxed);
-            let total = self.inner.bytes.len();
-            if offset >= total {
+            let n = read_span(self.inner.bytes.len(), offset, bytes_to_read);
+            // Nothing left, or a degenerate request: report completion rather
+            // than copying. A non-positive `bytes_to_read` used to widen into
+            // a huge `usize` and copy the whole remainder into whatever the
+            // caller had sized for it.
+            if n == 0 || data_out.is_null() {
                 if let Some(br) = bytes_read { *br = 0; }
                 return 0;
             }
-            let remaining = total - offset;
-            let n = remaining.min(bytes_to_read as usize);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     self.inner.bytes.as_ptr().add(offset),
@@ -240,10 +250,21 @@ wrap_resource_handler! {
                 );
             }
             self.inner.offset.store(offset + n, Ordering::Relaxed);
+            // `n <= bytes_to_read`, which is a positive c_int here.
             if let Some(br) = bytes_read { *br = n as i32; }
             1
         }
     }
+}
+
+/// How many bytes one `ResourceHandler::read` call may copy: the smaller of
+/// what is left and what the caller asked for, and 0 for a spent handler or a
+/// non-positive request size.
+fn read_span(total: usize, offset: usize, bytes_to_read: std::os::raw::c_int) -> usize {
+    if offset >= total || bytes_to_read <= 0 {
+        return 0;
+    }
+    (total - offset).min(bytes_to_read as usize)
 }
 
 // ---- registration ----------------------------------------------------------
@@ -256,4 +277,220 @@ pub(crate) fn register() {
         Some(&domain),
         Some(&mut JfnSchemeFactoryBuilder::new(JfnSchemeFactory)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    // --- url_to_resource_path ----------------------------------------------
+
+    #[test]
+    fn url_to_resource_path_strips_the_scheme_and_the_query() {
+        assert_eq!(
+            url_to_resource_path("app://resources/about.js"),
+            "resources/about.js"
+        );
+        assert_eq!(
+            url_to_resource_path("app://resources/overlay.css?v=2"),
+            "resources/overlay.css"
+        );
+        assert_eq!(
+            url_to_resource_path("app://resources/about.html#top"),
+            "resources/about.html"
+        );
+        assert_eq!(url_to_resource_path("app://"), "");
+        assert_eq!(url_to_resource_path(""), "");
+    }
+
+    #[test]
+    fn url_to_resource_path_handles_urls_without_a_scheme() {
+        assert_eq!(
+            url_to_resource_path("resources/about.js"),
+            "resources/about.js"
+        );
+        assert_eq!(url_to_resource_path("?a"), "");
+    }
+
+    #[test]
+    fn url_to_resource_path_splits_on_the_first_scheme_separator_only() {
+        assert_eq!(
+            url_to_resource_path("app://resources/a://b.js"),
+            "resources/a://b.js"
+        );
+    }
+
+    #[test]
+    fn url_to_resource_path_never_panics_on_multibyte_input() {
+        // The scheme split is a byte index; a multibyte path must not split
+        // a character.
+        for url in [
+            "app://\u{1F600}/x.js",
+            "app://resources/\u{2028}.js",
+            "\u{1F600}://a",
+            "://",
+            "a://",
+        ] {
+            let _ = url_to_resource_path(url);
+        }
+        assert_eq!(url_to_resource_path("app://\u{1F600}"), "\u{1F600}");
+    }
+
+    // --- lookup -------------------------------------------------------------
+
+    #[test]
+    fn lookup_resolves_every_embedded_resource() {
+        for (name, _) in RESOURCES {
+            let path = format!("resources/{name}");
+            assert!(lookup(&path).is_some(), "{name} must resolve");
+        }
+    }
+
+    #[test]
+    fn lookup_returns_the_declared_mime_type() {
+        assert_eq!(lookup("resources/about.html").unwrap().mime, "text/html");
+        assert_eq!(
+            lookup("resources/overlay.js").unwrap().mime,
+            "application/javascript"
+        );
+        assert_eq!(
+            lookup("resources/logo-mark.svg").unwrap().mime,
+            "image/svg+xml"
+        );
+    }
+
+    #[test]
+    fn lookup_rejects_anything_outside_the_table() {
+        for path in [
+            "",
+            "resources/",
+            "about.js",
+            "resources/About.js",
+            "resources/../about.js",
+            "resources/../../src/config/settings.json",
+            "resources//about.js",
+            "resources/about.js/",
+            "resources/resources/about.js",
+            "/resources/about.js",
+            "resources/about.js\0",
+            "C:/Windows/win.ini",
+            "resources/C:/Windows/win.ini",
+            "resources/theme.css",
+        ] {
+            assert!(lookup(path).is_none(), "{path:?} must not resolve");
+        }
+    }
+
+    // --- generated payloads -------------------------------------------------
+
+    #[test]
+    fn theme_css_declares_the_background_color() {
+        assert_eq!(
+            String::from_utf8(theme_css()).unwrap(),
+            ":root{--bg-color:#101010}"
+        );
+    }
+
+    #[test]
+    fn about_js_payload_prefixes_the_static_body_with_parsable_json() {
+        let out = about_js_payload();
+        let text = String::from_utf8(out).unwrap();
+        let first = text.lines().next().unwrap();
+        let json = first
+            .strip_prefix("var _aboutData = ")
+            .and_then(|s| s.strip_suffix(';'))
+            .expect("payload starts with the data prefix");
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert!(parsed.get("app").is_some());
+        assert!(parsed.get("configDir").is_some());
+        assert!(text.len() > first.len(), "static body is appended");
+    }
+
+    #[test]
+    fn about_data_escapes_a_hostile_config_dir_for_js() {
+        // `about.js` is served as an external script, so the JS-string
+        // hazards are the quote, the backslash and the two line separators
+        // JSON leaves raw.
+        let data = AboutData {
+            app: "0.0.0",
+            cef: &CefVersion::Unknown,
+            based_on: UPSTREAM_CREDIT,
+            config_dir: "C:\\a\"b\u{2028}c\u{2029}d</script>".to_string(),
+            log_file: None,
+        };
+        let json = jfn_js_json::to_js_json(&data).unwrap();
+        assert!(json.contains("\\u2028"), "{json}");
+        assert!(json.contains("\\u2029"), "{json}");
+        assert!(json.contains("\\\\a\\\"b"), "{json}");
+        assert!(!json.contains('\u{2028}'));
+        // Round-trips as JSON, which is what the browser will do with it.
+        let back: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.get("configDir").and_then(|v| v.as_str()),
+            Some("C:\\a\"b\u{2028}c\u{2029}d</script>")
+        );
+    }
+
+    #[test]
+    fn about_data_omits_an_absent_log_file() {
+        let data = AboutData {
+            app: "0.0.0",
+            cef: &CefVersion::Unknown,
+            based_on: UPSTREAM_CREDIT,
+            config_dir: "/tmp/x".to_string(),
+            log_file: None,
+        };
+        let json = jfn_js_json::to_js_json(&data).unwrap();
+        assert!(!json.contains("logFile"), "{json}");
+    }
+
+    // --- abs_path -----------------------------------------------------------
+
+    #[test]
+    fn abs_path_keeps_an_absolute_path() {
+        let p = if cfg!(windows) { "C:\\x\\y" } else { "/x/y" };
+        assert_eq!(abs_path(p), p);
+    }
+
+    #[test]
+    fn abs_path_prepends_the_working_directory_to_a_relative_one() {
+        let got = abs_path("rel.log");
+        assert!(std::path::Path::new(&got).is_absolute(), "{got}");
+        assert!(got.ends_with("rel.log"), "{got}");
+    }
+
+    #[test]
+    fn abs_path_leaves_an_empty_path_alone() {
+        // `Path::new("")` is relative, so this joins onto the cwd rather
+        // than panicking.
+        let _ = abs_path("");
+    }
+
+    // --- read_span ----------------------------------------------------------
+
+    #[test]
+    fn read_span_returns_the_smaller_of_remaining_and_requested() {
+        assert_eq!(read_span(100, 0, 10), 10);
+        assert_eq!(read_span(100, 95, 10), 5);
+        assert_eq!(read_span(100, 0, i32::MAX), 100);
+        assert_eq!(read_span(100, 99, 1), 1);
+    }
+
+    #[test]
+    fn read_span_is_zero_once_the_handler_is_spent() {
+        assert_eq!(read_span(100, 100, 10), 0);
+        assert_eq!(read_span(100, 1_000, 10), 0);
+        assert_eq!(read_span(0, 0, 10), 0);
+    }
+
+    #[test]
+    fn read_span_rejects_a_non_positive_request() {
+        // `-1 as usize` is usize::MAX, which used to make `min` pick the
+        // whole remaining buffer and copy it into the caller's.
+        assert_eq!(read_span(100, 0, 0), 0);
+        assert_eq!(read_span(100, 0, -1), 0);
+        assert_eq!(read_span(100, 0, i32::MIN), 0);
+    }
 }
