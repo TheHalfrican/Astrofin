@@ -3,5 +3,12 @@
   "extends": [
     "config:recommended"
   ],
-  "ignorePaths": ["third_party/**"]
+  "ignorePaths": ["third_party/**"],
+  "vulnerabilityAlerts": {
+    "enabled": true
+  },
+  "osvVulnerabilityAlerts": true,
+  "github-actions": {
+    "enabled": true
+  }
 }

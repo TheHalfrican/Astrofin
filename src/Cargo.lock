@@ -5597,8 +5597,12 @@ dependencies = [
  "download-cef",
  "flate2",
  "gix",
+ "glob",
+ "serde_json",
+ "syn 2.0.119",
  "tar",
  "tempfile",
+ "walkdir",
  "zip",
 ]
 

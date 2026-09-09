@@ -1,0 +1,5 @@
+# Minimum total test-per-public-function ratio accepted by
+# `cargo xtask test-ratio --check` (docs/test-plan.md §2).
+# Baseline measured 2026-09-09: 514 tests / 713 public functions = 0.72.
+# This number only ever moves up.
+0.72

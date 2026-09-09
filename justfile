@@ -47,9 +47,37 @@ test: build
     . 'dev/windows/env.ps1'; cargo test --manifest-path src/Cargo.toml --workspace
 
 # Run the JS unit tests (node only; not part of `just test`, which is cargo)
+#
+# The glob is quoted so the shell leaves it alone: node >= 21 expands test
+# globs itself, and PowerShell does not glob native-command arguments at all,
+# so the one form works on every OS.
 [group('test')]
 test-js:
-    node --test src/web/video-mode-resolver.test.js src/web/input-plugin.test.js src/web/playback-source.test.js src/web/mpv-stats.test.js src/web/ab-loop.test.js
+    node --test "src/web/*.test.js"
+
+# Tests per public function, per crate and in total (docs/test-plan.md §2)
+[group('test')]
+test-ratio *args:
+    cargo xtask test-ratio {{args}}
+
+# Fail when the total ratio drops below dev/test-ratio-floor.txt
+[group('test')]
+test-ratio-check:
+    cargo xtask test-ratio --check
+
+# Line coverage — a diagnostic, never a gate; the ratio above is the figure
+# the plan tracks. Needs `cargo install cargo-llvm-cov` (it rebuilds the whole
+# workspace with instrumentation, so expect a long first run).
+[group('test')]
+[unix]
+coverage:
+    cargo llvm-cov --manifest-path src/Cargo.toml --workspace --html --output-dir build/coverage
+
+# Line coverage (loads MSVC + bindgen libclang env via dev/windows/env.ps1)
+[group('test')]
+[windows]
+coverage:
+    . 'dev/windows/env.ps1'; cargo llvm-cov --manifest-path src/Cargo.toml --workspace --html --output-dir build/coverage
 
 # Format workspace
 [group('lint')]
@@ -81,6 +109,16 @@ clippy:
         -D clippy::unwrap_used \
         -D clippy::expect_used \
         -D clippy::panic
+
+# Advisory database check (needs `cargo install cargo-audit`)
+[group('lint')]
+audit:
+    cargo audit --file src/Cargo.lock
+
+# Licence / advisory / duplicate-crate policy (needs `cargo install cargo-deny`)
+[group('lint')]
+deny:
+    cargo deny --manifest-path src/Cargo.toml check -W unmaintained
 
 # Lint workspace
 [group('lint')]

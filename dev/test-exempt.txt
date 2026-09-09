@@ -1,0 +1,72 @@
+# Files excluded from the test-per-public-function ratio (docs/test-plan.md §1).
+#
+# Format: one repo-relative path or glob per line, `|` then a one-line reason.
+#   `**`  matches any number of path components (`src/wayland/**`, `**/build.rs`)
+#   `*`   matches within one component (`src/xtask/src/platform_*.rs`)
+#   `!`   negates: a negated pattern wins over every positive one, whatever
+#         the order, and is how a tested file is pulled back out of a
+#         directory-wide exemption.
+#   `#`   comment.
+#
+# The rule is *not* "this file is untestable" but "this file is nothing but
+# glue to a display server, a GPU, a live CEF/mpv process or the OS ABI".
+# Pure logic inside an exempt file is meant to be extracted into a testable
+# function rather than left behind the exemption; phase 5 of the test plan
+# revisits every line here. Exempt code is covered by the E2E smoke suite.
+
+# --- Linux windowing -------------------------------------------------------
+src/wayland/**              | Wayland protocol glue; needs a live compositor.
+src/x11/**                  | Xlib/XCB glue; needs a live X server.
+
+# --- macOS -----------------------------------------------------------------
+src/macos/**                | AppKit/ObjC glue; needs a Cocoa main thread.
+src/macos_sink/**           | IOSurface/Metal media sink; needs a GPU.
+
+# --- Windows ---------------------------------------------------------------
+src/windows/**              | Win32 window, input and D3D glue; needs a HWND.
+!src/windows/src/file_dialog.rs | pure filter/extension logic, unit-tested.
+src/windows_sink/**         | D3D11 shared-texture media sink; needs a device.
+
+# --- GPU compositing -------------------------------------------------------
+src/gpu_paint/**            | Vulkan/D3D12/Metal interop; needs a real adapter.
+!src/gpu_paint/src/painter.rs | damage/geometry maths, testable without a GPU.
+
+# --- CEF -------------------------------------------------------------------
+src/jfn_cef/src/client/**      | CefClient vtable wiring; needs a live browser.
+src/jfn_cef/src/client_impl/** | CefClient callbacks; needs a live browser.
+!src/jfn_cef/src/client_impl/dialog.rs | file-chooser argument mapping, unit-tested.
+src/jfn_cef/src/ffi.rs         | raw cef-dll-sys pointer conversions.
+src/jfn_cef/src/app.rs         | CefApp process wiring; needs the CEF runtime.
+src/jfn_cef/src/v8_handler.rs  | V8 handler vtable; needs a renderer process.
+src/jfn_cef/src/cef_string.rs  | cef_string_t marshalling; needs the CEF allocator.
+
+# --- mpv -------------------------------------------------------------------
+src/mpv/src/sys.rs        | bindgen output for libmpv.
+src/mpv/src/handle.rs     | libmpv handle lifetime; needs a real mpv core.
+src/mpv/src/event_loop.rs | libmpv event pump; needs a real mpv core.
+
+# --- Linux/OS ABI ----------------------------------------------------------
+src/linux_util/src/egl.rs           | EGL entry points; needs a GPU driver.
+src/linux_util/src/xkb.rs           | libxkbcommon FFI; needs a keymap fd.
+src/linux_util/src/input.rs         | evdev/libinput FFI; needs input devices.
+src/linux_util/src/idle_inhibit.rs  | D-Bus idle inhibitor; needs a session bus.
+src/linux_util/src/open_url.rs      | spawns the desktop URL handler.
+src/wake_event/src/eventfd.rs       | eventfd(2) syscall wrapper.
+src/wake_event/src/pipe.rs          | pipe(2) syscall wrapper.
+src/wake_event/src/fd_wait.rs       | poll(2) syscall wrapper.
+src/platform_abi/src/signal_unix.rs   | sigaction(2) wrapper.
+src/platform_abi/src/signal_other.rs  | non-Unix signal stub.
+src/platform_abi/src/process_unix.rs  | fork/exec wrapper.
+src/platform_abi/src/process_other.rs | non-Unix process stub.
+
+# --- Entry points and tooling ---------------------------------------------
+src/jfn_rust/src/main.rs       | process entry point; covered by the E2E suite.
+src/xtask/src/main.rs          | CLI dispatch only.
+src/xtask/src/bundle_macos.rs  | drives codesign/plutil on macOS.
+src/xtask/src/platform_*.rs    | per-OS shell-outs (cmake, ninja, msbuild).
+src/xtask/src/install.rs       | copies a staged tree to a prefix.
+src/xtask/src/cef.rs           | downloads and unpacks the CEF distribution.
+src/xtask/src/mpv.rs           | drives the mpv submodule build.
+src/xtask/src/build.rs         | drives cargo and stages build/.
+src/xtask/src/package.rs       | drives the archive/installer builds.
+**/build.rs                    | build scripts; exercised by building.

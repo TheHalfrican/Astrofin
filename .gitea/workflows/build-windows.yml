@@ -109,6 +109,50 @@ jobs:
           cargo test --manifest-path src/Cargo.toml --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test ratio floor (docs/test-plan.md §2)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          cargo run --manifest-path src/Cargo.toml -p xtask -- test-ratio --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: JS unit tests
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          # node is installed on the runner host (v26 at the time of writing);
+          # node --test expands the glob itself, pwsh passes it through verbatim.
+          node --version
+          node --test "src/web/*.test.js"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Supply chain: licences/advisories/bans/sources, then the RustSec scan of
+      # the lock file. Both tools read Cargo.toml/Cargo.lock only -- no compile,
+      # so no env.ps1 (MSVC/libclang/mpv) is needed here.
+      #
+      # ASSUMPTION: this host-mode runner uses this PC's toolchain, so it runs
+      # whatever `cargo install --locked cargo-deny cargo-audit` last put in
+      # %USERPROFILE%\.cargo\bin. Re-run that install when the tools need
+      # updating; the hosted GitHub job (.github/workflows/checks.yml) installs
+      # them per run instead.
+      - name: cargo deny (licences, advisories, bans, sources)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          # -W unmaintained: no config knob demotes that category, and an
+          # unmaintained transitive crate should be reported, not block a build.
+          cargo deny --manifest-path src/Cargo.toml check -W unmaintained
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: cargo audit (RUSTSEC)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          cargo audit --file src/Cargo.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Installer tooling (WiX as a user-scope dotnet tool; NSIS into the linked .cache)
         shell: pwsh
         run: |

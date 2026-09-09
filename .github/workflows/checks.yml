@@ -1,0 +1,67 @@
+# Cheap, toolchain-only checks that need neither libmpv nor CEF, so they can run
+# on a hosted ubuntu runner in a couple of minutes.
+#
+# clippy and `cargo test` are deliberately NOT here: they link the workspace and
+# therefore need libmpv + CEF (about an hour on a hosted runner). Those run on
+# the self-hosted Gitea runner instead -- see .gitea/workflows/build-windows.yml.
+name: checks
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path src/Cargo.toml --all -- --check
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      # Licences, advisories, bans and sources; policy lives in ./deny.toml.
+      # -W unmaintained: cargo-deny has no config knob to demote that category,
+      # and an unmaintained transitive crate is a maintenance signal, not a
+      # vulnerability. It still prints, it just does not fail the job.
+      - name: cargo deny check
+        run: cargo deny --manifest-path src/Cargo.toml check -W unmaintained
+      - name: cargo audit
+        run: cargo audit --file src/Cargo.lock
+
+  # The one-test-per-public-function floor (docs/test-plan.md §2). xtask depends
+  # on none of the native crates, so this compiles in about a minute.
+  test-ratio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo xtask test-ratio --check
+        run: cargo run --manifest-path src/Cargo.toml -p xtask -- test-ratio --check
+
+  js-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: node --test src/web
+        run: node --test "src/web/*.test.js"

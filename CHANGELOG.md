@@ -5,6 +5,18 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- Test-suite tooling (docs/test-plan.md): `cargo xtask test-ratio` measures
+  tests per public function with an explicit exemption list for platform glue
+  (`dev/test-exempt.txt`) and a floor that only moves up
+  (`dev/test-ratio-floor.txt`, checked in CI). `just test-js` now globs every
+  `src/web/*.test.js`; `just coverage`, `just audit`, `just deny` added.
+- Supply-chain checks (docs/supply-chain.md): cargo-deny policy in `deny.toml`
+  (licences, advisories, bans, sources), cargo-audit, CodeQL on GitHub, and a
+  hosted `checks` workflow (rustfmt, deny, audit, JS tests, ratio floor).
+  Baseline: zero vulnerabilities, one unmaintained transitive crate
+  (ttf-parser via cosmic-text, Linux menu renderer only).
+
 ## [0.4.0] - 2026-09-09
 
 ### Added

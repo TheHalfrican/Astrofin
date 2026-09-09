@@ -20,6 +20,7 @@ mod paths;
 mod platform;
 #[cfg(target_os = "macos")]
 mod template;
+mod test_ratio;
 mod version;
 
 #[derive(Parser)]
@@ -35,6 +36,8 @@ enum Cmd {
     Install(InstallArgs),
     Package(PackageArgs),
     FetchCef,
+    /// Measure the test-per-public-function ratio (see `docs/test-plan.md` §2).
+    TestRatio(TestRatioArgs),
     /// Print the full version string (`<semver>+<short-sha>[-dirty]`).
     Version,
 }
@@ -73,6 +76,20 @@ pub struct InstallArgs {
     pub skip_build: bool,
 }
 
+/// `cargo xtask test-ratio` — see `test_ratio.rs`.
+#[derive(clap::Args, Clone, Default)]
+pub struct TestRatioArgs {
+    /// Also print the per-file table.
+    #[arg(long)]
+    pub files: bool,
+    /// Print the report as JSON.
+    #[arg(long)]
+    pub json: bool,
+    /// Fail when the total ratio is below `dev/test-ratio-floor.txt`.
+    #[arg(long)]
+    pub check: bool,
+}
+
 #[derive(clap::Args)]
 pub struct PackageArgs {
     #[command(flatten)]
@@ -91,6 +108,7 @@ fn main() -> Result<()> {
         Cmd::FetchCef => {
             cef::ensure(&paths::cef_cache_dir()).map(|dir| println!("CEF ready: {}", dir.display()))
         }
+        Cmd::TestRatio(a) => test_ratio::run(&a),
         Cmd::Version => {
             println!("{}", version::read()?.full);
             Ok(())

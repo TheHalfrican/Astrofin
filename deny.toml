@@ -1,0 +1,110 @@
+# cargo-deny policy for the Astrofin workspace.
+#
+# Lives at the repository root, not next to src/Cargo.toml: cargo-deny searches
+# for deny.toml from the manifest's directory upwards, so
+#   cargo deny --manifest-path src/Cargo.toml check
+# finds this file from src/. Run it that way (or `just deny`).
+#
+# Checked in CI by .github/workflows/checks.yml (hosted) and
+# .gitea/workflows/build-windows.yml (self-hosted). See docs/supply-chain.md.
+
+[graph]
+# Empty = every target triple. Deliberate: the workspace has Windows-, macOS-
+# and Linux-only crates, and a licence or advisory must not be able to hide in
+# the half of the tree that this machine does not build.
+targets = []
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# --- advisories (RUSTSEC) -------------------------------------------------
+# Vulnerabilities are always an error in cargo-deny >= 0.16 and have no knob.
+# `unmaintained`/`unsound` are *scope* selectors (all | workspace | transitive |
+# none), not severities: whatever they select is an error. There is no config
+# field that turns a category into a warning, so the two invocations that must
+# stay green pass `-W unmaintained` on the command line -- see the CI workflows
+# and docs/supply-chain.md. Unsoundness stays an error at full scope.
+[advisories]
+# Report unmaintained crates anywhere in the graph, not just direct workspace
+# dependencies (there is one today: RUSTSEC-2026-0192, ttf-parser, reached only
+# through cosmic-text -> fontdb in the Linux menu renderer, no upgrade exists).
+unmaintained = "all"
+# Default is "workspace"; widen it, an unsound transitive crate is still unsound.
+unsound = "all"
+# Yanked crate versions warn rather than fail; a yank is not itself a security
+# problem and Cargo.lock is updated deliberately, not reactively.
+yanked = "warn"
+# Intentionally empty. Every entry here is an accepted risk and needs a
+# justification comment plus a link to the tracking issue -- see
+# docs/supply-chain.md before adding one.
+ignore = []
+
+# --- licences -------------------------------------------------------------
+# Astrofin itself is GPL-2.0 (see LICENSE), so GPL-compatible permissive
+# licences are what the allow list is made of. Derived from the actual graph
+# (`cargo deny --manifest-path src/Cargo.toml list`), not from a template:
+# every entry below is used by at least one crate we ship.
+[licenses]
+allow = [
+    "0BSD",                # adler2, interprocess, recvmsg, doctest-file
+    "Apache-2.0",          # the bulk of the tree (serde, tokio, windows, cef, ...)
+    "BSD-2-Clause",        # arrayref, zerocopy
+    "BSD-3-Clause",        # bindgen, encoding_rs, subtle, tiny-skia, sha1_smol
+    "CC0-1.0",             # dunce
+    "CDLA-Permissive-2.0", # webpki-roots (the root-store data, not code)
+    "ISC",                 # libloading, ring, rustls, rustls-webpki, untrusted
+    "MIT",                 # the other bulk of the tree
+    "MIT-0",               # dunce
+    "Unicode-3.0",         # the icu_* crates pulled in by idna/url
+    "Unlicense",           # aho-corasick, memchr, walkdir, jiff, byteorder
+    "Zlib",                # bytemuck, foldhash, slotmap, zlib-rs, objc2-*
+    "bzip2-1.0.6",         # libbz2-rs-sys
+]
+confidence-threshold = 0.8
+# Scoped allowances. Anything copyleft belongs here, one crate at a time, with
+# the reason it is compatible with shipping a GPL-2.0 binary.
+exceptions = [
+    # Weak, file-level copyleft. MPL-2.0 section 3.3 explicitly permits
+    # distributing a Larger Work under the GPL, so this is GPL-compatible; the
+    # crate is unmodified and pulled in transitively via dirs -> dirs-sys.
+    { allow = ["MPL-2.0"], crate = "option-ext" },
+]
+
+[licenses.private]
+# The 26 workspace crates carry no `license` field and are `publish = false`;
+# the binary as a whole is GPL-2.0 per LICENSE.
+ignore = true
+registries = []
+
+# --- bans -----------------------------------------------------------------
+[bans]
+# Duplicate versions are a fact of life in a tree this size (windows-sys 0.52 /
+# 0.59 / 0.61, hashbrown 0.14-0.17, ...). Warn so the count is visible and can
+# be driven down, but do not fail CI on a transitive dependency's choice.
+multiple-versions = "warn"
+# No `foo = "*"` in a workspace manifest: an unpinned version range makes the
+# lock file the only thing standing between us and an unreviewed major bump.
+wildcards = "deny"
+# ... except the `{ path = "../x" }` links between our own crates, which cargo
+# models as a wildcard and which are never resolved from a registry.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# --- sources --------------------------------------------------------------
+# Cargo.lock currently contains no git dependencies at all: every crate,
+# including cef/cef-dll-sys/download-cef, comes from crates.io. CEF itself and
+# mpv are fetched outside cargo (xtask fetch-cef, the third_party/mpv
+# submodule), so a git source appearing here would be a change worth reviewing.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
