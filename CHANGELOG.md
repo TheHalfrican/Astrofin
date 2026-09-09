@@ -5,6 +5,14 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- A-B repeat loop: set a begin and an end point and playback loops between
+  them. `[` / `]` / `\` on the keyboard, a `repeat` button in the OSD control
+  row, a band and A/B pins on the scrubber and a readout beside the "ends at"
+  time. The loop is mpv's own `ab-loop-a` / `ab-loop-b`, so seeking past B
+  deliberately does not loop; the points reset with every item and are not
+  persisted. See `docs/ab-loop.md`.
+
 ## [0.2.0] - 2026-09-08
 
 First versioned Astrofin release. Everything below is relative to the
