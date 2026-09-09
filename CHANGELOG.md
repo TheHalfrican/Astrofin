@@ -5,6 +5,8 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-08
+
 ### Added
 - A-B repeat loop: set a begin and an end point and playback loops between
   them. `[` / `]` / `\` on the keyboard, a `repeat` button in the OSD control
@@ -12,6 +14,14 @@ project uses semantic versioning.
   time. The loop is mpv's own `ab-loop-a` / `ab-loop-b`, so seeking past B
   deliberately does not loop; the points reset with every item and are not
   persisted. See `docs/ab-loop.md`.
+
+### Fixed
+- Chapter-marker stars now sit on the scrubber line. jellyfin-web hangs its
+  ticks off the top of the slider, which only meets the track at its own font
+  size; the OSD's larger type had floated the stars above the line.
+
+### Docs
+- `docs/macos-plan.md`: the checklist for verifying the macOS build.
 
 ## [0.2.0] - 2026-09-08
 

@@ -56,7 +56,7 @@ Done on `main`:
 - Bugs fixed 2026-09-08: input-plugin's "player cannot be null" on every restart and the "queue invalid" warning (`src/web/input-plugin.test.js` pins both).
 - A-B repeat loop (`docs/ab-loop.md`, 2026-09-08): `[` / `]` / `\` plus a `repeat` button cycle mpv's own `ab-loop-a`/`ab-loop-b` through a new `playerSetAbLoop` IPC; `src/playback/src/ab_loop.rs` observes both properties process-wide and pushes them to `window._nativeAbLoop`, and `src/web/ab-loop.js` draws the scrubber band, A/B pins and readout from that push alone. Points are cleared on every load/stop (mpv keeps them across files) and never persisted; seeking past B does not loop, which is mpv's documented behaviour.
 
-Release flow: `CHANGELOG.md` + workspace `version` in `src/Cargo.toml` (`0.2.0` released 2026-09-08 as tag `v0.2.0`; main then moves to the next `-dev`); `just package` builds the installers from the staged `build/`.
+Release flow: `CHANGELOG.md` + workspace `version` in `src/Cargo.toml` (`0.2.0` and `0.3.0` released 2026-09-08 as tags `v0.2.0` / `v0.3.0`; main then moves to the next `-dev`); `just package` builds the installers from the staged `build/`.
 
 Windows build on this machine (no `just`; PowerShell 7 is the Store build at `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`, not Program Files): put `%USERPROFILE%\.cargo\bin` on PATH, then `pwsh -ExecutionPolicy Bypass -File dev\windows\build.ps1` (libmpv via `dev\windows\build_mpv_source.ps1 -Arch x64` and CEF via `cargo xtask fetch-cef` are done once and cached). Lint/test: dot-source `dev\windows\env.ps1` first. Details and timings: `docs/build-windows-notes.md`.
 
