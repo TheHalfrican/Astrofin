@@ -9,7 +9,6 @@
 //! and the playback coordinator. The web layer's exec_js sink for the
 //! playback coordinator is exposed as [`jfn_web_exec_js`] for boot wiring.
 
-use cef::{ImplListValue, ListValue};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::ffi::c_char;
@@ -19,7 +18,9 @@ use std::sync::Arc;
 use crate::browsers::{jfn_browsers_active, jfn_browsers_set_active};
 use crate::business_common::{apply_setting_value, js_cstr_or_warn, reject_double_init};
 use crate::client::{Inner, JfnCefLayer, jfn_cef_layer_inner, jfn_cef_layer_set_name};
-use crate::ipc::{BrowserMessage, list_int, list_opt_string, list_string};
+use crate::ipc::{
+    ArgList, BrowserMessage, list_bool, list_double, list_int, list_opt_string, list_string,
+};
 use jfn_color::jfn_cef_parse_color;
 use jfn_color::theme::{jfn_theme_color_on_color, jfn_theme_color_set_video_mode};
 use jfn_mpv::api::{
@@ -41,7 +42,7 @@ const MT_UNKNOWN: u8 = 0;
 const MT_AUDIO: u8 = 1;
 const MT_VIDEO: u8 = 2;
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 struct MediaMetadata {
     id: String,
     title: String,
@@ -50,6 +51,22 @@ struct MediaMetadata {
     track_number: i32,
     duration_us: i64,
     media_type: u8,
+}
+
+/// `playerLoad`'s arguments, as read off the page-controlled list. Every
+/// field has a defined value for a call of any arity — including
+/// `jmpNative.playerLoad()` with none at all.
+#[derive(Default, Debug, PartialEq)]
+struct PlayerLoad {
+    url: String,
+    start_ms: i32,
+    video_idx: i64,
+    audio_idx: i64,
+    sub_idx: i64,
+    metadata_json: String,
+    external_audio_url: String,
+    external_sub_url: String,
+    is_infinite_stream: bool,
 }
 
 struct WebState {
@@ -201,37 +218,33 @@ fn clear_ab_loop(reason: &str) {
     jfn_playback_clear_ab_loop();
 }
 
-fn handle_player_load(args: &ListValue) {
+fn parse_player_load<A: ArgList + ?Sized>(args: &A) -> PlayerLoad {
+    PlayerLoad {
+        url: list_string(args, 0),
+        start_ms: list_int(args, 1),
+        video_idx: i64::from(list_int(args, 2)),
+        audio_idx: i64::from(list_int(args, 3)),
+        sub_idx: i64::from(list_int(args, 4)),
+        metadata_json: list_string(args, 5),
+        external_audio_url: list_string(args, 6),
+        external_sub_url: list_string(args, 7),
+        is_infinite_stream: list_bool(args, 8),
+    }
+}
+
+fn handle_player_load<A: ArgList + ?Sized>(args: &A) {
     clear_ab_loop("playerLoad");
-    let url = list_string(args, 0);
-    let start_ms = if args.size() > 1 {
-        list_int(args, 1)
-    } else {
-        0
-    };
-    let video_idx = list_int(args, 2) as i64;
-    let audio_idx = list_int(args, 3) as i64;
-    let sub_idx = list_int(args, 4) as i64;
-    let metadata_json = if args.size() > 5 {
-        list_string(args, 5)
-    } else {
-        String::new()
-    };
-    let external_audio_url = if args.size() > 6 {
-        list_string(args, 6)
-    } else {
-        String::new()
-    };
-    let external_sub_url = if args.size() > 7 {
-        list_string(args, 7)
-    } else {
-        String::new()
-    };
-    let is_infinite_stream = if args.size() > 8 {
-        args.bool(8) != 0
-    } else {
-        false
-    };
+    let PlayerLoad {
+        url,
+        start_ms,
+        video_idx,
+        audio_idx,
+        sub_idx,
+        metadata_json,
+        external_audio_url,
+        external_sub_url,
+        is_infinite_stream,
+    } = parse_player_load(args);
     jfn_logging::log(
         jfn_logging::CATEGORY_CEF,
         jfn_logging::LEVEL_INFO,
@@ -242,6 +255,15 @@ fn handle_player_load(args: &ListValue) {
         ),
     );
 
+    // Gate before any side effect: a refused load must not leave MPRIS/JS
+    // believing something started.
+    if !media_url_allowed("playerLoad url", &url, false)
+        || !media_url_allowed("playerLoad ext audio", &external_audio_url, true)
+        || !media_url_allowed("playerLoad ext sub", &external_sub_url, true)
+    {
+        return;
+    }
+
     let meta = if metadata_json.is_empty() {
         MediaMetadata::default()
     } else {
@@ -251,7 +273,7 @@ fn handle_player_load(args: &ListValue) {
     // Atomic pre-load posts so MPRIS/JS see start position before
     // mpv has opened the file.
     pb_post(PbInput::LoadStarting(meta.id.clone()));
-    pb_post(PbInput::Position(start_ms as i64 * 1000));
+    pb_post(PbInput::Position(i64::from(start_ms) * 1000));
 
     if !metadata_json.is_empty() {
         jfn_theme_color_set_video_mode(meta.media_type == MT_VIDEO);
@@ -268,7 +290,7 @@ fn handle_player_load(args: &ListValue) {
         return;
     };
     let opts = JfnMpvLoadOptions {
-        start_secs: start_ms as f64 / 1000.0,
+        start_secs: f64::from(start_ms) / 1000.0,
         video_track: video_idx,
         audio_track: audio_idx,
         sub_track: sub_idx,
@@ -282,7 +304,7 @@ fn handle_player_load(args: &ListValue) {
 /// Run `f` if the IPC arrived with an args list. Always returns `true` —
 /// every arm using this is considered "handled" even when args are
 /// missing, matching the prior behaviour.
-fn with_args(args: Option<&ListValue>, f: impl FnOnce(&ListValue)) -> bool {
+fn with_args<A: ArgList + ?Sized>(args: Option<&A>, f: impl FnOnce(&A)) -> bool {
     if let Some(a) = args {
         f(a);
     }
@@ -333,16 +355,16 @@ fn handle_message(message: BrowserMessage) -> bool {
             true
         }
         "playerSeek" => with_args(args, |a| {
-            jfn_mpv_seek_absolute(list_int(a, 0) as f64 / 1000.0);
+            jfn_mpv_seek_absolute(f64::from(list_int(a, 0)) / 1000.0);
         }),
         "playerSetVolume" => with_args(args, |a| {
-            jfn_mpv_set_volume(list_int(a, 0) as f64);
+            jfn_mpv_set_volume(f64::from(list_int(a, 0)));
         }),
         "playerSetMuted" => with_args(args, |a| {
-            jfn_mpv_set_muted(a.bool(0) != 0);
+            jfn_mpv_set_muted(list_bool(a, 0));
         }),
         "playerSetSpeed" => with_args(args, |a| {
-            jfn_mpv_set_speed(list_int(a, 0) as f64 / 1000.0);
+            jfn_mpv_set_speed(f64::from(list_int(a, 0)) / 1000.0);
         }),
         // One of "set-a" / "set-b" / "clear" — a step, never a time. mpv
         // stamps the point itself (`jfn_playback::ab_loop`), because it
@@ -360,7 +382,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_playback_ab_loop_action(&action);
         }),
         "playerSetSubtitle" => with_args(args, |a| {
-            let id = list_int(a, 0) as i64;
+            let id = i64::from(list_int(a, 0));
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_INFO,
@@ -375,12 +397,15 @@ fn handle_message(message: BrowserMessage) -> bool {
                 jfn_logging::LEVEL_INFO,
                 &format!("playerAddSubtitle: {url}"),
             );
+            if !media_url_allowed("playerAddSubtitle url", &url, false) {
+                return;
+            }
             if let Some(c) = js_cstr_or_warn("playerAddSubtitle url", &url) {
                 unsafe { jfn_mpv_sub_add(c.as_ptr()) };
             }
         }),
         "playerSetAudio" => with_args(args, |a| {
-            jfn_mpv_set_audio_track(list_int(a, 0) as i64);
+            jfn_mpv_set_audio_track(i64::from(list_int(a, 0)));
         }),
         "playerAddAudio" => with_args(args, |a| {
             let url = list_string(a, 0);
@@ -389,12 +414,17 @@ fn handle_message(message: BrowserMessage) -> bool {
                 jfn_logging::LEVEL_INFO,
                 &format!("playerAddAudio: {url}"),
             );
+            if !media_url_allowed("playerAddAudio url", &url, false) {
+                return;
+            }
             if let Some(c) = js_cstr_or_warn("playerAddAudio url", &url) {
                 unsafe { jfn_mpv_audio_add(c.as_ptr()) };
             }
         }),
-        "playerSetAudioDelay" => with_args(args, |a| jfn_mpv_set_audio_delay(a.double(0))),
-        "playerSetSubtitleDelay" => with_args(args, |a| jfn_mpv_set_subtitle_delay(a.double(0))),
+        "playerSetAudioDelay" => with_args(args, |a| jfn_mpv_set_audio_delay(list_double(a, 0))),
+        "playerSetSubtitleDelay" => {
+            with_args(args, |a| jfn_mpv_set_subtitle_delay(list_double(a, 0)))
+        }
         "playerSetAspectMode" => with_args(args, |a| {
             let mode = list_string(a, 0);
             if let Some(c) = js_cstr_or_warn("playerSetAspectMode", &mode) {
@@ -402,12 +432,22 @@ fn handle_message(message: BrowserMessage) -> bool {
             }
         }),
         "playerOsdActive" => with_args(args, |a| {
-            let active = a.bool(0) != 0;
-            let mut g = INSTANCE.lock();
-            let Some(st) = g.as_mut() else { return };
-            if active {
-                st.was_fullscreen_before_osd = jfn_playback_fullscreen();
-            } else if !st.was_fullscreen_before_osd {
+            let active = list_bool(a, 0);
+            // The platform call is made after the guard is dropped: page JS
+            // can send this at any rate, and `set_fullscreen` runs a window
+            // resize whose synchronous callbacks must never come back round
+            // to a held, non-reentrant INSTANCE lock.
+            let leave_fullscreen = {
+                let mut g = INSTANCE.lock();
+                let Some(st) = g.as_mut() else { return };
+                if active {
+                    st.was_fullscreen_before_osd = jfn_playback_fullscreen();
+                    false
+                } else {
+                    !st.was_fullscreen_before_osd
+                }
+            };
+            if leave_fullscreen {
                 jfn_platform_abi::get().set_fullscreen(false);
             }
         }),
@@ -416,7 +456,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             // layer keeps this flag alive while it does. The stats property
             // set is observed only for that window — see
             // `jfn_playback::stats`.
-            let active = a.bool(0) != 0;
+            let active = list_bool(a, 0);
             if jfn_playback::stats::jfn_playback_set_stats_active(active) {
                 jfn_logging::log(
                     jfn_logging::CATEGORY_CEF,
@@ -437,8 +477,18 @@ fn handle_message(message: BrowserMessage) -> bool {
             true
         }
         "saveServerUrl" => with_args(args, |a| {
-            jfn_config::set_server_url(&list_string(a, 0));
-            jfn_config::settings_save_async();
+            let url = list_string(a, 0);
+            match crate::business_overlay::storable_server_url(&url) {
+                Some(url) => {
+                    jfn_config::set_server_url(url);
+                    jfn_config::settings_save_async();
+                }
+                None => jfn_logging::log(
+                    jfn_logging::CATEGORY_CEF,
+                    jfn_logging::LEVEL_WARN,
+                    "saveServerUrl: refused a non-http(s) URL",
+                ),
+            }
         }),
         "setSettingValue" => with_args(args, |a| {
             let section = list_string(a, 0);
@@ -468,8 +518,8 @@ fn handle_message(message: BrowserMessage) -> bool {
         }),
         "notifyQueueChange" => with_args(args, |a| {
             pb_post(PbInput::QueueCaps {
-                can_go_next: a.bool(0) != 0,
-                can_go_prev: a.bool(1) != 0,
+                can_go_next: list_bool(a, 0),
+                can_go_prev: list_bool(a, 1),
             });
         }),
         "notifyPlaybackState" => {
@@ -477,7 +527,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             true
         }
         "notifySeek" => with_args(args, |a| {
-            pb_post(PbInput::Seeked(list_int(a, 0) as i64 * 1000));
+            pb_post(PbInput::Seeked(i64::from(list_int(a, 0)) * 1000));
         }),
         "appExit" => {
             jfn_shutdown_initiate();
@@ -495,5 +545,299 @@ fn handle_message(message: BrowserMessage) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+/// Whether a page-supplied media URL may be handed to mpv. Jellyfin only ever
+/// streams over http(s), but mpv understands `file:`, `edl:`, `smb:` and
+/// plain paths, and its error text is echoed back to the page through
+/// `_nativeEmit('error')`, so an unfiltered URL would let a page read local
+/// files or probe the LAN from the client's position. `optional` allows the
+/// empty string (no external track).
+fn media_url_allowed(label: &str, url: &str, optional: bool) -> bool {
+    if (optional && url.is_empty()) || jfn_jellyfin::is_http_url(url) {
+        return true;
+    }
+    jfn_logging::log(
+        jfn_logging::CATEGORY_CEF,
+        jfn_logging::LEVEL_WARN,
+        &format!("{label}: refused a non-http(s) media URL"),
+    );
+    false
+}
+
+#[cfg(test)]
+mod media_url_tests {
+    use super::media_url_allowed;
+
+    #[test]
+    fn media_url_allowed_accepts_http_and_https() {
+        assert!(media_url_allowed(
+            "t",
+            "http://jf.example.com/Videos/1/stream",
+            false
+        ));
+        assert!(media_url_allowed(
+            "t",
+            "HTTPS://10.0.0.5:8920/x.m3u8?api_key=k",
+            false
+        ));
+    }
+
+    #[test]
+    fn media_url_allowed_refuses_every_other_scheme_and_bare_paths() {
+        for bad in [
+            "file:///C:/Windows/win.ini",
+            "edl://http://a/;http://b/",
+            "smb://nas/share/movie.mkv",
+            r"C:\Users\x\secret.mkv",
+            "/etc/passwd",
+            "ftp://host/x",
+            "http://",
+            "",
+        ] {
+            assert!(!media_url_allowed("t", bad, false), "{bad}");
+        }
+    }
+
+    #[test]
+    fn media_url_allowed_optional_permits_only_the_empty_string() {
+        assert!(media_url_allowed("t", "", true));
+        assert!(!media_url_allowed("t", "file:///x.srt", true));
+        assert!(media_url_allowed("t", "https://jf.example.com/x.srt", true));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::ipc::{ArgValue, TestArgs};
+
+    fn args(values: Vec<ArgValue>) -> TestArgs {
+        TestArgs::new(values)
+    }
+
+    fn s(v: &str) -> ArgValue {
+        ArgValue::Str(v.to_string())
+    }
+
+    // --- parse_player_load --------------------------------------------------
+
+    #[test]
+    fn parse_player_load_defaults_every_field_when_the_page_passes_nothing() {
+        // `jmpNative.playerLoad()` — an empty list. Slots 2..4 used to be
+        // read without a bounds check.
+        assert_eq!(parse_player_load(&TestArgs::empty()), PlayerLoad::default());
+    }
+
+    #[test]
+    fn parse_player_load_reads_a_full_argument_list() {
+        let a = args(vec![
+            s("http://host/Videos/1/stream.mkv"),
+            ArgValue::Int(90_000),
+            ArgValue::Int(1),
+            ArgValue::Int(2),
+            ArgValue::Int(-1),
+            s("{\"Id\":\"abc\"}"),
+            s("http://host/audio.mka"),
+            s("http://host/subs.srt"),
+            ArgValue::Bool(true),
+        ]);
+        assert_eq!(
+            parse_player_load(&a),
+            PlayerLoad {
+                url: "http://host/Videos/1/stream.mkv".into(),
+                start_ms: 90_000,
+                video_idx: 1,
+                audio_idx: 2,
+                sub_idx: -1,
+                metadata_json: "{\"Id\":\"abc\"}".into(),
+                external_audio_url: "http://host/audio.mka".into(),
+                external_sub_url: "http://host/subs.srt".into(),
+                is_infinite_stream: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_player_load_ignores_slots_of_the_wrong_type() {
+        // The V8 relay leaves a slot unset for an object/array/null/undefined
+        // argument, and never coerces a string to a number.
+        let a = args(vec![
+            ArgValue::Int(7),
+            s("90000"),
+            ArgValue::Unset,
+            ArgValue::Bool(true),
+            ArgValue::Unset,
+            ArgValue::Int(5),
+            ArgValue::Unset,
+            ArgValue::Double(1.0),
+            ArgValue::Int(1),
+        ]);
+        assert_eq!(parse_player_load(&a), PlayerLoad::default());
+    }
+
+    #[test]
+    fn parse_player_load_saturates_hostile_numbers() {
+        let a = args(vec![
+            s(""),
+            ArgValue::Double(f64::INFINITY),
+            ArgValue::Double(f64::NAN),
+            ArgValue::Double(-1e300),
+            ArgValue::Double(2.147_483_9e9),
+        ]);
+        let got = parse_player_load(&a);
+        assert_eq!(got.start_ms, i32::MAX);
+        assert_eq!(got.video_idx, 0, "NaN");
+        assert_eq!(got.audio_idx, i64::from(i32::MIN));
+        assert_eq!(got.sub_idx, i64::from(i32::MAX));
+        // The start position is milliseconds; both derived values must stay
+        // finite rather than overflow.
+        assert_eq!(i64::from(got.start_ms) * 1000, 2_147_483_647_000);
+        assert!(f64::from(got.start_ms) / 1000.0 < 2_147_484.0);
+    }
+
+    #[test]
+    fn parse_player_load_passes_hostile_strings_through_untouched() {
+        let hostile = "http://h/a'\";\u{2028}</script>\u{0}b";
+        let a = args(vec![s(hostile), ArgValue::Int(0), ArgValue::Int(0)]);
+        assert_eq!(parse_player_load(&a).url, hostile);
+    }
+
+    // --- parse_metadata_json ------------------------------------------------
+
+    #[test]
+    fn parse_metadata_json_reads_the_jellyfin_item_fields() {
+        let got = parse_metadata_json(
+            r#"{"Id":"abc","Name":"Ep 1","SeriesName":"Show","SeasonName":"S1",
+                "IndexNumber":3,"RunTimeTicks":12000000,"Type":"Episode"}"#,
+        );
+        assert_eq!(
+            got,
+            MediaMetadata {
+                id: "abc".into(),
+                title: "Ep 1".into(),
+                artist: "Show".into(),
+                album: "S1".into(),
+                track_number: 3,
+                duration_us: 1_200_000,
+                media_type: MT_VIDEO,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_metadata_json_falls_back_to_artists_and_album() {
+        let got = parse_metadata_json(
+            r#"{"Artists":["A","B"],"Album":"Rec","Type":"Audio","RunTimeTicks":10}"#,
+        );
+        assert_eq!(got.artist, "A");
+        assert_eq!(got.album, "Rec");
+        assert_eq!(got.media_type, MT_AUDIO);
+        assert_eq!(got.duration_us, 1);
+    }
+
+    #[test]
+    fn parse_metadata_json_returns_defaults_for_junk() {
+        for json in [
+            "",
+            "not json",
+            "null",
+            "[]",
+            "[{\"Id\":\"x\"}]",
+            "\"string\"",
+            "12",
+            "{",
+            "{\"Id\":",
+        ] {
+            assert_eq!(
+                parse_metadata_json(json),
+                MediaMetadata::default(),
+                "input {json:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_metadata_json_ignores_wrong_typed_fields() {
+        let got = parse_metadata_json(
+            r#"{"Id":{"a":1},"Name":[1,2],"SeriesName":7,"Artists":"A",
+                "IndexNumber":"3","RunTimeTicks":"x","Type":42}"#,
+        );
+        assert_eq!(got, MediaMetadata::default());
+    }
+
+    #[test]
+    fn parse_metadata_json_survives_out_of_range_numbers() {
+        // No panic and no overflow trap on any of these.
+        let huge =
+            parse_metadata_json(r#"{"RunTimeTicks":1e308,"IndexNumber":9223372036854775807}"#);
+        assert_eq!(huge.duration_us, i64::MAX / 10);
+        let negative = parse_metadata_json(r#"{"RunTimeTicks":-1e308,"IndexNumber":-1}"#);
+        assert_eq!(negative.duration_us, i64::MIN / 10);
+        assert_eq!(negative.track_number, -1);
+        let fractional = parse_metadata_json(r#"{"RunTimeTicks":15.9}"#);
+        assert_eq!(fractional.duration_us, 1);
+    }
+
+    #[test]
+    fn parse_metadata_json_keeps_hostile_strings_verbatim() {
+        // The sinks (MPRIS, `to_js_json`) escape; the parser must not
+        // silently truncate or mangle.
+        let got = parse_metadata_json(
+            "{\"Id\":\"a\\u2028b\",\"Name\":\"</script>\",\"SeriesName\":\"q\\\"q\"}",
+        );
+        assert_eq!(got.id, "a\u{2028}b");
+        assert_eq!(got.title, "</script>");
+        assert_eq!(got.artist, "q\"q");
+
+        let big = format!("{{\"Name\":\"{}\"}}", "x".repeat(200_000));
+        assert_eq!(parse_metadata_json(&big).title.len(), 200_000);
+    }
+
+    #[test]
+    fn parse_metadata_json_maps_every_known_type() {
+        for (ty, want) in [
+            ("Audio", MT_AUDIO),
+            ("Movie", MT_VIDEO),
+            ("Episode", MT_VIDEO),
+            ("Video", MT_VIDEO),
+            ("MusicVideo", MT_VIDEO),
+            ("audio", MT_UNKNOWN),
+            ("Photo", MT_UNKNOWN),
+            ("", MT_UNKNOWN),
+        ] {
+            let json = format!("{{\"Type\":{}}}", serde_json::to_string(ty).unwrap());
+            assert_eq!(parse_metadata_json(&json).media_type, want, "type {ty:?}");
+        }
+    }
+
+    // --- media_type_to_pb ---------------------------------------------------
+
+    #[test]
+    fn media_type_to_pb_maps_known_values_and_defaults_the_rest() {
+        assert_eq!(media_type_to_pb(MT_AUDIO), PbMediaType::Audio);
+        assert_eq!(media_type_to_pb(MT_VIDEO), PbMediaType::Video);
+        assert_eq!(media_type_to_pb(MT_UNKNOWN), PbMediaType::Unknown);
+        assert_eq!(media_type_to_pb(u8::MAX), PbMediaType::Unknown);
+    }
+
+    // --- with_args ----------------------------------------------------------
+
+    #[test]
+    fn with_args_skips_the_body_when_the_message_carries_no_list() {
+        let mut ran = false;
+        assert!(with_args(None::<&TestArgs>, |_| ran = true));
+        assert!(!ran, "a message without an argument list must not run");
+    }
+
+    #[test]
+    fn with_args_runs_the_body_and_still_claims_the_message() {
+        let a = args(vec![s("x")]);
+        let mut seen = String::new();
+        assert!(with_args(Some(&a), |v| seen = list_string(v, 0)));
+        assert_eq!(seen, "x");
     }
 }

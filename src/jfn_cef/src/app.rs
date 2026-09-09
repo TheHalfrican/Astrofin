@@ -711,11 +711,15 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
             code.replace_range(pos..pos + ph.len(), value);
         }
     }
-    replace_first(&mut code, "__SERVER_URL__", &jfn_config::server_url());
+    replace_first(
+        &mut code,
+        "__SERVER_URL__",
+        &js_string_literal(&jfn_config::server_url()),
+    );
     replace_first(
         &mut code,
         "__SETTINGS_JSON__",
-        &jfn_config::cli_json(jfn_mpv::hwdec_options()),
+        &js_string_literal(&jfn_config::cli_json(jfn_mpv::hwdec_options())),
     );
     replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
     let decoration_options = profile
@@ -759,4 +763,43 @@ fn ensure_renderer_settings_loaded() {
         jfn_config::settings_init(&path);
         let _ = jfn_config::settings_load();
     });
+}
+
+/// The saved server URL as a JS string literal, ready to replace the bare
+/// `__SERVER_URL__` placeholder in `native-shim.js`. The value comes from
+/// `settings.json` (hand-editable) and from `saveServerUrl`, so it must go
+/// through the JS-source escaper: a quote or a U+2028 inside a `'...'`
+/// literal would otherwise break out of the string and run in the renderer
+/// that has the native bridge.
+fn js_string_literal(url: &str) -> String {
+    jfn_js_json::to_js_json(url).unwrap_or_else(|| "\"\"".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::js_string_literal;
+
+    #[test]
+    fn js_string_literal_is_a_quoted_json_string() {
+        assert_eq!(
+            js_string_literal("https://jf.example.com/"),
+            "\"https://jf.example.com/\""
+        );
+    }
+
+    #[test]
+    fn js_string_literal_cannot_break_out_of_the_literal() {
+        let hostile = "http://x/';alert(1);//\u{2028}\"</script>";
+        let lit = js_string_literal(hostile);
+        assert!(lit.starts_with('"') && lit.ends_with('"'));
+        let body = &lit[1..lit.len() - 1];
+        assert!(!body.contains('\u{2028}'));
+        assert!(!body.contains(['\n', '\r']));
+        assert!(body.contains("\\\""), "inner quote must be escaped: {body}");
+    }
+
+    #[test]
+    fn js_string_literal_empty_is_an_empty_string_literal() {
+        assert_eq!(js_string_literal(""), "\"\"");
+    }
 }

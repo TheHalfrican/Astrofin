@@ -490,6 +490,12 @@ fn rewrite_legacy_paths(
 /// `str::replace` plus the byte offset of every replacement in the result.
 /// Case-insensitive on Windows, where `%APPDATA%` casing is not stable.
 fn replace_all(haystack: &str, needle: &str, replacement: &str) -> (String, Vec<usize>) {
+    // An empty needle matches at every position and would never advance
+    // `rest`. The one caller already refuses it; this keeps the loop safe on
+    // its own terms.
+    if needle.is_empty() {
+        return (haystack.to_string(), Vec::new());
+    }
     let mut out = String::with_capacity(haystack.len());
     let mut sites = Vec::new();
     let mut rest = haystack;
@@ -864,5 +870,273 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("legacy path"))
         );
+    }
+
+    // =================================================================
+    // Hostile legacy profiles
+    // =================================================================
+
+    /// Nothing a legacy tree can be named lets the copy write outside the
+    /// destination: entry names come from `read_dir`, which never yields `..`
+    /// or a separator, and the copy joins nothing else.
+    #[test]
+    fn odd_entry_names_all_land_inside_the_destination() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        let sentinel = tmp.path().join("sentinel");
+        fs::write(&sentinel, "untouched").expect("seed sentinel");
+        let mut names = vec![
+            "..dotdot",
+            "a b",
+            "-dash",
+            "unicode-\u{e9}\u{4e2d}",
+            "very.long.name.with.dots.json",
+        ];
+        if !cfg!(windows) {
+            // Win32 refuses to create these at all.
+            names.push("...");
+            names.push("trailing space ");
+        }
+        for name in &names {
+            write(&legacy.join(name), name);
+        }
+
+        let (counts, _) = run(&legacy, &new_dir);
+
+        assert_eq!(counts.copied, names.len());
+        for name in &names {
+            assert!(new_dir.join(name).is_file(), "{name} missing");
+        }
+        // The only new entry beside the destination is the destination.
+        let mut siblings: Vec<String> = fs::read_dir(tmp.path())
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        siblings.sort();
+        assert_eq!(siblings, ["astrofin", "jellium-desktop", "sentinel"]);
+        assert_eq!(
+            fs::read_to_string(&sentinel).expect("read sentinel"),
+            "untouched"
+        );
+    }
+
+    /// A symlink is recreated, never followed: a link pointing outside the
+    /// profile must not pull its target's tree in, and must not be walked.
+    #[test]
+    fn a_symlink_pointing_outside_the_profile_is_not_followed() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let outside = tmp.path().join("outside");
+        write(&outside.join("secret.txt"), "secret");
+        let legacy = tmp.path().join("jellium-desktop");
+        write(&legacy.join("settings.json"), "{}");
+
+        let link = legacy.join("escape");
+        if symlink_to(Path::new("../outside"), &link, &outside).is_err() {
+            // Windows without Developer Mode: nothing to assert.
+            return;
+        }
+        let new_dir = tmp.path().join("astrofin");
+
+        let (counts, _) = run(&legacy, &new_dir);
+
+        assert!(new_dir.join("settings.json").is_file());
+        // Either the link came across as a link, or it was skipped; what must
+        // never happen is the target's contents being copied in.
+        assert!(!new_dir.join("escape").join("secret.txt").exists());
+        assert_eq!(counts.failed, 0);
+        assert_eq!(
+            fs::read_to_string(outside.join("secret.txt")).expect("read"),
+            "secret"
+        );
+    }
+
+    /// A self-referential symlink would be an infinite walk if links were
+    /// followed. It is copied as a link (or skipped) and the import finishes.
+    #[test]
+    fn a_symlink_cycle_terminates() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        write(&legacy.join("settings.json"), "{}");
+        let link = legacy.join("loop");
+        if symlink_to(Path::new("."), &link, &legacy).is_err() {
+            return;
+        }
+
+        let new_dir = tmp.path().join("astrofin");
+        let (counts, _) = run(&legacy, &new_dir);
+
+        assert!(new_dir.join("settings.json").is_file());
+        assert!(counts.copied >= 1);
+    }
+
+    /// Past `MAX_DEPTH` the walk stops and says so, instead of recursing on.
+    #[test]
+    fn a_tree_deeper_than_the_cap_is_truncated_with_a_warning() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let mut deep = legacy.clone();
+        for level in 0..=(MAX_DEPTH + 2) {
+            deep = deep.join(format!("d{level}"));
+        }
+        write(&deep.join("leaf.txt"), "leaf");
+
+        let (counts, report) = run(&legacy, &tmp.path().join("astrofin"));
+
+        assert!(counts.skipped >= 1);
+        assert!(
+            report
+                .warnings()
+                .iter()
+                .any(|w| w.contains("depth limit reached")),
+            "{:?}",
+            report.warnings()
+        );
+    }
+
+    /// The destination existing *is* the migration marker, and it appears
+    /// only when the staged copy is renamed into place. If somebody wins the
+    /// race for the destination between [`migrate_legacy`]'s existence check
+    /// and the rename, the leg fails whole: the existing profile is left
+    /// alone and no staging directory survives.
+    #[test]
+    fn a_leg_that_cannot_land_leaves_the_winner_alone_and_no_staging() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        write(&legacy.join("settings.json"), "{\"from\":\"legacy\"}");
+        // A populated directory where the destination belongs: renaming onto
+        // it fails on every platform.
+        let new_dir = tmp.path().join("astrofin");
+        write(&new_dir.join("settings.json"), "{\"from\":\"winner\"}");
+
+        let mut report = MigrationReport::default();
+        assert!(
+            copy_leg("config", &legacy, &new_dir, &mut report).is_err(),
+            "the rename onto a populated directory must fail"
+        );
+
+        assert_eq!(
+            fs::read_to_string(new_dir.join("settings.json")).expect("read"),
+            "{\"from\":\"winner\"}",
+            "the existing profile must not be overwritten"
+        );
+        let leftovers: Vec<_> = fs::read_dir(tmp.path())
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".migrating-"))
+            .collect();
+        assert!(leftovers.is_empty(), "left staging dirs: {leftovers:?}");
+    }
+
+    /// Somebody who symlinked (or just nested) the new profile inside the old
+    /// one: the walk must notice the staging directory is its own child and
+    /// not copy it into itself.
+    #[test]
+    fn a_destination_nested_inside_the_source_is_not_copied_into_itself() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        write(&legacy.join("settings.json"), "{}");
+        let new_dir = legacy.join("astrofin");
+
+        let (counts, report) = run(&legacy, &new_dir);
+
+        assert!(new_dir.join("settings.json").is_file());
+        assert!(!new_dir.join("astrofin").exists());
+        assert_eq!(counts.copied, 1);
+        assert!(
+            report
+                .warnings()
+                .iter()
+                .any(|w| w.contains("contains the destination")),
+            "{:?}",
+            report.warnings()
+        );
+    }
+
+    /// A partial import still lands (a half-copied profile beats none) and
+    /// says how to start over.
+    #[test]
+    fn a_partially_skipped_import_lands_and_explains_how_to_retry() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        write(&legacy.join("settings.json"), "{}");
+        write(&legacy.join("SingletonLock"), "pid");
+
+        let (counts, report) = run(&legacy, &new_dir);
+
+        assert_eq!(counts.skipped, 1);
+        assert!(new_dir.join("settings.json").is_file());
+        assert!(
+            report
+                .info_lines()
+                .iter()
+                .any(|l| l.contains("skipped or failed")),
+            "{:?}",
+            report.info_lines()
+        );
+    }
+
+    #[test]
+    fn warnings_are_capped_and_the_rest_counted() {
+        let mut report = MigrationReport::default();
+        for i in 0..MAX_WARNINGS + 5 {
+            report.warn(format!("warning {i}"));
+        }
+        assert_eq!(report.warnings().len(), MAX_WARNINGS);
+        assert_eq!(report.suppressed, 5);
+        assert!(!report.migrated());
+        assert!(report.info_lines().is_empty());
+    }
+
+    /// An empty needle matches everywhere and would never advance the cursor.
+    #[test]
+    fn replace_all_refuses_an_empty_needle_instead_of_looping() {
+        let (out, sites) = replace_all("abc", "", "X");
+        assert_eq!(out, "abc");
+        assert!(sites.is_empty());
+    }
+
+    #[test]
+    fn replace_all_reports_every_site_it_rewrote() {
+        let (out, sites) = replace_all("a/x a/x b", "a/x", "q/y");
+        assert_eq!(out, "q/y q/y b");
+        assert_eq!(sites.len(), 2);
+        assert_eq!(&out[sites[0]..sites[0] + 3], "q/y");
+        assert_eq!(&out[sites[1]..sites[1] + 3], "q/y");
+    }
+
+    /// The rewrite never mistakes an unrelated path for the legacy one.
+    #[test]
+    fn rewrite_leaves_a_config_naming_a_different_directory_alone() {
+        let legacy = Path::new("/base/jellium-desktop");
+        let new_dir = Path::new("/base/astrofin");
+        assert!(rewrite_legacy_paths("a=/base/jellium-other/x\n", legacy, new_dir).is_none());
+        assert!(rewrite_legacy_paths("", legacy, new_dir).is_none());
+    }
+
+    /// `repair_conf_at` reads a file that may be anything at all; none of it
+    /// may panic or rewrite the file.
+    #[test]
+    fn repair_survives_binary_and_oversized_conf_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy = tmp.path().join("jellium-desktop");
+        let new_dir = tmp.path().join("astrofin");
+        let conf = new_dir.join("mpv").join("mpv.conf");
+
+        // Invalid UTF-8: read_to_string fails, and the file is left alone.
+        fs::create_dir_all(conf.parent().expect("parent")).expect("mkdir");
+        fs::write(&conf, [0xff, 0xfe, 0x00, 0x80]).expect("write");
+        let lines = repair_conf_at(&conf, &legacy, &new_dir);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("reading"), "{lines:?}");
+        assert_eq!(fs::read(&conf).expect("read"), [0xff, 0xfe, 0x00, 0x80]);
+
+        // A directory where mpv.conf belongs is not a file: silence.
+        let dir_conf = new_dir.join("mpv").join("as-a-dir.conf");
+        fs::create_dir_all(&dir_conf).expect("mkdir");
+        assert!(repair_conf_at(&dir_conf, &legacy, &new_dir).is_empty());
     }
 }

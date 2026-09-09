@@ -575,7 +575,7 @@ fn init_main_browser(
     let main_layer = unsafe { jfn_cef::browsers::jfn_browsers_create(web_kind.as_ptr()) };
     jfn_cef::business_web::jfn_web_init(main_layer);
 
-    let server_url = jfn_config::server_url();
+    let server_url = startup_server_url(jfn_config::server_url());
     tracing::info!(target: "Main", "[FLOW] CreateBrowser(main) url={server_url}");
     unsafe {
         jfn_cef::client::jfn_cef_layer_create(
@@ -1035,3 +1035,55 @@ unsafe fn run_with_cef(ba: &BootArgs, instance: &Instance) -> c_int {
 static PLATFORM_INITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CEF_INITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static COORD_INITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The URL the main web layer starts on. `settings.json` is hand-editable and
+/// the legacy-profile import copies it verbatim, so the saved server URL is
+/// gated the same way the connect overlay gates a typed one: only http(s)
+/// may load into the layer that carries the native bridge. Anything else
+/// starts on `about:blank`, which shows the connect overlay.
+fn startup_server_url(saved: String) -> String {
+    if saved.is_empty() || jfn_jellyfin::is_http_url(&saved) {
+        saved
+    } else {
+        tracing::warn!(
+            target: "Main",
+            "ignoring saved server URL with a non-http(s) scheme: {saved:?}"
+        );
+        String::new()
+    }
+}
+
+#[cfg(test)]
+mod startup_server_url_tests {
+    use super::startup_server_url;
+
+    #[test]
+    fn startup_server_url_keeps_http_and_https() {
+        assert_eq!(
+            startup_server_url("https://jf.example.com/".into()),
+            "https://jf.example.com/"
+        );
+        assert_eq!(
+            startup_server_url("http://10.0.0.5:8096".into()),
+            "http://10.0.0.5:8096"
+        );
+    }
+
+    #[test]
+    fn startup_server_url_keeps_empty() {
+        assert_eq!(startup_server_url(String::new()), "");
+    }
+
+    #[test]
+    fn startup_server_url_drops_other_schemes() {
+        for bad in [
+            "file:///C:/x.html",
+            "app://resources/about.html",
+            "chrome://gpu",
+            "javascript:1",
+            "//host",
+        ] {
+            assert_eq!(startup_server_url(bad.into()), "", "{bad}");
+        }
+    }
+}

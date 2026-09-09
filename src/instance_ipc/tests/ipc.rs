@@ -205,3 +205,181 @@ fn distinct_instances_are_isolated() {
     assert_eq!(ra, 1);
     assert_eq!(rb, 2);
 }
+
+// =====================================================================
+// Hostile peers
+//
+// The name is reachable by any local process that knows it, so everything
+// below is what such a process can do to the running app: a frame that never
+// ends, a message of the wrong shape, a connection it never uses, a crowd.
+// The invariant in every case is that the listener keeps serving.
+// =====================================================================
+
+#[derive(Debug, Serialize)]
+struct WrongShape {
+    payload: u32,
+}
+
+/// One well-formed exchange, used after each hostile one to prove the
+/// listener survived it.
+fn still_serving(rt: &Runtime, instance: &Instance) {
+    let len = rt.block_on(async {
+        let mut stream = Stream::connect(instance).await.unwrap();
+        stream
+            .send(&Req {
+                payload: "still here".into(),
+            })
+            .await
+            .unwrap();
+        stream.recv::<Resp>().await.unwrap().unwrap().len
+    });
+    assert_eq!(len, 10);
+}
+
+#[test]
+fn the_listener_name_is_derived_from_the_instance_id() {
+    let (_dir, instance) = scratch_instance();
+    let name = jfn_instance_ipc::Name::for_instance(&instance).unwrap();
+    let text = name.path().to_string_lossy().into_owned();
+    assert!(text.contains(&instance.id().to_string()), "{text}");
+    assert!(text.contains("astrofin"), "{text}");
+
+    let (_other_dir, other) = scratch_instance();
+    assert_ne!(
+        jfn_instance_ipc::Name::for_instance(&other).unwrap().path(),
+        name.path()
+    );
+}
+
+#[test]
+fn ping_is_answered_with_pong() {
+    use jfn_instance_ipc::jfn::{Request, Response};
+
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, jfn_instance_ipc::jfn::handle);
+    let answer = rt.block_on(async {
+        let mut stream = Stream::connect(&instance).await.unwrap();
+        stream.send(&Request::Ping).await.unwrap();
+        stream.recv::<Response>().await.unwrap()
+    });
+    assert!(matches!(answer, Some(Response::Pong)));
+}
+
+/// A peer that writes past the frame cap is cut off. Without the cap it could
+/// spend the app's memory one buffer at a time.
+#[test]
+fn an_oversized_frame_closes_the_connection_and_nothing_else() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+
+    rt.block_on(async {
+        let mut stream = Stream::connect(&instance).await.unwrap();
+        let payload = "x".repeat(jfn_instance_ipc::MAX_FRAME_BYTES * 2);
+        // The write itself may fail once the peer hangs up mid-frame.
+        let _ = stream.send(&Req { payload }).await;
+        let answered = stream.recv::<Resp>().await;
+        assert!(
+            !matches!(answered, Ok(Some(_))),
+            "an oversized frame was answered"
+        );
+    });
+
+    still_serving(&rt, &instance);
+}
+
+/// The largest frame that is still inside the cap goes through, so the cap is
+/// a cap and not a smaller de-facto limit.
+#[test]
+fn a_frame_just_inside_the_cap_is_answered() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+    // `{"payload":"…"}` plus the newline is 15 bytes of framing.
+    let payload = "x".repeat(jfn_instance_ipc::MAX_FRAME_BYTES - 32);
+    let want = payload.len();
+    let len = rt.block_on(async {
+        let mut stream = Stream::connect(&instance).await.unwrap();
+        stream.send(&Req { payload }).await.unwrap();
+        stream.recv::<Resp>().await.unwrap().unwrap().len
+    });
+    assert_eq!(len, want);
+}
+
+#[test]
+fn a_message_of_the_wrong_shape_closes_the_connection_and_nothing_else() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+
+    rt.block_on(async {
+        let mut stream = Stream::connect(&instance).await.unwrap();
+        stream.send(&WrongShape { payload: 42 }).await.unwrap();
+        let answered = stream.recv::<Resp>().await;
+        assert!(
+            !matches!(answered, Ok(Some(_))),
+            "a wrong-shaped message was answered"
+        );
+    });
+
+    still_serving(&rt, &instance);
+}
+
+/// A client that opens the connection and then goes quiet must not stop the
+/// accept loop from serving anybody else.
+#[test]
+fn a_client_that_never_sends_blocks_nobody() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+
+    let _silent = rt.block_on(Stream::connect(&instance)).unwrap();
+
+    still_serving(&rt, &instance);
+}
+
+/// Same for a client that hangs up without saying anything.
+#[test]
+fn a_client_that_disconnects_immediately_blocks_nobody() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+
+    for _ in 0..8 {
+        drop(rt.block_on(Stream::connect(&instance)).unwrap());
+    }
+
+    still_serving(&rt, &instance);
+}
+
+#[test]
+fn many_concurrent_clients_are_all_answered() {
+    let rt = rt();
+    let (_dir, instance) = scratch_instance();
+    let _listener = serving(&rt, &instance, echo_len);
+
+    let mut answers = rt.block_on(async {
+        let mut tasks = Vec::new();
+        for i in 0..32usize {
+            tasks.push(tokio::spawn(async move {
+                let mut stream = Stream::connect(&instance).await.unwrap();
+                stream
+                    .send(&Req {
+                        payload: "y".repeat(i),
+                    })
+                    .await
+                    .unwrap();
+                stream.recv::<Resp>().await.unwrap().unwrap().len
+            }));
+        }
+        let mut answers = Vec::new();
+        for task in tasks {
+            answers.push(task.await.unwrap());
+        }
+        answers
+    });
+
+    answers.sort_unstable();
+    assert_eq!(answers, (0..32usize).collect::<Vec<_>>());
+}

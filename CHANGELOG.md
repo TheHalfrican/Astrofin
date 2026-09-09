@@ -5,6 +5,33 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Security
+- Audit of the untrusted-input surfaces (docs/test-plan.md phase 1), with
+  tests pinning each fix:
+  - Only `http(s)` URLs may load into the main web layer, be saved as the
+    server URL, be probed by the connect overlay, or be handed to mpv as a
+    media/track URL. `file://`, `app://`, `chrome://` and friends were
+    accepted before, and the main layer carries the native bridge.
+  - The saved server URL and the settings blob are now spliced into the
+    injected shim as escaped JS literals; a quote in either could run
+    script in the renderer.
+  - Every `jmpNative` argument is bounds-checked before it is read from the
+    CEF list (a zero-argument `playerLoad` read past the end).
+  - The connect-overlay probe body is capped at 64 KiB and results are bound
+    to the request that started them; `//web` inside a host name no longer
+    collapses the base URL.
+  - Log redaction now covers every occurrence on a line, is case-insensitive,
+    and knows `X-Emby-Token`, `Authorization: MediaBrowser ... Token=`,
+    `Bearer`, pretty-printed JSON tokens, passwords and URL userinfo. Log
+    files are created owner-only on Unix.
+  - Second-instance frames are capped at 64 KiB (an endless line grew the
+    process without bound); instance ids are validated before they become a
+    pipe or socket name; an empty `--config-dir` no longer splits the profile
+    between the browser and CEF helper processes.
+  - A `settings.json` that fails to parse as a whole (duplicate key,
+    out-of-range number) is logged at warn instead of silently resetting
+    every setting.
+
 ### Added
 - Test-suite tooling (docs/test-plan.md): `cargo xtask test-ratio` measures
   tests per public function with an explicit exemption list for platform glue
