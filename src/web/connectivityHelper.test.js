@@ -158,4 +158,82 @@ test('the module installs both halves of the bridge on window', () => {
     assert.strictEqual(win.jmpCheckServerConnectivity, check);
     assert.strictEqual(typeof check.abort, 'function');
     assert.strictEqual(typeof win._onServerConnectivityResult, 'function');
+    assert.strictEqual(check.onNotice, null, 'no hook until the screen sets one');
+});
+
+// ---- native's fourth slot -------------------------------------------------
+//
+// Native answers `serverConnectivityResult` with a fourth string: a notice key
+// on success, a failure message on failure. Both shapes the owner requires to
+// keep working (a raw IP:port and a tailnet name, both plain http) come back
+// through this path, so they are what the tests probe with.
+
+const IP_PORT = 'http://192.168.1.10:8096';
+const TAILNET = 'http://thehalfrican-truenas.tail1cdca8.ts.net:8096';
+
+test('a notice on a successful probe reaches the hook, not the promise', async () => {
+    const { win, check, result } = load();
+    const seen = [];
+    check.onNotice = (key) => seen.push(key);
+
+    // Bare IP:port, https attempt failed, native connected over plain http.
+    const pending = check('192.168.1.10:8096');
+    await settle(win);
+    result('192.168.1.10:8096', true, IP_PORT, 'insecure-http');
+
+    assert.strictEqual(await pending, IP_PORT, 'the resolve value is still the url');
+    assert.deepStrictEqual(seen, ['insecure-http']);
+});
+
+test('a tailnet address over plain http resolves exactly as it always did', async () => {
+    const { win, check, result } = load();
+    const seen = [];
+    check.onNotice = (key) => seen.push(key);
+
+    // A typed `http://` scheme: native never tries https, so no notice.
+    const pending = check(TAILNET);
+    await settle(win);
+    result(TAILNET, true, TAILNET, '');
+
+    assert.strictEqual(await pending, TAILNET);
+    assert.deepStrictEqual(seen, [], 'a typed scheme is the user’s own choice');
+});
+
+test('a success with no hook installed still resolves', async () => {
+    const { win, check, result } = load();
+    const pending = check('192.168.1.10:8096');
+    await settle(win);
+    assert.doesNotThrow(() => result('192.168.1.10:8096', true, IP_PORT, 'insecure-http'));
+    assert.strictEqual(await pending, IP_PORT);
+});
+
+test('a failure detail from native becomes the rejection message', async () => {
+    const { win, check, result } = load();
+    const pending = check('192.168.1.10:8096');
+    await settle(win);
+    result('192.168.1.10:8096', false, '192.168.1.10:8096',
+        'server redirected to https://jf.example.com; enter that address instead');
+    const err = await pending.then(() => null, (e) => e);
+    assert.match(err.message, /server redirected to https:\/\/jf\.example\.com/);
+    assert.strictEqual(err.detail, err.message, 'a native reason is flagged as one');
+});
+
+test('a failure with no detail keeps the generic message and no detail flag', async () => {
+    const { win, check, result } = load();
+    const pending = check(IP_PORT);
+    await settle(win);
+    result(IP_PORT, false, IP_PORT, '');
+    const err = await pending.then(() => null, (e) => e);
+    assert.strictEqual(err.message, 'Connection failed');
+    assert.strictEqual(err.detail, undefined);
+});
+
+test('a cancellation is flagged so it is never mistaken for a native reason', async () => {
+    const { win, check } = load();
+    const pending = check(IP_PORT);
+    await settle(win);
+    check.abort();
+    const err = await pending.then(() => null, (e) => e);
+    assert.strictEqual(err.cancelled, true);
+    assert.strictEqual(err.detail, undefined);
 });

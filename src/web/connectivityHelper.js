@@ -4,16 +4,32 @@ window.jmpCheckServerConnectivity = (() => {
     let pendingReject = null;
     let pendingUrl = null;
 
-    // Called by native code when result is ready
-    window._onServerConnectivityResult = (url, success, resolvedUrl) => {
-        console.debug('Connectivity result:', url, success, resolvedUrl);
+    // Called by native code when result is ready.
+    //
+    // `detail` is native's fourth slot: on success a notice key for the
+    // connect screen ('insecure-http' when the address was typed without a
+    // scheme, the https attempt failed and the connection is therefore plain
+    // http), on failure a message to show instead of the generic one (a
+    // refused redirect names the address to enter instead). Empty for
+    // everything that needs no comment.
+    window._onServerConnectivityResult = (url, success, resolvedUrl, detail) => {
+        console.debug('Connectivity result:', url, success, resolvedUrl, detail);
         // `pendingUrl` starts as null, so a null-url result would match on its
         // own and call a resolver that is not there yet.
         if (pendingUrl === url && pendingResolve) {
             if (success) {
+                // The note is delivered beside the promise, not through it:
+                // the resolve value stays the URL the caller saves.
+                if (detail && typeof checkFunc.onNotice === 'function') {
+                    checkFunc.onNotice(detail);
+                }
                 pendingResolve(resolvedUrl);
             } else {
-                pendingReject(new Error('Connection failed'));
+                const failure = new Error(detail || 'Connection failed');
+                // Only a reason native actually gave; the connect screen
+                // shows its own localised text for a plain failure.
+                if (detail) failure.detail = detail;
+                pendingReject(failure);
             }
             pendingResolve = null;
             pendingReject = null;
@@ -42,12 +58,22 @@ window.jmpCheckServerConnectivity = (() => {
         });
     };
 
+    // Set by the connect screen to hear about a successful probe that came
+    // with something to say (today: the plain-http fallback). Never called
+    // for a probe that has nothing to report.
+    checkFunc.onNotice = null;
+
     checkFunc.abort = () => {
         if (window.jmpNative?.cancelServerConnectivity) {
             window.jmpNative.cancelServerConnectivity();
         }
         if (pendingReject) {
-            pendingReject(new Error('Connection cancelled'));
+            const cancelled = new Error('Connection cancelled');
+            // The connect screen must never report a user cancel as a
+            // failure; the flag says so without matching on the message,
+            // which a native detail string could otherwise collide with.
+            cancelled.cancelled = true;
+            pendingReject(cancelled);
             pendingResolve = null;
             pendingReject = null;
             pendingUrl = null;

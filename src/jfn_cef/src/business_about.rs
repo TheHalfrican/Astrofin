@@ -9,6 +9,7 @@
 
 use cef::{ImplBrowser, ImplBrowserHost};
 use std::os::raw::c_void;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -88,31 +89,122 @@ fn handle_message(message: BrowserMessage) -> bool {
         }
         "aboutOpenPath" => {
             let Some(args) = args else { return true };
-            if let Some(url) = about_open_path_url(&list_string(args, 0))
-                && let Some(p) = platform_ops::ops()
-            {
-                p.open_external_url(&url);
-            }
+            open_about_path(&list_string(args, 0));
             true
         }
         _ => false,
     }
 }
 
-/// The `file://` URL `aboutOpenPath` hands to the desktop's URL handler, or
-/// `None` for an empty path.
+/// Hand one About-box path to the desktop's file manager, or refuse it.
 ///
-/// Only the about layer binds `aboutOpenPath` (see
-/// `injection::ABOUT_FUNCTIONS`), and that layer only ever loads
-/// `app://resources/about.html`, so the path is one of the two the About box
-/// itself renders — not a value a jellyfin-web page can choose. The string is
-/// passed through unchanged: nothing here percent-encodes it, so a path
-/// containing `?`, `#` or a space reaches the handler as written.
-fn about_open_path_url(path: &str) -> Option<String> {
-    if path.is_empty() {
+/// Two rules, both new as of 2026-09-10:
+///   - the path goes to [`Platform::open_path`], which every backend
+///     implements as one `Command`/`ShellExecuteW` argument. Nothing builds a
+///     `file://` URL out of it any more, and nothing invokes a shell, so a
+///     path containing a space, `&`, `#`, a quote or a `;` is opened as
+///     written rather than parsed;
+///   - only a path under the config dir, the cache dir or the log file's own
+///     directory may be opened at all. The About box offers exactly two, but
+///     `aboutOpenPath` is an IPC name, and a bound IPC is a capability.
+fn open_about_path(path: &str) {
+    let roots = openable_roots();
+    let Some(target) = allowed_open_path(path, &roots) else {
+        jfn_logging::log(
+            jfn_logging::CATEGORY_CEF,
+            jfn_logging::LEVEL_WARN,
+            &format!(
+                "aboutOpenPath: refused {} (not under the config, cache or log directory)",
+                jfn_logging::escape_page_string(path)
+            ),
+        );
+        return;
+    };
+    if let Some(p) = platform_ops::ops() {
+        p.open_path(&target);
+    }
+}
+
+/// The directories `aboutOpenPath` may open something inside: the config dir,
+/// the cache dir, and the directory holding the log file actually in use
+/// (which `--log-file` can move anywhere).
+fn openable_roots() -> Vec<PathBuf> {
+    let mut roots = vec![
+        absolutise(jfn_paths::config_dir()),
+        absolutise(jfn_paths::cache_dir()),
+        absolutise(jfn_paths::log_dir()),
+    ];
+    let active = jfn_logging::active_path();
+    if !active.is_empty()
+        && let Some(dir) = absolutise(PathBuf::from(active)).parent()
+    {
+        roots.push(dir.to_path_buf());
+    }
+    roots
+}
+
+/// Absolute-but-not-resolved, matching `resource::abs_path`: a relative path
+/// is joined onto the cwd, symlinks and `..` are left alone (the caller
+/// rejects `..` outright).
+fn absolutise(p: PathBuf) -> PathBuf {
+    if p.is_absolute() {
+        return p;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(p),
+        Err(_) => p,
+    }
+}
+
+/// True when `path` is `root` or lies inside it, compared component by
+/// component (case-insensitively on Windows, where the filesystem is).
+fn is_under(path: &Path, root: &Path) -> bool {
+    let mut root_components = root.components();
+    let mut path_components = path.components();
+    loop {
+        match (root_components.next(), path_components.next()) {
+            (None, _) => return true,
+            (Some(_), None) => return false,
+            (Some(r), Some(p)) => {
+                let same = if cfg!(windows) {
+                    r.as_os_str()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&p.as_os_str().to_string_lossy())
+                } else {
+                    r == p
+                };
+                if !same {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+/// The path `aboutOpenPath` may open, or `None` when it is refused.
+///
+/// Pure so the rule can be tested without a profile: `roots` is what
+/// [`openable_roots`] resolves at runtime. A path must be non-empty,
+/// absolute, free of `..` components and of interior NULs, and inside one of
+/// the roots.
+fn allowed_open_path(path: &str, roots: &[PathBuf]) -> Option<PathBuf> {
+    if path.is_empty() || path.contains('\0') {
         return None;
     }
-    Some(format!("file://{path}"))
+    let candidate = Path::new(path);
+    if !candidate.is_absolute() {
+        return None;
+    }
+    if candidate
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return None;
+    }
+    roots
+        .iter()
+        .any(|root| is_under(candidate, root))
+        .then(|| candidate.to_path_buf())
 }
 
 #[cfg(test)]
@@ -121,29 +213,118 @@ mod tests {
 
     use super::*;
 
+    #[cfg(windows)]
+    fn roots() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from(r"C:\Users\x\AppData\Roaming\astrofin"),
+            PathBuf::from(r"C:\Users\x\AppData\Local\astrofin"),
+        ]
+    }
+
+    #[cfg(not(windows))]
+    fn roots() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from("/home/x/.config/astrofin"),
+            PathBuf::from("/home/x/.cache/astrofin"),
+        ]
+    }
+
+    #[cfg(windows)]
+    const INSIDE: &str = r"C:\Users\x\AppData\Roaming\astrofin\mpv";
+    #[cfg(not(windows))]
+    const INSIDE: &str = "/home/x/.config/astrofin/mpv";
+
     #[test]
-    fn about_open_path_url_prefixes_the_file_scheme() {
+    fn allowed_open_path_accepts_a_path_inside_a_root_and_the_root_itself() {
         assert_eq!(
-            about_open_path_url("C:\\Users\\x\\AppData\\Roaming\\astrofin").as_deref(),
-            Some("file://C:\\Users\\x\\AppData\\Roaming\\astrofin")
+            allowed_open_path(INSIDE, &roots()),
+            Some(PathBuf::from(INSIDE))
+        );
+        let root = roots()[0].clone();
+        assert_eq!(
+            allowed_open_path(&root.to_string_lossy(), &roots()),
+            Some(root)
         );
     }
 
     #[test]
-    fn about_open_path_url_ignores_an_empty_path() {
-        // What a zero-argument `jmpNative.aboutOpenPath()` produces.
-        assert_eq!(about_open_path_url(""), None);
+    fn allowed_open_path_refuses_anything_outside_the_roots() {
+        // The About box offers two paths; `aboutOpenPath` is an IPC name, and
+        // a bound IPC is a capability. Everything else is refused.
+        #[cfg(windows)]
+        let outside = [
+            r"C:\Windows\System32\cmd.exe",
+            r"C:\Users\x\Desktop\evil.exe",
+            r"C:\Users\x\AppData\Roaming\astrofin-not-ours\x",
+        ];
+        #[cfg(not(windows))]
+        let outside = [
+            "/etc/passwd",
+            "/home/x/Desktop/evil.sh",
+            "/home/x/.config/astrofin-not-ours/x",
+        ];
+        for bad in outside {
+            assert_eq!(allowed_open_path(bad, &roots()), None, "{bad}");
+        }
     }
 
     #[test]
-    fn about_open_path_url_does_not_sanitise_the_path() {
-        // Pinned as a known gap, not as desired behaviour: the string is
-        // spliced into a URL with no percent-encoding and no traversal check.
-        for raw in ["../../evil.exe", "a b#c?d", "\u{2028}", "x\"y"] {
-            assert_eq!(
-                about_open_path_url(raw).as_deref(),
-                Some(format!("file://{raw}").as_str())
-            );
+    fn allowed_open_path_refuses_traversal_relative_paths_and_degenerate_input() {
+        let mut bad = vec![
+            String::new(),
+            "  ".to_string(),
+            "relative/path".to_string(),
+            format!("{INSIDE}\0/etc/passwd"),
+        ];
+        // `..` is refused even when the string still starts inside a root:
+        // the prefix check is lexical, so it must not be walked past.
+        bad.push(format!("{INSIDE}/../../../../etc/passwd"));
+        for path in &bad {
+            assert_eq!(allowed_open_path(path, &roots()), None, "{path:?}");
         }
+    }
+
+    #[test]
+    fn allowed_open_path_does_not_mangle_a_shell_metacharacter() {
+        // Nothing invokes a shell any more: the path is one argument, so a
+        // space, `&`, `;`, `#` or a quote survives verbatim into `open`.
+        let hostile = format!("{INSIDE}/a b&c;d#e\"f");
+        assert_eq!(
+            allowed_open_path(&hostile, &roots()),
+            Some(PathBuf::from(&hostile))
+        );
+    }
+
+    #[test]
+    fn is_under_needs_a_whole_component_to_match() {
+        assert!(is_under(Path::new(INSIDE), &roots()[0]));
+        assert!(!is_under(&roots()[0], Path::new(INSIDE)));
+    }
+
+    #[test]
+    fn openable_roots_lists_the_config_cache_and_log_directories() {
+        let roots = openable_roots();
+        assert!(roots.len() >= 3);
+        assert!(roots.iter().all(|r| r.is_absolute()), "{roots:?}");
+        assert!(roots.contains(&absolutise(jfn_paths::config_dir())));
+        assert!(roots.contains(&absolutise(jfn_paths::cache_dir())));
+    }
+
+    #[test]
+    fn absolutise_leaves_an_absolute_path_alone() {
+        let abs = PathBuf::from(INSIDE);
+        assert_eq!(absolutise(abs.clone()), abs);
+        assert!(absolutise(PathBuf::from("rel")).is_absolute());
+    }
+
+    #[test]
+    fn open_about_path_refuses_a_path_outside_the_roots_without_panicking() {
+        // No platform installed in this test, so the accepted branch is a
+        // no-op; what matters is that neither branch panics.
+        open_about_path("");
+        #[cfg(windows)]
+        open_about_path(r"C:\Windows\System32\cmd.exe");
+        #[cfg(not(windows))]
+        open_about_path("/etc/passwd");
     }
 }

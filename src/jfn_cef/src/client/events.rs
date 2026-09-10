@@ -32,7 +32,7 @@ impl Inner {
             self.name_str(),
             if is_main { 1 } else { 0 },
             code,
-            url,
+            jfn_logging::escape_page_string(url),
         );
         jfn_logging::log(
             jfn_logging::CATEGORY_CEF,
@@ -50,9 +50,9 @@ impl Inner {
         let formatted = format!(
             "OnLoadError name={} url={} error={} {}",
             self.name_str(),
-            url,
+            jfn_logging::escape_page_string(url),
             code,
-            text,
+            jfn_logging::escape_page_string(text),
         );
         jfn_logging::log(
             jfn_logging::CATEGORY_CEF,

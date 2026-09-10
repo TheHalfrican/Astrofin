@@ -33,6 +33,43 @@ function cancellableDelay(ms, label) {
     });
 }
 
+// The one-line, non-blocking note under the address field. Native sends the
+// 'insecure-http' key when the address was typed without a scheme, the https
+// attempt failed and the connection is therefore unencrypted; nothing else
+// raises a note today.
+const NOTICE_TEXT = {
+    'insecure-http': 'Not encrypted: this connection uses plain http.'
+};
+
+// Set (or clear, with '') the note. The element is created on demand so the
+// screen works whether or not overlay.html already carries it.
+function setConnectNote(text) {
+    let el = document.getElementById('connect-note');
+    if (!el) {
+        el = document.createElement('p');
+        el.id = 'connect-note';
+        el.className = 'af-note';
+        el.setAttribute('role', 'status');
+        const card = document.querySelector('.af-card') || document.body;
+        card.appendChild(el);
+    }
+    // `.af-note:empty` is display:none, so clearing the text hides the line.
+    el.textContent = text || '';
+    return el;
+}
+
+// Native's notice key -> the line the user sees. An unknown key is ignored
+// rather than shown raw.
+function showConnectNotice(key) {
+    setConnectNote(NOTICE_TEXT[key] || '');
+}
+
+// A probe that ends with a note tells us through the helper, not through the
+// promise: the resolve value stays the URL to save.
+if (window.jmpCheckServerConnectivity) {
+    window.jmpCheckServerConnectivity.onNotice = showConnectNotice;
+}
+
 async function tryConnect(server, spinnerStartTime = Date.now()) {
     try {
         console.debug("Checking connectivity to:", server);
@@ -81,14 +118,21 @@ async function tryConnect(server, spinnerStartTime = Date.now()) {
         }
         return true;
     } catch (e) {
-        if (/cancel/i.test(e && e.message)) {
+        if ((e && e.cancelled) || /cancel/i.test(e && e.message)) {
             console.debug("Connection cancelled");
         } else {
             console.error("Server connectivity check failed:", e);
+            // A refused redirect names the address to enter instead; anything
+            // else falls back to the generic dialog text.
+            lastFailureMessage = (e && e.detail) || '';
         }
         return false;
     }
 }
+
+// The message the failure dialog shows, when native gave a specific one.
+// Reset at the start of every attempt so a stale reason is never re-shown.
+let lastFailureMessage = '';
 
 let isConnecting = false;
 // Set by cancelConnection so the "connect failed" dialog is not raised for a
@@ -120,7 +164,7 @@ const cancelOnEscape = (e) => {
     }
 };
 
-const showConnectionFailedDialog = () => {
+const showConnectionFailedDialog = (detail) => {
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
     dialog.setAttribute('role', 'alertdialog');
@@ -135,7 +179,9 @@ const showConnectionFailedDialog = () => {
     header.innerText = headerConnectionFailureText;
 
     const message = document.createElement('div');
-    message.innerText = messageUnableToConnectToServerText;
+    // A reason native gave (a refused redirect names the address to enter
+    // instead) beats the generic, translated line.
+    message.innerText = detail || messageUnableToConnectToServerText;
     message.className = 'dialog-message';
 
     const button = document.createElement('button');
@@ -178,6 +224,9 @@ const startConnecting = async () => {
     // Show connecting UI
     isConnecting = true;
     userCancelled = false;
+    // A note or a reason from a previous attempt says nothing about this one.
+    lastFailureMessage = '';
+    setConnectNote('');
     // The URL under the orbit is the only feedback about *what* we are
     // reaching for; it needs no translation.
     status.textContent = server;
@@ -199,7 +248,7 @@ const startConnecting = async () => {
         if (userCancelled) {
             address.focus();
         } else {
-            showConnectionFailedDialog();
+            showConnectionFailedDialog(lastFailureMessage);
         }
     }
 };
@@ -275,7 +324,11 @@ if (typeof module !== 'undefined' && module.exports) {
         setState,
         updateButtonState,
         showConnectionFailedDialog,
-        state: () => ({ isConnecting, mainLoaded, userCancelled, savedServerUrl })
+        setConnectNote,
+        showConnectNotice,
+        state: () => ({
+            isConnecting, mainLoaded, userCancelled, savedServerUrl, lastFailureMessage
+        })
     };
 }
 

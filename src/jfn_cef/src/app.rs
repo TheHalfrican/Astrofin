@@ -7,6 +7,7 @@ use cef::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
+use crate::bridge_gate;
 use crate::cef_string::userfree_to_string;
 use crate::embedded_css;
 use crate::embedded_js;
@@ -224,7 +225,10 @@ wrap_render_process_handler! {
             };
             let Some(profile) = profile else { return };
 
-            inject_jmp_native(browser, &profile, ctx);
+            let frame_url = userfree_to_string(&frame.url());
+            if bridge_allowed_for(&frame_url) {
+                inject_jmp_native(browser, &profile, ctx);
+            }
             PaintScheduler::on_context_created(profile.shared_textures_enabled(), frame);
             run_user_scripts(&profile, frame);
         }
@@ -251,11 +255,19 @@ wrap_render_process_handler! {
                     let Some(args) = args else { return 1 };
                     let url = userfree_to_string(&args.string(0));
                     let ok = args.bool(1) != 0;
-                    let detail = userfree_to_string(&args.string(2));
+                    let resolved = userfree_to_string(&args.string(2));
+                    // Slot 3: a notice key on success, a message on failure.
+                    // Older payloads have no slot 3, which reads as "".
+                    let detail = userfree_to_string(&args.string(3));
                     call_js_global_string(
                         frame,
                         "_onServerConnectivityResult",
-                        &[Arg::Str(&url), Arg::Bool(ok), Arg::Str(&detail)],
+                        &[
+                            Arg::Str(&url),
+                            Arg::Bool(ok),
+                            Arg::Str(&resolved),
+                            Arg::Str(&detail),
+                        ],
                     );
                     1
                 }
@@ -517,6 +529,48 @@ fn collect_popup_options(frame: &Frame) -> PopupOptions {
         anchor,
     }
 }
+
+/// Whether the top frame now at `frame_url` may be given `window.jmpNative`,
+/// and the one warn line per refused origin.
+///
+/// The saved server can change while the renderer is alive (`saveServerUrl`,
+/// then a `navigateMain` to the new origin), and a dedicated renderer process
+/// only read `settings.json` when it started. So a mismatch is re-checked
+/// against a fresh read of the file before the bridge is refused — but only in
+/// a dedicated renderer process: in the single-process build (macOS) the store
+/// this would reload is the browser process's own live one, and re-reading it
+/// would discard settings whose async save has not landed yet.
+fn bridge_allowed_for(frame_url: &str) -> bool {
+    ensure_renderer_settings_loaded();
+    if bridge_gate::bridge_allowed(frame_url, &jfn_config::server_url()) {
+        return true;
+    }
+    if is_dedicated_renderer_process()
+        && jfn_config::settings_load()
+        && bridge_gate::bridge_allowed(frame_url, &jfn_config::server_url())
+    {
+        return true;
+    }
+    let origin = bridge_gate::refusal_label(frame_url);
+    if bridge_gate::refused_origin_is_new(&origin) {
+        jfn_logging::log(
+            jfn_logging::CATEGORY_CEF,
+            jfn_logging::LEVEL_WARN,
+            &format!("jmpNative withheld: {origin} is not the saved server's origin"),
+        );
+    }
+    false
+}
+
+/// True in a CEF child process (`--type=renderer`, ...). False in the browser
+/// process, which is also the renderer in the `--single-process` build.
+fn is_dedicated_renderer_process() -> bool {
+    command_line_get_global()
+        .is_some_and(|cl| cl.has_switch(Some(&CefString::from(PROCESS_TYPE_SWITCH))) == 1)
+}
+
+/// Chromium's own name for the switch that names a child process's role.
+const PROCESS_TYPE_SWITCH: &str = "type";
 
 fn inject_jmp_native(browser: &mut Browser, profile: &ExtraInfo, context: &mut V8Context) {
     let Some(global) = context.global() else {

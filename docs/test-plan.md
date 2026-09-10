@@ -209,19 +209,55 @@ body and stale probe results; the `//web` base-URL collapse; redaction
 gaps; log file mode; unbounded instance-ipc frames; instance-id validation;
 empty `--config-dir`; silent settings reset (now logged).
 
+Decided and fixed 2026-09-10 (the owner's calls; every change was tested
+against both a raw `http://IP:port` server and a `http://<name>.ts.net:8096`
+tailnet server, which must keep working exactly as before):
+
+- **Probe redirects are bound to the host that was asked for.**
+  `jfn_jellyfin::classify_probe_redirect` follows a chain only while it stays
+  on the same host (case-insensitively) and either keeps the scheme and port
+  or upgrades `http` to `https` on any port; the saved URL is then the one
+  that was asked for, except for that upgrade, where the upgraded URL is
+  saved. Anything else fails the probe with
+  `server redirected to <origin>; enter that address instead`, which the
+  connect screen shows in place of its generic text.
+- **A bare host tries https first, silently, and says so when it falls back.**
+  `jfn_jellyfin::probe_candidates` yields `https://host` then `http://host`
+  for an address typed with no scheme (a typed scheme is never rewritten, so
+  a typed `http://` never attempts https). The https attempt is time-boxed at
+  2 s (`HTTPS_ATTEMPT_TIMEOUT_MS`) and every way it can fail — TLS error,
+  refused, reset, timeout — is swallowed. When the http attempt is the one
+  that lands, native sends the `insecure-http` notice and `overlay.js` shows
+  one non-blocking line: "Not encrypted: this connection uses plain http."
+- **`aboutOpenPath` no longer builds a URL and never sees a shell.** It calls
+  `Platform::open_path`, which every backend implements as one
+  `Command`/`ShellExecuteW` argument, and only for a path that is absolute,
+  free of `..`, and under the config dir, the cache dir or the log file's own
+  directory; anything else is refused and logged. (The macOS opener stays in
+  `src/macos`, untouched — the fix routes through the platform trait.)
+- **`jmpNative` is bound per origin.** `jfn_cef::bridge_gate` hands the bridge
+  to a top frame only when its origin equals the saved server's (scheme, host
+  case-insensitively, port with defaults filled in) or the page is one of the
+  app's own (`app://…`, `about:blank`). Every other origin gets no bridge and
+  one warn line. `navigateMain` now saves `settings.json` synchronously so a
+  renderer process spawned by that navigation sees the new server URL.
+- **Page strings are escaped before they reach a log line.**
+  `jfn_logging::escape_page_string` turns newlines and C0/DEL into `\n`,
+  `\r`, `\t`, `\xNN`, doubles backslashes and caps the length; it is applied
+  to every URL, title, console message and IPC argument that is formatted
+  into a record.
+- **`openConfigDir` and `appExit` are throttled to one per 250 ms.**
+  `jfn_cef::rate_gate::RateGate` is the pure rule (window, last accepted,
+  now); the caller supplies the monotonic reading. One gate per command, so
+  neither eats the other's allowance. `setSettingValue` is deliberately left
+  alone: the settings page writes several keys in a burst.
+
 Recorded, needing a design decision before they change behaviour:
 
-- Probe redirects: the connect overlay saves and navigates to whatever host
-  a redirect chain ends on; the response is not bound to the host asked for.
-- Plain `http://` is the default for a bare host, with no warning that the
-  token then travels in clear.
-- `aboutOpenPath` launches the path through the shell unescaped; only the
-  about layer binds it and there is no `OnBeforeBrowse` handler pinning
-  which URLs a layer may navigate to.
-- `jmpNative` is bound per browser, not per origin, so any document the
-  main layer lands on gets the player IPC surface.
-- Handler log lines embed page strings without newline escaping.
-- `openConfigDir`, `appExit` and `setSettingValue` are unthrottled.
+- There is still no `OnBeforeBrowse` handler pinning which URLs a layer may
+  navigate to. The per-origin `jmpNative` gate above removes the consequence
+  that mattered (a document the main layer wanders onto no longer gets the
+  IPC surface), but the navigation itself is still unconstrained.
 - instance-ipc: no backoff on a persistent `accept()` error, no cap on
   concurrent connections or idle timeout, and `Drop` does not wake a
   `serve` task blocked in `recv`.

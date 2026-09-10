@@ -25,7 +25,10 @@ use crate::client::{
 };
 use crate::ipc::{BrowserMessage, list_opt_string, list_string, send_to_renderer};
 use jfn_color::theme::jfn_theme_color_on_overlay_dismissed;
-use jfn_jellyfin::{extract_base_url, is_http_url, is_valid_public_info, normalize_input};
+use jfn_jellyfin::{
+    RedirectDecision, classify_probe_redirect, extract_base_url, is_http_url, is_valid_public_info,
+    redirect_refused_message,
+};
 
 struct OverlayState {
     main_layer: Arc<Inner>,
@@ -66,12 +69,48 @@ fn append_capped(body: &mut Vec<u8>, data: &[u8], cap: usize) -> bool {
     take == data.len()
 }
 
-/// The URL a `checkServerConnectivity` request should actually fetch, or
-/// `None` when the input is not something this client will send a request to.
-fn probe_url(user_input: &str) -> Option<String> {
-    let normalized = normalize_input(user_input);
-    is_http_url(&normalized).then_some(normalized)
+/// How long the speculative `https` attempt for a bare host gets before it is
+/// abandoned for `http`. The probe has no timeout of its own, so this is the
+/// shorter of the two the decision allows.
+///
+/// It only has to cover the common failure shapes — a TLS handshake against a
+/// plain-http port, a refused connection, a reset — which all answer in
+/// milliseconds on a LAN or a tailnet. It exists for the one that does not: a
+/// port that silently drops packets.
+const HTTPS_ATTEMPT_TIMEOUT_MS: i64 = 2000;
+
+/// The URLs a `checkServerConnectivity` request may fetch, in the order they
+/// are tried; empty when the input is not something this client will send a
+/// request to.
+///
+/// One entry for a typed scheme — a typed `http://` is never silently
+/// upgraded. Two for a bare host: `https://host` first, then `http://host`,
+/// so `192.168.1.10:8096` or a tailnet name still connects over plain http
+/// once the https attempt has failed.
+fn probe_urls(user_input: &str) -> Vec<String> {
+    jfn_jellyfin::probe_candidates(user_input)
+        .into_iter()
+        .filter(|u| is_http_url(u))
+        .collect()
 }
+
+/// The notice the connect screen shows for a probe that ended on `base`.
+///
+/// `"insecure-http"` only when the address was typed without a scheme, the
+/// https attempt failed and the saved URL is therefore plain http — the one
+/// case where the user did not ask for an unencrypted connection and got one.
+fn probe_notice(base: &str, fell_back_to_http: bool) -> &'static str {
+    if fell_back_to_http && !base.to_ascii_lowercase().starts_with("https://") {
+        NOTICE_INSECURE
+    } else {
+        ""
+    }
+}
+
+/// The `serverConnectivityResult` detail value that means "this connection is
+/// plain http because the https attempt failed". `overlay.js` turns it into
+/// the one-line note on the connect screen.
+const NOTICE_INSECURE: &str = "insecure-http";
 
 /// The URL the main browser may be told to load. The main layer has the
 /// native bridge injected, so only http(s) documents may ever land there.
@@ -185,10 +224,19 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_INFO,
-                &format!("Overlay: navigateMain {url}"),
+                &format!(
+                    "Overlay: navigateMain {}",
+                    jfn_logging::escape_page_string(url)
+                ),
             );
             jfn_config::set_server_url(url);
-            jfn_config::settings_save_async();
+            // Synchronous, not queued: a renderer process spawned by the
+            // navigation below reads `settings.json` to decide whether the
+            // document it is about to host gets `window.jmpNative`
+            // (`app::bridge_allowed_for`), so the new server URL has to be on
+            // disk before the load starts. One small atomic write, once per
+            // connect.
+            jfn_config::settings_save();
             if let Some(ml) = main_layer_arc() {
                 ml.load_url(url);
             }
@@ -243,7 +291,8 @@ fn handle_message(message: BrowserMessage) -> bool {
             };
             let url = list_string(args, 0);
             cancel_active_probe();
-            let Some(normalized) = probe_url(&url) else {
+            let candidates = probe_urls(&url);
+            if candidates.is_empty() {
                 // Never issue a CEF request for a scheme this client will not
                 // navigate to (file:, app:, chrome:, ...). Answer the page
                 // directly so its promise settles instead of hanging.
@@ -255,10 +304,10 @@ fn handle_message(message: BrowserMessage) -> bool {
                         url.len()
                     ),
                 );
-                send_probe_result(&b, &url, false, &url);
+                send_probe_result(&b, &url, false, &url, "");
                 return true;
-            };
-            start_probe(b, url, normalized);
+            }
+            start_probe(b, url, candidates);
             true
         }
         "cancelServerConnectivity" => {
@@ -322,7 +371,13 @@ fn finish_probe(id: u64) {
     }
 }
 
-fn send_probe_result(browser: &Browser, user_url: &str, success: bool, reply_url: &str) {
+fn send_probe_result(
+    browser: &Browser,
+    user_url: &str,
+    success: bool,
+    reply_url: &str,
+    detail: &str,
+) {
     let Some(frame) = browser.main_frame() else {
         return;
     };
@@ -330,15 +385,18 @@ fn send_probe_result(browser: &Browser, user_url: &str, success: bool, reply_url
         args.set_string(0, Some(&CefString::from(user_url)));
         args.set_bool(1, i32::from(success));
         args.set_string(2, Some(&CefString::from(reply_url)));
+        // Slot 3: on success a notice key for the connect screen; on failure
+        // a message to show instead of the generic one.
+        args.set_string(3, Some(&CefString::from(detail)));
     });
 }
 
-fn start_probe(browser: Browser, user_url: String, normalized: String) {
+fn start_probe(browser: Browser, user_url: String, candidates: Vec<String>) {
     let probe = ServerProbeClient::new(
-        normalized,
-        Box::new(move |success, base_url| {
+        candidates,
+        Box::new(move |success, base_url, detail| {
             let reply_url = if success { &base_url } else { &user_url };
-            send_probe_result(&browser, &user_url, success, reply_url);
+            send_probe_result(&browser, &user_url, success, reply_url, &detail);
         }),
     );
     probe.start();
@@ -346,20 +404,46 @@ fn start_probe(browser: Browser, user_url: String, normalized: String) {
 
 // ---- ServerProbeClient ----------------------------------------------------
 //
-// HEAD with redirect-follow to find the canonical base URL, then GET
-// {base}/System/Info/Public to confirm it's a Jellyfin server. Cancellable:
-// .cancel() aborts the active CefURLRequest; a late OnRequestComplete with
-// the slot cleared is harmless.
+// For each candidate URL in turn: HEAD to see where the address resolves,
+// then GET {base}/System/Info/Public to confirm it's a Jellyfin server. A
+// redirect is followed only while it stays on the host that was asked for
+// (see `jfn_jellyfin::classify_probe_redirect`); a candidate that fails hands
+// over to the next one, which is how a bare host falls back from https to
+// http. Cancellable: .cancel() aborts the active CefURLRequest; a late
+// OnRequestComplete with the slot cleared is harmless.
 
-type ProbeCallback = Box<dyn FnMut(bool, String) + Send + Sync>;
+type ProbeCallback = Box<dyn FnMut(bool, String, String) + Send + Sync>;
 
 struct ProbeState {
     id: u64,
-    url: String,
+    /// The URLs to try, in order. More than one only for a bare host, where
+    /// entry 0 is the speculative https attempt.
+    candidates: Vec<String>,
+    index: usize,
     phase: Phase,
     base: String,
     body: Vec<u8>,
+    /// Set by the timeout task when the current candidate ran out of time;
+    /// makes the completion that the cancel produces a candidate failure
+    /// rather than a step to the GET phase.
+    timed_out: bool,
+    /// A redirect this probe refused. Terminal: no further candidate is tried,
+    /// because the user has an address to enter instead.
+    refusal: Option<String>,
     callback: Option<ProbeCallback>,
+}
+
+impl ProbeState {
+    /// The URL the current candidate is probing.
+    fn url(&self) -> String {
+        self.candidates.get(self.index).cloned().unwrap_or_default()
+    }
+
+    /// True once at least one earlier candidate has been abandoned — i.e. the
+    /// https attempt for a bare host failed and this is the http one.
+    fn fell_back(&self) -> bool {
+        self.index > 0
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -373,38 +457,84 @@ struct ServerProbeClient {
 }
 
 impl ServerProbeClient {
-    fn new(url: String, callback: ProbeCallback) -> Self {
+    fn new(candidates: Vec<String>, callback: ProbeCallback) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProbeState {
                 id: NEXT_PROBE_ID.fetch_add(1, Ordering::Relaxed),
-                url,
+                candidates,
+                index: 0,
                 phase: Phase::Head,
                 base: String::new(),
                 body: Vec::new(),
+                timed_out: false,
+                refusal: None,
                 callback: Some(callback),
             })),
         }
     }
 
     fn start(&self) {
-        let (url, id) = {
-            let st = self.state.lock();
-            (st.url.clone(), st.id)
-        };
+        let id = self.state.lock().id;
         // Claim the generation before the request exists: OnRequestComplete
         // must never run against a slot that still says NO_PROBE.
         if let Some(s) = INSTANCE.lock().as_mut() {
             s.active_probe_id = id;
             s.active_probe = None;
         }
-        match make_request("HEAD", &url, self.client()) {
-            Some(r) => store_probe_request(id, r),
-            None => finish_probe(id),
+        start_candidate(&self.state);
+    }
+}
+
+/// Issue the HEAD for whatever candidate the state is on, arming the timeout
+/// when this candidate is a speculative https attempt.
+fn start_candidate(state: &Arc<Mutex<ProbeState>>) {
+    let (url, id, index, speculative) = {
+        let st = state.lock();
+        (st.url(), st.id, st.index, st.candidates.len() > 1)
+    };
+    if url.is_empty() {
+        finish_probe(id);
+        return;
+    }
+    let client = JfnServerProbeClient::new(Arc::clone(state));
+    match make_request("HEAD", &url, client) {
+        Some(r) => store_probe_request(id, r),
+        None => {
+            finish_probe(id);
+            return;
         }
     }
+    // Only the attempt the user did not ask for is time-boxed: a typed
+    // address gets the client's usual, unbounded wait.
+    if speculative && index == 0 {
+        let mut task = ProbeTimeoutTask::new(Arc::clone(state), index);
+        let _ = post_delayed_task(ThreadId::UI, Some(&mut task), HTTPS_ATTEMPT_TIMEOUT_MS);
+    }
+}
 
-    fn client(&self) -> UrlrequestClient {
-        JfnServerProbeClient::new(Arc::clone(&self.state))
+/// Abandon candidate `index` if it is still the one in flight.
+fn on_probe_timeout(state: &Arc<Mutex<ProbeState>>, index: usize) {
+    let id = {
+        let mut st = state.lock();
+        if st.index != index || st.callback.is_none() {
+            return;
+        }
+        st.timed_out = true;
+        st.id
+    };
+    if !probe_is_current(id) {
+        return;
+    }
+    // Take the request out rather than going through `cancel_active_probe`:
+    // the generation must stay current so the completion this produces is
+    // seen as *this candidate* failing, not as the whole probe being cancelled.
+    let request = INSTANCE.lock().as_mut().and_then(|s| {
+        (s.active_probe_id == id)
+            .then(|| s.active_probe.take())
+            .flatten()
+    });
+    if let Some(r) = request {
+        r.cancel();
     }
 }
 
@@ -417,26 +547,40 @@ fn on_complete(state: &Arc<Mutex<ProbeState>>, request: &Urlrequest) {
         return;
     }
 
-    // HEAD phase: extract resolved base URL, post GET on /System/Info/Public.
+    // HEAD phase: decide where the address resolved to, then GET
+    // /System/Info/Public on it.
     let next_request = {
         let mut st = state.lock();
-        if st.phase == Phase::Head {
-            let mut resolved = st.url.clone();
-            if let Some(resp) = request.response() {
-                let url_uf = resp.url();
-                let cs: CefString = (&url_uf).into();
-                let s = cs.to_string();
-                // A redirect chain decides this URL, so re-apply the scheme
-                // gate before it becomes the base we fetch and hand back.
-                if is_http_url(&s) {
-                    resolved = s;
+        if st.phase == Phase::Head && !st.timed_out {
+            let requested = st.url();
+            let final_url = request
+                .response()
+                .map(|resp| {
+                    let url_uf = resp.url();
+                    let cs: CefString = (&url_uf).into();
+                    cs.to_string()
+                })
+                .unwrap_or_default();
+            // A redirect chain decides that URL, so it is bound back to the
+            // host that was asked for before it becomes the base we fetch,
+            // save and navigate to.
+            let resolved = match classify_probe_redirect(&requested, &final_url) {
+                RedirectDecision::Keep => requested,
+                RedirectDecision::Upgrade(upgraded) => upgraded,
+                RedirectDecision::Refuse(target) => {
+                    st.refusal = Some(redirect_refused_message(&target));
+                    String::new()
                 }
+            };
+            if resolved.is_empty() {
+                None
+            } else {
+                st.base = extract_base_url(&resolved).to_string();
+                st.phase = Phase::Get;
+                let next_url = system_info_url(&st.base);
+                let client = JfnServerProbeClient::new(Arc::clone(state));
+                make_request("GET", &next_url, client)
             }
-            st.base = extract_base_url(&resolved).to_string();
-            st.phase = Phase::Get;
-            let next_url = system_info_url(&st.base);
-            let client = JfnServerProbeClient::new(Arc::clone(state));
-            make_request("GET", &next_url, client)
         } else {
             None
         }
@@ -448,26 +592,88 @@ fn on_complete(state: &Arc<Mutex<ProbeState>>, request: &Urlrequest) {
         return;
     }
 
-    // GET phase complete: validate body, then invoke caller.
-    let (success, base, cb) = {
+    // This candidate is done: validate the body, then either hand over to the
+    // next candidate or reply.
+    let outcome = {
         let mut st = state.lock();
         let mut ok = false;
-        let status = request.request_status();
-        if status.as_ref() == &sys::cef_urlrequest_status_t::UR_SUCCESS
-            && let Some(resp) = request.response()
-            && resp.status() == 200
-        {
-            ok = is_valid_public_info(&st.body);
+        if st.phase == Phase::Get && !st.timed_out && st.refusal.is_none() {
+            let status = request.request_status();
+            if status.as_ref() == &sys::cef_urlrequest_status_t::UR_SUCCESS
+                && let Some(resp) = request.response()
+                && resp.status() == 200
+            {
+                ok = is_valid_public_info(&st.body);
+            }
         }
-        let base = st.base.clone();
-        let cb = st.callback.take();
-        (ok, base, cb)
+        if ok {
+            let detail = probe_notice(&st.base, st.fell_back()).to_string();
+            Outcome::Done {
+                success: true,
+                base: st.base.clone(),
+                detail,
+                callback: st.callback.take(),
+            }
+        } else if st.refusal.is_none() && st.index + 1 < st.candidates.len() {
+            // The speculative https attempt failed, however it failed (TLS
+            // error, refused, reset, timeout). Swallow it and try http.
+            st.index += 1;
+            st.phase = Phase::Head;
+            st.base.clear();
+            st.body.clear();
+            st.timed_out = false;
+            Outcome::Next
+        } else {
+            let detail = st.refusal.clone().unwrap_or_default();
+            Outcome::Done {
+                success: false,
+                base: st.base.clone(),
+                detail,
+                callback: st.callback.take(),
+            }
+        }
     };
-    // Retire the generation before replying, so a cancel() racing the reply
-    // is a no-op instead of aborting an already-finished request.
-    finish_probe(id);
-    if let Some(mut f) = cb {
-        f(success, base);
+
+    match outcome {
+        Outcome::Next => start_candidate(state),
+        Outcome::Done {
+            success,
+            base,
+            detail,
+            callback,
+        } => {
+            // Retire the generation before replying, so a cancel() racing the
+            // reply is a no-op instead of aborting a finished request.
+            finish_probe(id);
+            if let Some(mut f) = callback {
+                f(success, base, detail);
+            }
+        }
+    }
+}
+
+/// What `on_complete` decided for the candidate that just finished.
+enum Outcome {
+    /// Try the next candidate.
+    Next,
+    /// Reply to the page.
+    Done {
+        success: bool,
+        base: String,
+        detail: String,
+        callback: Option<ProbeCallback>,
+    },
+}
+
+cef::wrap_task! {
+    struct ProbeTimeoutTask {
+        state: Arc<Mutex<ProbeState>>,
+        index: usize,
+    }
+    impl Task {
+        fn execute(&self) {
+            on_probe_timeout(&self.state, self.index);
+        }
     }
 }
 
@@ -515,18 +721,56 @@ cef::wrap_urlrequest_client! {
 mod tests {
     use super::*;
 
+    // The two shapes the owner requires to keep working verbatim.
+    const IP_PORT: &str = "http://192.168.1.10:8096";
+    const TAILNET: &str = "http://thehalfrican-truenas.tail1cdca8.ts.net:8096";
+
     #[test]
-    fn probe_url_normalizes_a_plain_host() {
-        assert_eq!(probe_url("example.com"), Some("http://example.com".into()));
+    fn probe_urls_tries_https_before_http_for_a_bare_host() {
+        // Renamed from `probe_url_normalizes_a_plain_host`: a bare host now
+        // produces two candidates, https first, instead of one http URL.
         assert_eq!(
-            probe_url("  HTTPS://example.com:8096/web/index.html "),
-            Some("https://example.com:8096/web/index.html".into())
+            probe_urls("example.com"),
+            vec![
+                "https://example.com".to_string(),
+                "http://example.com".to_string()
+            ]
         );
-        assert_eq!(probe_url("[::1]:8096"), Some("http://[::1]:8096".into()));
+        assert_eq!(
+            probe_urls("192.168.1.10:8096"),
+            vec!["https://192.168.1.10:8096".to_string(), IP_PORT.to_string()]
+        );
+        assert_eq!(
+            probe_urls("thehalfrican-truenas.tail1cdca8.ts.net:8096"),
+            vec![
+                "https://thehalfrican-truenas.tail1cdca8.ts.net:8096".to_string(),
+                TAILNET.to_string()
+            ]
+        );
+        assert_eq!(
+            probe_urls("[::1]:8096"),
+            vec![
+                "https://[::1]:8096".to_string(),
+                "http://[::1]:8096".to_string()
+            ]
+        );
     }
 
     #[test]
-    fn probe_url_refuses_every_scheme_but_http_and_https() {
+    fn probe_urls_leaves_a_typed_scheme_exactly_as_typed() {
+        // A typed `http://` is never quietly upgraded: the LAN and tailnet
+        // addresses the user types with a scheme produce one plain-http
+        // request, as they always did.
+        assert_eq!(probe_urls(IP_PORT), vec![IP_PORT.to_string()]);
+        assert_eq!(probe_urls(TAILNET), vec![TAILNET.to_string()]);
+        assert_eq!(
+            probe_urls("  HTTPS://example.com:8096/web/index.html "),
+            vec!["https://example.com:8096/web/index.html".to_string()]
+        );
+    }
+
+    #[test]
+    fn probe_urls_refuses_every_scheme_but_http_and_https() {
         // The probe is a CEF URL request issued by the browser process: a
         // `file:` or `app:` target would read local/app resources on behalf
         // of whatever the overlay page asked for.
@@ -538,12 +782,24 @@ mod tests {
             "devtools://devtools/bundled/inspector.html",
             "blob://x",
         ] {
-            assert_eq!(probe_url(hostile), None, "input {hostile:?}");
+            assert!(probe_urls(hostile).is_empty(), "input {hostile:?}");
         }
         // Degenerate input never produces a request either.
-        assert_eq!(probe_url(""), None);
-        assert_eq!(probe_url("   "), None);
-        assert_eq!(probe_url("://"), None);
+        assert!(probe_urls("").is_empty());
+        assert!(probe_urls("   ").is_empty());
+        assert!(probe_urls("://").is_empty());
+    }
+
+    #[test]
+    fn probe_notice_fires_only_for_a_silent_fallback_to_http() {
+        // Bare host, https attempt failed, saved URL is plain http.
+        assert_eq!(probe_notice(IP_PORT, true), "insecure-http");
+        assert_eq!(probe_notice(TAILNET, true), "insecure-http");
+        // A typed address (no fallback) is the user's own choice: no note.
+        assert_eq!(probe_notice(IP_PORT, false), "");
+        // A bare host that reached https, however it got there, is encrypted.
+        assert_eq!(probe_notice("https://example.com", true), "");
+        assert_eq!(probe_notice("HTTPS://example.com:8920", true), "");
     }
 
     #[test]

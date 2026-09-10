@@ -21,6 +21,7 @@ use crate::client::{Inner, JfnCefLayer, jfn_cef_layer_inner, jfn_cef_layer_set_n
 use crate::ipc::{
     ArgList, BrowserMessage, list_bool, list_double, list_int, list_opt_string, list_string,
 };
+use crate::rate_gate::{COMMAND_MIN_INTERVAL_MS, RateGate, monotonic_now_ms};
 use jfn_color::jfn_cef_parse_color;
 use jfn_color::theme::{jfn_theme_color_on_color, jfn_theme_color_set_video_mode};
 use jfn_mpv::api::{
@@ -251,7 +252,10 @@ fn handle_player_load<A: ArgList + ?Sized>(args: &A) {
         &format!(
             "playerLoad: video={video_idx} audio={audio_idx} sub={sub_idx} \
              start={start_ms}ms infinite={is_infinite_stream} \
-             extAudio={external_audio_url} extSub={external_sub_url} url={url}"
+             extAudio={} extSub={} url={}",
+            jfn_logging::escape_page_string(&external_audio_url),
+            jfn_logging::escape_page_string(&external_sub_url),
+            jfn_logging::escape_page_string(&url),
         ),
     );
 
@@ -326,7 +330,10 @@ fn handle_playback_video_mode(mode: &str, reason: &str, name: &str) {
         None => jfn_logging::log(
             jfn_logging::CATEGORY_CEF,
             jfn_logging::LEVEL_WARN,
-            &format!("setPlaybackVideoMode: unknown mode {mode:?}; leaving the chain alone"),
+            &format!(
+                "setPlaybackVideoMode: unknown mode {}; leaving the chain alone",
+                jfn_logging::escape_page_string(mode)
+            ),
         ),
     }
 }
@@ -377,7 +384,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_DEBUG,
-                &format!("playerAbLoop: {action}"),
+                &format!("playerAbLoop: {}", jfn_logging::escape_page_string(&action)),
             );
             jfn_playback_ab_loop_action(&action);
         }),
@@ -395,7 +402,10 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_INFO,
-                &format!("playerAddSubtitle: {url}"),
+                &format!(
+                    "playerAddSubtitle: {}",
+                    jfn_logging::escape_page_string(&url)
+                ),
             );
             if !media_url_allowed("playerAddSubtitle url", &url, false) {
                 return;
@@ -412,7 +422,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_INFO,
-                &format!("playerAddAudio: {url}"),
+                &format!("playerAddAudio: {}", jfn_logging::escape_page_string(&url)),
             );
             if !media_url_allowed("playerAddAudio url", &url, false) {
                 return;
@@ -501,7 +511,10 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_DEBUG,
-                &format!("themeColor IPC: {color}"),
+                &format!(
+                    "themeColor IPC: {}",
+                    jfn_logging::escape_page_string(&color)
+                ),
             );
             if let Some(c) = js_cstr_or_warn("themeColor", &color) {
                 let rgb = unsafe { jfn_cef_parse_color(c.as_ptr()) };
@@ -530,10 +543,16 @@ fn handle_message(message: BrowserMessage) -> bool {
             pb_post(PbInput::Seeked(i64::from(list_int(a, 0)) * 1000));
         }),
         "appExit" => {
+            if throttled(&APP_EXIT_GATE, "appExit") {
+                return true;
+            }
             jfn_shutdown_initiate();
             true
         }
         "openConfigDir" => {
+            if throttled(&OPEN_CONFIG_DIR_GATE, "openConfigDir") {
+                return true;
+            }
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_INFO,
@@ -546,6 +565,30 @@ fn handle_message(message: BrowserMessage) -> bool {
         }
         _ => false,
     }
+}
+
+// ---- command throttling ---------------------------------------------------
+//
+// `openConfigDir` spawns a file-manager process and `appExit` tears the app
+// down; a page can send either as fast as V8 can loop. One gate per command,
+// so one never eats the other's allowance. `setSettingValue` is deliberately
+// *not* gated: the settings page writes several keys in a burst and every one
+// of them has to land.
+
+static APP_EXIT_GATE: Mutex<RateGate> = Mutex::new(RateGate::new(COMMAND_MIN_INTERVAL_MS));
+static OPEN_CONFIG_DIR_GATE: Mutex<RateGate> = Mutex::new(RateGate::new(COMMAND_MIN_INTERVAL_MS));
+
+/// True when `gate` refuses this call, logging the refusal once per call.
+fn throttled(gate: &Mutex<RateGate>, name: &str) -> bool {
+    if gate.lock().accept(monotonic_now_ms()) {
+        return false;
+    }
+    jfn_logging::log(
+        jfn_logging::CATEGORY_CEF,
+        jfn_logging::LEVEL_WARN,
+        &format!("{name}: ignored a repeat within {COMMAND_MIN_INTERVAL_MS} ms"),
+    );
+    true
 }
 
 /// Whether a page-supplied media URL may be handed to mpv. Jellyfin only ever

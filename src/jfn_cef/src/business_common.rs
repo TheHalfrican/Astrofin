@@ -151,7 +151,11 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,
                 jfn_logging::LEVEL_WARN,
-                &format!("Null value for setting key: {_section}.{key}"),
+                &format!(
+                    "Null value for setting key: {}.{}",
+                    jfn_logging::escape_page_string(_section),
+                    jfn_logging::escape_page_string(key)
+                ),
             );
             return;
         }
@@ -165,8 +169,8 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
                     jfn_logging::CATEGORY_CEF,
                     jfn_logging::LEVEL_WARN,
                     &format!(
-                        "unknown videoMode {:?}; using {}",
-                        value.unwrap_or_default(),
+                        "unknown videoMode {}; using {}",
+                        jfn_logging::escape_page_string(value.unwrap_or_default()),
                         mode.as_str()
                     ),
                 );
@@ -183,8 +187,8 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
                     jfn_logging::CATEGORY_CEF,
                     jfn_logging::LEVEL_WARN,
                     &format!(
-                        "unknown transcodeNotice {:?}; using {notice}",
-                        value.unwrap_or_default()
+                        "unknown transcodeNotice {}; using {notice}",
+                        jfn_logging::escape_page_string(value.unwrap_or_default())
                     ),
                 );
             }
@@ -202,7 +206,11 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
         SettingAction::Unknown => jfn_logging::log(
             jfn_logging::CATEGORY_CEF,
             jfn_logging::LEVEL_WARN,
-            &format!("Unknown setting key: {_section}.{key}"),
+            &format!(
+                "Unknown setting key: {}.{}",
+                jfn_logging::escape_page_string(_section),
+                jfn_logging::escape_page_string(key)
+            ),
         ),
     }
     jfn_config::settings_save_async();

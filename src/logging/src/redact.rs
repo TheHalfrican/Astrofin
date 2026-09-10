@@ -170,6 +170,51 @@ pub fn censor(buf: &mut [u8]) {
     }
 }
 
+/// Cap on the escaped length of one page-supplied string. A page can hand the
+/// browser process a megabyte-long "URL"; the log line records what it was,
+/// not the whole of it.
+const PAGE_STRING_LIMIT: usize = 512;
+
+/// Render a string that came from a web page so it cannot forge log output.
+///
+/// Every C0 control character (and DEL) is escaped — `\n` as `\\n`, `\r` as
+/// `\\r`, `\t` as `\\t`, everything else as `\\xNN` — so one page string can
+/// never become two log records, move the cursor with an ANSI escape, or fake
+/// a level and category prefix. A backslash is doubled so the escaping is
+/// unambiguous. The result is truncated to [`PAGE_STRING_LIMIT`] escaped
+/// characters with a `…` marker.
+///
+/// This is the companion of [`censor`]: that one removes secrets from a
+/// finished record, this one is applied to each untrusted fragment *before*
+/// it is formatted into one.
+#[must_use]
+pub fn escape_page_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut truncated = false;
+    for c in s.chars() {
+        if out.chars().count() >= PAGE_STRING_LIMIT {
+            truncated = true;
+            break;
+        }
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // C0 and DEL. U+2028/U+2029 are line breaks to a JS parser but not
+            // to a log reader, so they are left alone here.
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    if truncated {
+        out.push('…');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +441,49 @@ mod tests {
         censor(&mut second);
         assert_eq!(&first, b"GET /Items?api_k");
         assert_eq!(&second, b"ey=REALSECRET&x=1");
+    }
+
+    #[test]
+    fn escape_page_string_keeps_a_hostile_string_on_one_line() {
+        let hostile = "http://host/\nERROR   [Main] wiped the disk\u{1b}[2J\r\n";
+        let escaped = escape_page_string(hostile);
+        assert!(!escaped.contains('\n'), "{escaped}");
+        assert!(!escaped.contains('\r'), "{escaped}");
+        assert!(!escaped.contains('\u{1b}'), "{escaped}");
+        assert_eq!(
+            escaped,
+            "http://host/\\nERROR   [Main] wiped the disk\\x1b[2J\\r\\n"
+        );
+    }
+
+    #[test]
+    fn escape_page_string_leaves_an_ordinary_url_untouched() {
+        // The shapes the connect screen actually logs must read exactly as
+        // they were typed.
+        for plain in [
+            "http://192.168.1.10:8096",
+            "http://thehalfrican-truenas.tail1cdca8.ts.net:8096/web/index.html",
+            "https://jf.example.com:8920/Videos/1/stream?x=1",
+            "",
+        ] {
+            assert_eq!(escape_page_string(plain), plain);
+        }
+        // Non-ASCII text is not mangled either.
+        assert_eq!(escape_page_string("naïve — 日本語"), "naïve — 日本語");
+    }
+
+    #[test]
+    fn escape_page_string_doubles_a_backslash_and_escapes_nul_and_del() {
+        assert_eq!(escape_page_string("a\\nb"), "a\\\\nb");
+        assert_eq!(escape_page_string("a\u{0}b\u{7f}"), "a\\x00b\\x7f");
+        assert_eq!(escape_page_string("\t"), "\\t");
+    }
+
+    #[test]
+    fn escape_page_string_truncates_an_unbounded_page_string() {
+        let long = "a".repeat(PAGE_STRING_LIMIT * 4);
+        let escaped = escape_page_string(&long);
+        assert_eq!(escaped.chars().count(), PAGE_STRING_LIMIT + 1);
+        assert!(escaped.ends_with('…'));
     }
 }

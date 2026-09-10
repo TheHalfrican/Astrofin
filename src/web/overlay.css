@@ -344,6 +344,23 @@ body {
     white-space: nowrap;
 }
 
+/* One line under the form, shown only when there is something to say — today
+ * the silent fallback from https to plain http for a bare host. Advisory, not
+ * an error: it never blocks, and it never takes focus. */
+.af-note {
+    margin: 10px 0 0;
+    max-width: 100%;
+    font: var(--af-type-meta);
+    font-size: 14px;
+    letter-spacing: var(--af-tracking-meta);
+    color: var(--af-text-muted);
+    text-align: center;
+}
+
+.af-note:empty {
+    display: none;
+}
+
 /* ---- State machine ---------------------------------------------------
  * body[data-state] is the single switch driven by overlay.js:
  *   boot        – waiting on getSavedServerUrl; orbit only

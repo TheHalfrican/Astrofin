@@ -476,3 +476,132 @@ test('a cancellation is logged as one, not as an error', async () => {
     assert.strictEqual(await pending, false);
     assert.strictEqual(ctx.win.console.lines.some((l) => l.level === 'error'), false);
 });
+
+// ---- the plain-http note and the refused-redirect message ------------------
+//
+// Two decisions from docs/test-plan.md §6, both landing on this screen: a bare
+// host is probed over https first and falls back to http with a one-line,
+// non-blocking note, and a redirect that leaves the host asked for fails the
+// probe with the address to enter instead. The shapes that must keep working
+// verbatim are a raw IP:port and a tailnet MagicDNS name, both over plain http.
+
+const IP_PORT = 'http://192.168.1.10:8096';
+const TAILNET = 'http://thehalfrican-truenas.tail1cdca8.ts.net:8096';
+
+const noteText = (ctx) => ctx.doc.getElementById('connect-note').textContent;
+const NOTE_LINE = 'Not encrypted: this connection uses plain http.';
+
+test('the overlay hands the connectivity helper its notice hook', () => {
+    const ctx = load();
+    assert.strictEqual(typeof ctx.probe.onNotice, 'function');
+});
+
+test('a fallback to plain http shows one line and connects anyway', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    // A bare IP:port: native tried https, failed, and connected over http.
+    ctx.dom.address.value = '192.168.1.10:8096';
+    fireEvent(ctx.dom.form, 'submit');
+    await flush();
+    ctx.probe.onNotice('insecure-http');
+    ctx.probe.resolve(IP_PORT);
+    await flush();
+
+    assert.strictEqual(noteText(ctx), NOTE_LINE);
+    // Non-blocking: the connection went through exactly as before.
+    assert.deepStrictEqual(ctx.native.callsTo('saveServerUrl'), [[IP_PORT]]);
+    assert.deepStrictEqual(ctx.native.callsTo('navigateMain'), [[IP_PORT]]);
+    assert.strictEqual(dialog(ctx), null, 'a note is not an error dialog');
+});
+
+test('a tailnet address typed with http:// connects with no note at all', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    ctx.dom.address.value = TAILNET;
+    fireEvent(ctx.dom.form, 'submit');
+    await flush();
+    // A typed scheme never triggers the https attempt, so native sends no
+    // notice; the screen stays exactly as it was.
+    ctx.probe.resolve(TAILNET);
+    await flush();
+
+    assert.strictEqual(noteText(ctx), '');
+    assert.deepStrictEqual(ctx.native.callsTo('saveServerUrl'), [[TAILNET]]);
+    assert.deepStrictEqual(ctx.native.callsTo('navigateMain'), [[TAILNET]]);
+});
+
+test('the note from one attempt is cleared when the next one starts', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    ctx.api.setConnectNote(NOTE_LINE);
+    ctx.dom.address.value = '192.168.1.10:8096';
+    fireEvent(ctx.dom.form, 'submit');
+    await flush();
+    assert.strictEqual(noteText(ctx), '');
+});
+
+test('an unrecognised notice key shows nothing rather than raw text', () => {
+    const ctx = load();
+    ctx.api.showConnectNotice('something-native-invented');
+    assert.strictEqual(noteText(ctx), '');
+    ctx.api.showConnectNotice('insecure-http');
+    assert.strictEqual(noteText(ctx), NOTE_LINE);
+    ctx.api.showConnectNotice('');
+    assert.strictEqual(noteText(ctx), '', 'an empty key clears the line');
+});
+
+test('a refused redirect names the address to enter instead', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    ctx.dom.address.value = '192.168.1.10:8096';
+    fireEvent(ctx.dom.form, 'submit');
+    await flush();
+    const refusal = new Error(
+        'server redirected to https://jf.example.com; enter that address instead'
+    );
+    refusal.detail = refusal.message;
+    ctx.probe.reject(refusal);
+    await flush();
+
+    const box = dialog(ctx);
+    assert.ok(box);
+    assert.strictEqual(box.querySelector('.dialog-message').innerText, refusal.message);
+    // Nothing was saved or navigated to on the redirect target.
+    assert.deepStrictEqual(ctx.native.callsTo('saveServerUrl'), []);
+    assert.deepStrictEqual(ctx.native.callsTo('navigateMain'), []);
+});
+
+test('a failure with no native reason keeps the translated dialog text', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    ctx.dom.address.value = TAILNET;
+    fireEvent(ctx.dom.form, 'submit');
+    await flush();
+    ctx.probe.reject(new Error('Connection failed'));
+    await flush();
+
+    assert.strictEqual(dialog(ctx).querySelector('.dialog-message').innerText,
+        STRINGS.messageUnableToConnectToServerText);
+    assert.strictEqual(ctx.api.state().lastFailureMessage, '');
+});
+
+test('a flagged cancellation is not reported as a failure', async () => {
+    const ctx = load();
+    await boot(ctx, null);
+    const pending = ctx.api.tryConnect(IP_PORT);
+    const cancelled = new Error('stopped by the user');
+    cancelled.cancelled = true;
+    ctx.probe.reject(cancelled);
+    assert.strictEqual(await pending, false);
+    assert.strictEqual(ctx.win.console.lines.some((l) => l.level === 'error'), false);
+    assert.strictEqual(ctx.api.state().lastFailureMessage, '');
+});
+
+test('setConnectNote builds the line when the markup does not carry it', () => {
+    const ctx = load();
+    ctx.doc.getElementById('connect-note').remove();
+    const el = ctx.api.setConnectNote('hello');
+    assert.strictEqual(el.id, 'connect-note');
+    assert.strictEqual(el.className, 'af-note');
+    assert.strictEqual(noteText(ctx), 'hello');
+});

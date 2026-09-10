@@ -11,6 +11,10 @@
 
 mod redact;
 
+/// Escape a string that came from a web page before it is formatted into a
+/// log line. See [`redact::escape_page_string`].
+pub use redact::escape_page_string;
+
 use parking_lot::Mutex;
 use std::fs::File;
 use std::io::{self, Write};

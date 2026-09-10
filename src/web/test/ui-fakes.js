@@ -274,6 +274,11 @@ function buildOverlayDom(doc) {
     form.appendChild(connect);
     card.appendChild(form);
 
+    const note = doc.createElement('p');
+    note.id = 'connect-note';
+    note.className = 'af-note';
+    card.appendChild(note);
+
     const status = doc.createElement('p');
     status.id = 'connect-status';
     const cancel = doc.createElement('button');
@@ -284,7 +289,7 @@ function buildOverlayDom(doc) {
 
     doc.body.appendChild(main);
     doc.body.setAttribute('data-state', 'boot');
-    return { main, card, form, address, connect, status, cancel };
+    return { main, card, form, address, connect, note, status, cancel };
 }
 
 // jellyfin-web's page shell as client-settings.js expects to find it:

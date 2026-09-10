@@ -171,6 +171,10 @@ pub(crate) fn console_level(severity: c_int) -> u8 {
 
 /// One console line: the page's message with the source it came from.
 pub(crate) fn format_console(msg: &str, src: &str, line: c_int) -> String {
+    // Both halves are written by the page: `console.log("\nERROR ...")` would
+    // otherwise forge a second log record.
+    let msg = jfn_logging::escape_page_string(msg);
+    let src = jfn_logging::escape_page_string(src);
     format!("{msg} ({src}:{line})")
 }
 

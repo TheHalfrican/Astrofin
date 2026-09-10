@@ -171,7 +171,10 @@ wrap_scheme_handler_factory! {
                 jfn_logging::log(
                     jfn_logging::CATEGORY_RESOURCE,
                     jfn_logging::LEVEL_WARN,
-                    &format!("EmbeddedScheme not found: {url_path}"),
+                    &format!(
+                        "EmbeddedScheme not found: {}",
+                        jfn_logging::escape_page_string(url_path)
+                    ),
                 );
                 return None;
             };

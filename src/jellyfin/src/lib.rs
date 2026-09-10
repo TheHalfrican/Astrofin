@@ -439,6 +439,208 @@ pub fn is_valid_public_info(body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+// ---- origins, redirects and probe candidates ------------------------------
+//
+// Three rules the connect probe and the native-bridge gate share, kept pure so
+// they can be tested without CEF: what an http(s) URL's origin is, whether a
+// redirect may be followed, and which URLs a typed address is probed as.
+
+/// The origin of an http(s) URL: scheme, host and port, normalised so two
+/// spellings of the same origin compare equal.
+///
+/// Host is lowercased (DNS is case-insensitive, and an IPv6 literal keeps its
+/// brackets); the port is the scheme's default (80/443) when the URL omits
+/// one; userinfo (`user:pw@`) is stripped. Nothing else is touched: this is a
+/// comparison key, not a URL parser.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Origin {
+    pub scheme: String,
+    pub host: String,
+    pub port: u16,
+}
+
+impl Origin {
+    /// The origin written back out, with the scheme's default port omitted —
+    /// the form a user can paste straight into the connect box.
+    #[must_use]
+    pub fn to_url(&self) -> String {
+        if self.port == default_port(&self.scheme) {
+            format!("{}://{}", self.scheme, self.host)
+        } else {
+            format!("{}://{}:{}", self.scheme, self.host, self.port)
+        }
+    }
+}
+
+/// The default port of an http(s) scheme; 0 for anything else.
+fn default_port(scheme: &str) -> u16 {
+    match scheme {
+        "http" => 80,
+        "https" => 443,
+        _ => 0,
+    }
+}
+
+/// Split an authority into `(host, explicit_port)`, dropping userinfo.
+/// `None` when the authority is empty or the port is not a number.
+fn split_authority(authority: &str) -> Option<(String, Option<u16>)> {
+    let after_userinfo = match authority.rfind('@') {
+        Some(i) => &authority[i + 1..],
+        None => authority,
+    };
+    if after_userinfo.is_empty() {
+        return None;
+    }
+    // An IPv6 literal keeps its brackets; the port, if any, follows `]:`.
+    let (host, port_str) = if let Some(close) = after_userinfo.find(']') {
+        let rest = &after_userinfo[close + 1..];
+        match rest.strip_prefix(':') {
+            Some(p) => (&after_userinfo[..=close], Some(p)),
+            None if rest.is_empty() => (&after_userinfo[..=close], None),
+            None => return None,
+        }
+    } else {
+        match after_userinfo.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (after_userinfo, None),
+        }
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let port = match port_str {
+        // `http://host:/path` — an empty port means "the default".
+        Some("") | None => None,
+        Some(p) => Some(p.parse::<u16>().ok()?),
+    };
+    Some((host.to_ascii_lowercase(), port))
+}
+
+/// The origin of an absolute http(s) URL, or `None` when [`is_http_url`]
+/// rejects it or its authority does not parse.
+#[must_use]
+pub fn parse_origin(url: &str) -> Option<Origin> {
+    if !is_http_url(url) {
+        return None;
+    }
+    let start = authority_start(url);
+    let scheme = url[..start - SCHEME_SEPARATOR.len()].to_ascii_lowercase();
+    let rest = &url[start..];
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, port) = split_authority(&rest[..end])?;
+    Some(Origin {
+        port: port.unwrap_or_else(|| default_port(&scheme)),
+        scheme,
+        host,
+    })
+}
+
+/// True when both URLs are http(s) URLs with the same origin (scheme, host
+/// case-insensitively, and port with defaults filled in).
+#[must_use]
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (parse_origin(a), parse_origin(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// What the connect probe does with the URL a redirect chain ended on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RedirectDecision {
+    /// The chain never left the origin that was asked for; the URL that was
+    /// asked for is what gets probed and saved.
+    Keep,
+    /// The chain upgraded `http` to `https` on the same host (any port); the
+    /// upgraded URL is what gets probed and saved.
+    Upgrade(String),
+    /// The chain left the host that was asked for (or changed the port
+    /// without upgrading the scheme). The probe fails and names this target.
+    Refuse(String),
+}
+
+/// Decide whether the probe may follow a redirect chain that started at
+/// `requested` and ended at `final_url`.
+///
+/// A redirect is followed only when it stays on the same host
+/// (case-insensitively) and either keeps the scheme and port or upgrades
+/// `http` to `https` on any port. Everything else is refused: without this,
+/// a server (or anything able to answer for it) could point the client at a
+/// host the user never typed and have that host saved as *the* server, with
+/// the native bridge bound to it and the access token sent to it.
+#[must_use]
+pub fn classify_probe_redirect(requested: &str, final_url: &str) -> RedirectDecision {
+    let Some(req) = parse_origin(requested) else {
+        return RedirectDecision::Keep;
+    };
+    if final_url.is_empty() || same_origin(requested, final_url) {
+        return RedirectDecision::Keep;
+    }
+    let Some(fin) = parse_origin(final_url) else {
+        // Not an http(s) URL at all: name what we can and refuse.
+        return RedirectDecision::Refuse(redirect_target_label(final_url));
+    };
+    if fin.host == req.host && req.scheme == "http" && fin.scheme == "https" {
+        return RedirectDecision::Upgrade(final_url.to_string());
+    }
+    RedirectDecision::Refuse(fin.to_url())
+}
+
+/// A redirect target that is not an http(s) URL, reduced to something safe to
+/// put in a message: no control characters, no whitespace, length-capped.
+fn redirect_target_label(url: &str) -> String {
+    let cleaned: String = url
+        .chars()
+        .filter(|c| !c.is_control() && !c.is_whitespace())
+        .take(64)
+        .collect();
+    if cleaned.is_empty() {
+        "an unknown address".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// The message shown when a redirect is refused.
+#[must_use]
+pub fn redirect_refused_message(target: &str) -> String {
+    format!("server redirected to {target}; enter that address instead")
+}
+
+/// True when the user typed a scheme (`http://`, `https://`, anything with a
+/// `://`). A typed scheme is never changed.
+#[must_use]
+pub fn scheme_was_typed(user_input: &str) -> bool {
+    user_input.trim().contains(SCHEME_SEPARATOR)
+}
+
+/// The URLs a connect probe tries, in order.
+///
+/// A typed scheme yields exactly one candidate and is never rewritten. A bare
+/// host yields two — `https://host` first, then the `http://host` that
+/// [`normalize_input`] produces — so a server that speaks TLS is reached over
+/// TLS without the user having to type it, while a plain-http server (the
+/// usual `192.168.1.10:8096`, or a tailnet name on 8096) still connects after
+/// the https attempt fails.
+///
+/// Empty when the input is not something this client will send a request to.
+#[must_use]
+pub fn probe_candidates(user_input: &str) -> Vec<String> {
+    let normalized = normalize_input(user_input);
+    if !is_http_url(&normalized) {
+        return Vec::new();
+    }
+    if scheme_was_typed(user_input) {
+        return vec![normalized];
+    }
+    let upgraded = format!("https://{}", &normalized[DEFAULT_SCHEME.len()..]);
+    if is_http_url(&upgraded) {
+        vec![upgraded, normalized]
+    } else {
+        vec![normalized]
+    }
+}
+
 // ---- tests ----
 
 #[cfg(test)]
@@ -1138,5 +1340,214 @@ mod tests {
         let v: Value = serde_json::from_str(&s).unwrap_or(Value::Null);
         assert!(v.is_object(), "unparseable profile: {s}");
         assert!(v.get("evil").is_none(), "codec name broke out: {s}");
+    }
+
+    // ---- origins ----------------------------------------------------------
+
+    // The two shapes the owner requires to keep working verbatim.
+    const IP_PORT: &str = "http://192.168.1.10:8096";
+    const TAILNET: &str = "http://thehalfrican-truenas.tail1cdca8.ts.net:8096";
+
+    #[test]
+    fn parse_origin_fills_in_the_scheme_default_port_and_lowercases_the_host() {
+        let o = parse_origin("HTTP://Example.COM/web/index.html").unwrap_or_else(|| Origin {
+            scheme: String::new(),
+            host: String::new(),
+            port: 0,
+        });
+        assert_eq!(o.scheme, "http");
+        assert_eq!(o.host, "example.com");
+        assert_eq!(o.port, 80);
+        assert_eq!(parse_origin("https://h").map(|o| o.port), Some(443));
+        // The two shapes that must not change behaviour.
+        assert_eq!(
+            parse_origin(IP_PORT),
+            Some(Origin {
+                scheme: "http".into(),
+                host: "192.168.1.10".into(),
+                port: 8096
+            })
+        );
+        assert_eq!(
+            parse_origin(TAILNET),
+            Some(Origin {
+                scheme: "http".into(),
+                host: "thehalfrican-truenas.tail1cdca8.ts.net".into(),
+                port: 8096
+            })
+        );
+    }
+
+    #[test]
+    fn parse_origin_drops_userinfo_and_keeps_ipv6_brackets() {
+        assert_eq!(
+            parse_origin("http://user:pw@host:8096/x").map(|o| o.host),
+            Some("host".to_string())
+        );
+        let v6 = parse_origin("http://[::1]:8096/web").unwrap_or_else(|| Origin {
+            scheme: String::new(),
+            host: String::new(),
+            port: 0,
+        });
+        assert_eq!(v6.host, "[::1]");
+        assert_eq!(v6.port, 8096);
+        assert_eq!(parse_origin("https://[fe80::1]").map(|o| o.port), Some(443));
+    }
+
+    #[test]
+    fn parse_origin_rejects_non_http_and_unparseable_authorities() {
+        for bad in [
+            "file:///etc/passwd",
+            "app://resources/overlay.html",
+            "",
+            "http://",
+            "http://host:notaport/",
+            "http://host:99999/",
+        ] {
+            assert_eq!(parse_origin(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn origin_to_url_omits_the_default_port_and_keeps_every_other() {
+        let http = parse_origin("http://host/web").map(|o| o.to_url());
+        assert_eq!(http.as_deref(), Some("http://host"));
+        let odd = parse_origin(IP_PORT).map(|o| o.to_url());
+        assert_eq!(odd.as_deref(), Some(IP_PORT));
+    }
+
+    #[test]
+    fn same_origin_ignores_host_case_path_and_the_default_port() {
+        assert!(same_origin("http://Host/web/index.html", "http://host:80/"));
+        assert!(same_origin("https://h:443", "https://H"));
+        assert!(same_origin(
+            IP_PORT,
+            "http://192.168.1.10:8096/web/index.html"
+        ));
+        assert!(same_origin(TAILNET, &format!("{TAILNET}/web/#/home.html")));
+        assert!(!same_origin("http://host", "https://host"));
+        assert!(!same_origin("http://host:8096", "http://host:8920"));
+        assert!(!same_origin("http://host", "file:///host"));
+    }
+
+    // ---- redirects --------------------------------------------------------
+
+    #[test]
+    fn classify_probe_redirect_keeps_a_chain_that_never_leaves_the_origin() {
+        // No redirect at all, and the path-only redirect a Jellyfin server
+        // answers a bare base URL with.
+        for (req, fin) in [
+            (IP_PORT, IP_PORT),
+            (IP_PORT, "http://192.168.1.10:8096/web/index.html"),
+            (TAILNET, &format!("{TAILNET}/web/index.html")[..]),
+            ("http://host", "http://HOST:80/web/"),
+            (IP_PORT, ""),
+        ] {
+            assert_eq!(
+                classify_probe_redirect(req, fin),
+                RedirectDecision::Keep,
+                "{req} -> {fin}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_probe_redirect_allows_an_https_upgrade_on_the_same_host() {
+        assert_eq!(
+            classify_probe_redirect("http://jf.example.com", "https://jf.example.com/web/"),
+            RedirectDecision::Upgrade("https://jf.example.com/web/".to_string())
+        );
+        // Any port, as long as the host is the one that was asked for.
+        assert_eq!(
+            classify_probe_redirect(IP_PORT, "https://192.168.1.10:8920/"),
+            RedirectDecision::Upgrade("https://192.168.1.10:8920/".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_probe_redirect_refuses_a_chain_that_leaves_the_host() {
+        assert_eq!(
+            classify_probe_redirect(IP_PORT, "http://evil.example.com/web/"),
+            RedirectDecision::Refuse("http://evil.example.com".to_string())
+        );
+        // A same-host downgrade or port hop is refused too.
+        assert_eq!(
+            classify_probe_redirect("https://host", "http://host/"),
+            RedirectDecision::Refuse("http://host".to_string())
+        );
+        assert_eq!(
+            classify_probe_redirect(IP_PORT, "http://192.168.1.10:8920/"),
+            RedirectDecision::Refuse("http://192.168.1.10:8920".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_probe_redirect_refuses_a_non_http_target_without_echoing_control_bytes() {
+        let decision = classify_probe_redirect(IP_PORT, "file:///etc/pas\nswd\u{1b}[2J");
+        match decision {
+            RedirectDecision::Refuse(t) => {
+                assert!(!t.contains('\n') && !t.contains('\u{1b}'), "{t}");
+                assert!(t.starts_with("file:///etc/pas"), "{t}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert_eq!(
+            classify_probe_redirect(IP_PORT, "\n\n"),
+            RedirectDecision::Refuse("an unknown address".to_string())
+        );
+    }
+
+    #[test]
+    fn redirect_refused_message_names_the_target() {
+        assert_eq!(
+            redirect_refused_message("https://jf.example.com"),
+            "server redirected to https://jf.example.com; enter that address instead"
+        );
+    }
+
+    // ---- probe candidates -------------------------------------------------
+
+    #[test]
+    fn scheme_was_typed_is_true_only_for_an_explicit_scheme() {
+        assert!(scheme_was_typed("  http://192.168.1.10:8096 "));
+        assert!(scheme_was_typed("HTTPS://host"));
+        assert!(!scheme_was_typed("192.168.1.10:8096"));
+        assert!(!scheme_was_typed(
+            "thehalfrican-truenas.tail1cdca8.ts.net:8096"
+        ));
+        assert!(!scheme_was_typed(""));
+    }
+
+    #[test]
+    fn probe_candidates_tries_https_first_only_for_a_bare_host() {
+        assert_eq!(
+            probe_candidates("192.168.1.10:8096"),
+            vec!["https://192.168.1.10:8096".to_string(), IP_PORT.to_string()]
+        );
+        assert_eq!(
+            probe_candidates("thehalfrican-truenas.tail1cdca8.ts.net:8096"),
+            vec![
+                "https://thehalfrican-truenas.tail1cdca8.ts.net:8096".to_string(),
+                TAILNET.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_candidates_never_rewrites_a_typed_scheme() {
+        // A typed `http://` stays plain http: no silent https attempt.
+        assert_eq!(probe_candidates(IP_PORT), vec![IP_PORT.to_string()]);
+        assert_eq!(probe_candidates(TAILNET), vec![TAILNET.to_string()]);
+        assert_eq!(
+            probe_candidates("  HTTPS://host:8920/web/index.html "),
+            vec!["https://host:8920/web/index.html".to_string()]
+        );
+    }
+
+    #[test]
+    fn probe_candidates_is_empty_for_anything_this_client_will_not_fetch() {
+        for bad in ["", "   ", "://", "file:///C:/Windows/win.ini", "app://x"] {
+            assert!(probe_candidates(bad).is_empty(), "{bad:?}");
+        }
     }
 }

@@ -31,6 +31,25 @@ project uses semantic versioning.
   - A `settings.json` that fails to parse as a whole (duplicate key,
     out-of-range number) is logged at warn instead of silently resetting
     every setting.
+- Design calls from that audit, decided 2026-09-10 (docs/test-plan.md §6):
+  - The connect probe follows a redirect only if it stays on the same host
+    and either keeps scheme and port or upgrades http to https; any other
+    redirect fails the probe with the target named ("server redirected to
+    ...; enter that address instead"). The saved URL is the one asked for,
+    or the https-upgraded one.
+  - A bare host with no scheme is probed over https first (2 s), then http;
+    when http is what worked, the connect screen shows a one-line "Not
+    encrypted" note. A typed scheme is never changed, so `http://host:8096`
+    behaves exactly as before.
+  - The About page's "open path" no longer goes through a shell: the path is
+    one argument to the platform opener, and only paths under the config
+    dir, cache dir or the log file's directory may be opened.
+  - `window.jmpNative` is bound per origin, not per browser: only the saved
+    server's origin (scheme, host, port) and the app's own `app://` pages get
+    it, with one warn line per refused origin.
+  - Every page-supplied string in a log line has newlines and control
+    characters escaped.
+  - `openConfigDir` and `appExit` ignore a repeat within 250 ms.
 
 ### Added
 - Backend tests to one test per public function across every non-exempt

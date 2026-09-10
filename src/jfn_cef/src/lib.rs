@@ -3,6 +3,7 @@
 mod app;
 pub mod app_menu;
 pub mod bridge;
+mod bridge_gate;
 pub mod browsers;
 pub mod business_about;
 mod business_common;
@@ -20,6 +21,7 @@ mod ipc;
 mod menu_ownership;
 mod paint_scheduler;
 pub mod platform_ops;
+mod rate_gate;
 mod resource;
 pub mod sink_routing;
 mod state;
