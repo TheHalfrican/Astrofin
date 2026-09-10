@@ -460,6 +460,146 @@ On Home only (`html.af-home`):
 Everything is wrapped so it cannot throw, uses passive listeners where the event
 allows, never calls `preventDefault`, and never moves focus.
 
+## The library grid
+
+Design target: `docs/design/canvas/Main.dc.html`, artboard **3 Library grid
+(Movies)** — 72 px gutter, 8 columns, 24 px gap, 14 px tile radius, focus scale
+1.06 carrying `--af-focus-ring-tile`, unfocused labels at 72 %, 20/26 titles over
+16/22 muted subs, and an A–Z rail of 24 px letters whose selected letter is a
+30 px cyan disc with a glow. Section (l) of `astrofin-theme.css` is the whole of
+it.
+
+### The gate
+
+`html.af-library`, set in `refresh()` from `isLibraryRoute()` — hash-first
+(`/movies`, `/tv`, `/music`, `/list`, each optionally `.html` and then bounded by
+`?`, `/` or end of string), with a `.libraryPage:not(.homePage)` DOM probe used
+only when there is no hash at all. The `:not()` is not decoration: **jf-web
+10.11.11 puts `.libraryPage` on Home too**, so a bare `.libraryPage` probe calls
+Home a library.
+
+`af-home` and `af-library` are never both set. `refresh()` resolves Home first
+and only tests the library route once Home is ruled out.
+
+The focused-card machinery is shared with Home, with one split:
+
+* `cardFrom()` claims a card inside `#homeTab`, `.homePage` **or**
+  `.libraryPage .itemsContainer`; everything else on the page keeps plain
+  jellyfin-web behaviour.
+* `setFocusedCard()` resolves the route **synchronously**, before the item
+  fetch, and drives `setBackdrop()` on both routes but `renderSpotlight()` only
+  on Home. `placeSpotlight()` inserts the panel into `#homeTab`'s section
+  stream, and a library page has no such stream.
+* `leaveHome(keepSelection)` takes an argument now. Moving to a library route
+  passes it, which keeps the focused card and the art it is driving while still
+  tearing the spotlight down — cards stream into the grid for seconds after the
+  first hover and every batch queues a `refresh()`, so without it the backdrop
+  would blink off under a stationary cursor. Leaving a library grid for anywhere
+  else drops the selection outright: its card belongs to no
+  `#homeTab .verticalSection`, so carrying it into Home would paint a stale item
+  into the spotlight.
+
+### Two deliberate deviations from the artboard
+
+Both are owner decisions, not oversights.
+
+1. **No separate 48 px page title.** jellyfin-web's own header already carries
+   the library name and its tabs, and section (d) styles them. A second title
+   says it twice.
+2. **No Sort / Filter / Genres text chips.** jellyfin-web's library toolbar is
+   icon buttons, so they take the circular glass treatment section (d) gives the
+   header buttons rather than being rebuilt as the artboard's pills. The
+   sort/filter *state* stays where jellyfin-web puts it, in the action sheets
+   those buttons open.
+
+### Selectors depended on (verified 10.11.11)
+
+Read off the pinned bundle in `.cache/e2e/jellyfin-web/`, not from memory.
+
+**Page**
+`#moviesPage.page.libraryPage.backdropPage.pageWithAbsoluteTabs` >
+`.pageTabContent#moviesTab`. `#tvPage`, `#musicPage` and the generic list view
+share the shape. No id carries a stock rule, so there is nothing to out-specify
+there.
+
+**Toolbar** — `div.flex.align-items-center.justify-content-center.flex-wrap-wrap.padded-top.padded-left.padded-right.padded-bottom.focuscontainer-x`,
+rendered **twice** on a library page: above the grid with `.paging` plus
+`.btnPlayAll`, `.btnShuffle`, `.btnSelectView`, `.btnSort` and `.btnFilter`
+(inside `.btnFilter-wrapper`), and below it with `.paging` alone. Every one of
+those `.btn*` classes and `.paging` itself ships **no stock CSS at all**; the
+buttons are `is="paper-icon-button-light"`, which the custom element upgrade
+turns into a real `.paper-icon-button-light` class.
+
+**Grid** — `div[is=emby-itemscontainer].itemsContainer.vertical-wrap.padded-left.padded-right.padded-right-withalphapicker`
+> `.card.portraitCard` > `.cardBox` > `.cardScalable` > `.cardImageContainer` …
+`.cardText`.
+
+**Rail** — `.alphaPicker.alphaPicker-fixed.alphaPicker-vertical`, to which the
+view JS adds `alphabetPicker-right` (no stock rule) and `alphaPicker-fixed-right`
+(`right: 1em` above 62.5em). The letters are **not** children of `.alphaPicker`:
+the component wraps them in one `div.alphaPickerRow.alphaPickerRow-vertical`, so
+the vertical distribution has to happen on that row or `space-between` would be
+spacing a single child. Buttons are bare
+`button.alphaPickerButton.alphaPickerButton-vertical`, and the component adds and
+removes `.alphaPickerButton-selected` itself.
+
+### Stock rules that had to be answered
+
+| Stock | Specificity | How |
+| --- | --- | --- |
+| `.itemsContainer{display:flex;margin:0 auto}` + `.vertical-wrap{flex-wrap:wrap}` | (0,1,0) | replaced with `display: grid` at (0,3,1) |
+| `.portraitCard{width:33.3%…10%}`, a nine-step media ladder | (0,1,0) | `width: auto` on `> .card` at (0,4,1); the track owns the width, and matching the card rather than the aspect class covers every layout the view switcher produces |
+| `[dir=ltr] .itemsContainer>.card>.cardBox{margin-left:0;margin-right:1.2em}` | (0,4,0) | `margin: 0 !important` at (0,4,1). This, **not** `.cardBox{margin:.6em}`, is the horizontal rule in play — a plain `.cardBox` override cannot reach it |
+| `.cardBox-bottompadded{margin-bottom:1.8em!important}` | (0,1,0) **!important** | the same `margin: 0 !important`. Measured live before it was added: 28.8 px under every card, so rows sat 52.8 px apart against 24 px between columns |
+| `[dir=ltr] .padded-left` / `.padded-right` / `.padded-right-withalphapicker` (7.5 %, added to the container by the view JS), plus their `@supports` safe-area twins | (0,2,0) | out-specified at (0,3,1); no `!important` needed |
+| `.alphaPicker-fixed{bottom:5.5em;position:fixed}`, `[dir=ltr] .alphaPicker-fixed-right{right:1em}`, and a `max-height` font-size ladder down to 74 % | (0,1,0)–(0,2,0) | out-specified at (0,4,1); the letters carry explicit pixel sizes, so the ladder cannot reach them either |
+| `@media (max-height:50em){.alphaPickerButton-vertical{padding-block:1px!important}}` | (0,1,0) **!important** | not fought — `box-sizing: border-box` on the letter keeps it 24 px outside regardless |
+| `[dir=ltr] .sectionTitleButton{margin-left:1.5em!important}` and `[dir=ltr] .sectionTitleButton+.sectionTitleButton{margin-left:.5em!important}` | (0,2,0) **!important** | `margin: 0 !important`. The generic list view spells its toolbar buttons `.btnSort.sectionTitleButton`, and those margins would otherwise leave a ragged 24 px / 8 px rhythm through the flex gap |
+| `.paper-icon-button-light>.material-icons{font-size:1.6695652174em}` | (0,1,1) child combinator | answered with a child combinator of its own |
+| `.backgroundContainer.withBackdrop` — this sheet's own scrim, section (b) | (0,2,0) | transparent under `html.af-library.af-backdrop` at (0,4,1) |
+
+Those two card margins are the **only** `!important` declarations section (l)
+adds; everything else is plain specificity.
+
+`.alphaPickerButton-selected` and `.paging` have **zero** stock rules anywhere in
+the bundle. Section (l) is the entire styling those two ever get.
+
+### The backdrop on a library page
+
+`#af-space`, `#af-backdrop` and the scrim are global and unchanged. Two things
+would otherwise double up with them, and a library page is the only place both
+appear at once:
+
+* jellyfin-web's own `.backdropContainer` — already faded by
+  `html.af-backdrop .backdropContainer { opacity: 0 }` in section (c).
+* `.backgroundContainer.withBackdrop` — a library page is `.backdropPage`, so
+  jellyfin-web sets `withBackdrop`, and the `rgba(bg,.86)` scrim section (b)
+  gives that class is `position: fixed` with `z-index: auto`, i.e. **above**
+  `#af-space` at `-3`. Left alone it would all but erase our art. It stands down
+  for exactly as long as `html.af-backdrop` is up, and comes straight back when
+  it is not, so a library page with no card focused keeps its stock legibility
+  scrim.
+
+Neither change touches the video gates: `html.af-video` and
+`html.transparentDocument` still hide `#af-space` outright.
+
+### Layout notes
+
+* The grid's right padding is `calc(var(--af-gutter) + 64px)` — 40 px of letter
+  rail plus one `--af-rail-gap` beside it.
+* `padding-top` is `--af-space-6` (24 px), the artboard's own inset, so the first
+  row's 1.06 scale and its 3 px ring are not clipped by the page's top edge.
+* Column count is 8, dropping to 6 below 1600 px and 5 below 1280 px. It is ours,
+  not jellyfin-web's nine-step ladder.
+* The rail's `top` is `calc(var(--af-header-height) + 108px)` = 196 px, matching
+  the artboard.
+* Unfocused tile labels sit at `.72` here against Home's `.55`. On Home the
+  spotlight panel owns the attention and the rails are peripheral; in a library
+  grid the tiles are the whole page. `.72` is the artboard's value.
+* Stock hides the rail entirely below a 500 px viewport height
+  (`@media (max-height:31.25em){.alphaPicker-fixed{display:none!important}}`).
+  That is left alone — at that height there is no room for 27 letters.
+
 ## Testing
 
 ### Static

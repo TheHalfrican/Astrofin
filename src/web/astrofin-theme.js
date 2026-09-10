@@ -12,8 +12,9 @@
  *      <head>, because jellyfin-web appends chunk stylesheets lazily;
  *   2. build and maintain #af-space — starfield, nebula and the two crossfaded
  *      backdrop art layers;
- *   3. on Home only: track the focused/hovered card and drive the backdrop
- *      plus the #af-spotlight panel, #af-server-panel and #af-hint;
+ *   3. track the focused/hovered card and drive the backdrop from it — on
+ *      Home, where it also drives #af-spotlight, #af-server-panel and
+ *      #af-hint, and on the library grids, where it drives the art alone;
  *   4. pin <meta name="theme-color"> to --af-bg-base so the native chrome and
  *      the mpv letterbox match;
  *   5. gate every Astrofin layer off while video is playing.
@@ -268,6 +269,17 @@
             var hash = String(location.hash || '').replace(/^#!?/, '');
             if (hash) { return /^\/home(\.html)?([?/]|$)/.test(hash); }
             return !!doc.querySelector('#homeTab, .homePage');
+        }
+
+        // The library grids: #moviesPage, #tvPage, #musicPage and the generic
+        // list view, all of which render .libraryPage > .itemsContainer.
+        // Hash-first for the same reason as isHomeRoute, and the DOM fallback
+        // excludes .homePage because jf-web 10.11.11 puts *both* classes on
+        // Home - a bare .libraryPage probe would call Home a library.
+        function isLibraryRoute() {
+            var hash = String(location.hash || '').replace(/^#!?/, '');
+            if (hash) { return /^\/(movies|tv|music|list)(\.html)?([?/]|$)/.test(hash); }
+            return !!doc.querySelector('.libraryPage:not(.homePage)');
         }
 
         /* ------------------------------------------------------------------ */
@@ -604,7 +616,14 @@
             focusedCard = card;
             if (!card) { return; }
             card.classList.add('af-focused');
-            if (!isHomeRoute()) { return; }
+            /* A library grid drives the same art bleed as Home, but not the
+             * spotlight: placeSpotlight() inserts the panel into #homeTab's
+             * section stream, and a library page has no such stream. Resolve
+             * the route once, synchronously - the fetch below can outlive a
+             * navigation, and the Home path must behave exactly as it did when
+             * this was a bare `if (!isHomeRoute()) return`. */
+            var home = isHomeRoute();
+            if (!home && !isLibraryRoute()) { return; }
 
             var id = card.getAttribute('data-id');
             if (!id) { return; }
@@ -612,7 +631,7 @@
             fetchItem(id).then(guard(function (item) {
                 if (token !== requestToken || !item) { return; }
                 focusedItem = item;
-                renderSpotlight(item, card);
+                if (home) { renderSpotlight(item, card); }
                 setBackdrop(backdropUrlFor(item));
             })).catch(function (e) { log(e); });
         }
@@ -822,8 +841,11 @@
             if (!node || !node.closest) { return null; }
             var card = node.closest('.card[data-id]');
             if (!card) { return null; }
-            // Home rails only; other pages keep plain jellyfin-web behaviour.
-            return card.closest('#homeTab, .homePage') ? card : null;
+            // Home rails and library grids only; every other page keeps plain
+            // jellyfin-web behaviour.
+            return card.closest('#homeTab, .homePage, .libraryPage .itemsContainer')
+                ? card
+                : null;
         }
 
         var hoverTimer = 0;
@@ -888,9 +910,13 @@
             });
         }
 
-        function leaveHome() {
+        /* Tear the Home panels down. `keepSelection` is set only when the route
+         * moved to a library grid, which keeps its own focused card and the art
+         * backdrop that card is driving; everything the spotlight is made of
+         * goes either way. With it falsy this is the original teardown. */
+        function leaveHome(keepSelection) {
             overlaysWanted = false;
-            focusedItem = null;
+            if (!keepSelection) { focusedItem = null; }
             shownItem = null;
             shownCard = null;
             pendingItem = null;
@@ -898,9 +924,11 @@
             if (swapTimer) { clearTimeout(swapTimer); swapTimer = 0; }
             spotlightPainted = false;
             if (ui) { ui.body.classList.remove('af-sp-swap'); }
-            if (focusedCard) { focusedCard.classList.remove('af-focused'); }
-            focusedCard = null;
-            clearBackdrop();
+            if (!keepSelection) {
+                if (focusedCard) { focusedCard.classList.remove('af-focused'); }
+                focusedCard = null;
+                clearBackdrop();
+            }
             showOverlays(false);
         }
 
@@ -934,7 +962,20 @@
             keepThemeLast();
             pinThemeColor();
             watchPages();
-            if (isHomeRoute()) {
+            var home = isHomeRoute();
+            // Never both: Home carries .homePage AND .libraryPage in 10.11.11,
+            // so the library test only ever runs once Home has been ruled out.
+            var library = !home && isLibraryRoute();
+            /* Leaving a library grid drops its selection outright. The card it
+             * points at belongs to no #homeTab .verticalSection, so carrying it
+             * into Home would paint a stale item into the spotlight. */
+            if (!library && root().classList.contains('af-library')) { leaveHome(); }
+            if (library) {
+                root().classList.add('af-library');
+            } else {
+                root().classList.remove('af-library');
+            }
+            if (home) {
                 root().classList.add('af-home');
                 ensureUi();
                 renderServerPanel();
@@ -952,7 +993,7 @@
                 }
             } else {
                 root().classList.remove('af-home');
-                leaveHome();
+                leaveHome(library);
             }
         }
 
@@ -1054,6 +1095,7 @@
                 setBackdrop: setBackdrop,
                 clearBackdrop: clearBackdrop,
                 isHomeRoute: isHomeRoute,
+                isLibraryRoute: isLibraryRoute,
                 videoModeLabel: videoModeLabel,
                 buildUi: buildUi,
                 renderServerPanel: renderServerPanel,

@@ -567,14 +567,20 @@ html.af-video {
   white-space: nowrap;
 }
 
-/* Home rails: unfocused labels recede. */
-html.af-home #homeTab .card .cardText {
+/* Home rails and library grids: unfocused labels recede. The library branch
+ * lifts the resting opacity to the artboard's .72 in section (l); only the
+ * un-dim half is genuinely shared. */
+html.af-home #homeTab .card .cardText,
+html.af-library .itemsContainer .card .cardText {
   opacity: .55;
   transition: opacity var(--af-dur-tile) var(--af-ease-out);
 }
 html.af-home #homeTab .card:hover .cardText,
 html.af-home #homeTab .card:focus-within .cardText,
-html.af-home #homeTab .card.af-focused .cardText {
+html.af-home #homeTab .card.af-focused .cardText,
+html.af-library .itemsContainer .card:hover .cardText,
+html.af-library .itemsContainer .card:focus-within .cardText,
+html.af-library .itemsContainer .card.af-focused .cardText {
   opacity: 1;
 }
 
@@ -1915,7 +1921,285 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
 }
 
 /* ===================================================================== */
-/* (l) Reduced motion                                                     */
+/* (l) Library grid                                                       */
+/* Target: docs/design/canvas/Main.dc.html, artboard "3 Library grid      */
+/* (Movies)" — 72px gutter, 8 columns, 24px gap, 14px tile radius, focus  */
+/* scale 1.06 with --af-focus-ring-tile, unfocused labels at 72%, 20/26   */
+/* titles over 16/22 muted subs, and an A–Z rail of 24px letters whose    */
+/* selected letter is a 30px cyan disc with a glow. The focused item's    */
+/* art bleeds in behind everything through the same #af-backdrop layers   */
+/* Home uses.                                                             */
+/*                                                                        */
+/* Two deliberate deviations from that artboard, both owner decisions:    */
+/*   1. no separate 48px page title — jellyfin-web's own header already   */
+/*      carries the library name and its tabs, and section (d) styles     */
+/*      them; a second title would say it twice.                          */
+/*   2. no Sort / Filter / Genres text chips — jellyfin-web's toolbar is  */
+/*      icon buttons (.btnPlayAll, .btnShuffle, .btnSelectView, .btnSort, */
+/*      .btnFilter), so they take the circular glass treatment section    */
+/*      (d) gives the header buttons instead of being rebuilt as chips.   */
+/*                                                                        */
+/* Gate: html.af-library, set by astrofin-theme.js's isLibraryRoute() and */
+/* never set together with html.af-home — jf-web 10.11.11 puts BOTH       */
+/* .homePage and .libraryPage on Home, so the class is what separates     */
+/* them, not the markup.                                                  */
+/* ===================================================================== */
+
+/* The grid itself.
+ *
+ * jf-web 10.11.11 lays this out as a wrapping flex row of percent-width
+ * cards: `.itemsContainer{display:flex;margin:0 auto}` plus
+ * `.vertical-wrap{flex-direction:row;flex-wrap:wrap}` plus a nine-step
+ * media ladder on `.portraitCard` (33.3% → 10%). Grid tracks replace the
+ * ladder outright, so the column count and the gap are ours and the last
+ * row does not stretch.
+ *
+ * Nothing here needs !important: this selector is (0,3,1) and the stock
+ * padding rules it has to beat — `[dir=ltr] .padded-left`,
+ * `[dir=ltr] .padded-right` and `[dir=ltr] .padded-right-withalphapicker`
+ * (7.5%, added to the container by the view JS) — are all (0,2,0), as are
+ * their @supports/safe-area-inset twins. */
+html.af-library .itemsContainer.vertical-wrap {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: var(--af-rail-gap);
+  margin: 0;
+  padding-left: var(--af-gutter);
+  /* 64px clears the letter rail: 40px of rail plus one --af-rail-gap. */
+  padding-right: calc(var(--af-gutter) + 64px);
+  /* The first row scales to 1.06 and carries a 3px ring plus a 44px glow.
+   * The artboard leaves 24px inside its own clip for exactly this. */
+  padding-top: var(--af-space-6);
+}
+
+@media (max-width: 1599px) {
+  html.af-library .itemsContainer.vertical-wrap {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@media (max-width: 1279px) {
+  html.af-library .itemsContainer.vertical-wrap {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* The track owns the width now. Stock sizes the card, not the box, and does
+ * it per aspect class (.portraitCard, .squareCard, .backdropCard…) — none of
+ * it !important, and all of it (0,1,0), so matching every layout the view
+ * switcher can produce costs one (0,4,1) selector rather than a ladder. */
+html.af-library .itemsContainer.vertical-wrap > .card {
+  width: auto;
+}
+
+/* The grid gap replaces the card margin, and three stock rules feed it:
+ *   [dir=ltr] .itemsContainer>.card>.cardBox{margin-left:0;margin-right:1.2em}
+ *                                                            (0,4,0)
+ *   .cardBox{margin:.6em}                                     (0,1,0)
+ *   .cardBox-bottompadded{margin-bottom:1.8em!important}      (0,1,0) !
+ * The first is the one in play horizontally — a plain `.cardBox` override
+ * cannot reach it — and the third is the one that needs !important back:
+ * measured live, it left 28.8px under every card, so rows sat 52.8px apart
+ * against 24px between columns. This is (0,4,1), so !important here beats
+ * !important there. */
+html.af-library .itemsContainer > .card > .cardBox {
+  margin: 0 !important;
+}
+
+/* Unfocused labels recede, as they do on the Home rails (section (e) carries
+ * the shared dim/un-dim pair). The library grid sits a step brighter than
+ * Home's .55: on Home the spotlight panel owns the attention and the rails
+ * are peripheral, whereas here the tiles are the whole page. .72 is the
+ * artboard's value.
+ *
+ * (0,4,1), equal to the dim rule in section (e) and later in source, so it
+ * wins; the un-dim rules there are (0,5,1) and still beat both. */
+html.af-library .itemsContainer .card .cardText {
+  opacity: .72;
+}
+
+/* --------------------------------------------------------------------- */
+/* Toolbar                                                                */
+/* --------------------------------------------------------------------- */
+
+/* jf-web 10.11.11 renders this row twice on a library page — above the grid
+ * carrying .paging and the action buttons, below it carrying .paging alone —
+ * and both spell the same utility classes:
+ *   div.flex.align-items-center.justify-content-center.flex-wrap-wrap
+ *      .padded-top.padded-left.padded-right.padded-bottom.focuscontainer-x
+ * Right-align both inside the grid's own gutter. `.justify-content-center`
+ * (0,1,0) and the two `[dir=ltr] .padded-*` rules (0,2,0) are what this
+ * (0,5,1) selector has to beat. */
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top {
+  justify-content: flex-end;
+  gap: 10px;
+  padding-left: var(--af-gutter);
+  padding-right: calc(var(--af-gutter) + 64px);
+}
+
+/* The icon buttons, per deviation 2 above: the circular glass treatment from
+ * section (d), sized for a toolbar rather than for the header strip.
+ *
+ * The one stock !important worth naming: the generic list view spells these
+ * buttons `.btnSort.sectionTitleButton`, and
+ * `[dir=ltr] .sectionTitleButton{margin-left:1.5em!important}` together with
+ * `[dir=ltr] .sectionTitleButton+.sectionTitleButton{margin-left:.5em
+ * !important}` would otherwise leave a ragged 24px/8px rhythm through the
+ * flex gap. `margin: 0 !important` is the only way past that; everything
+ * else here is plain specificity over `.paper-icon-button-light` (0,1,0). */
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paper-icon-button-light {
+  box-sizing: border-box;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  padding: 0;
+  margin: 0 !important;
+  border-radius: var(--af-radius-pill);
+  border: 1px solid var(--af-edge-chip);
+  background: var(--af-glass-fill-soft);
+  color: var(--af-text-muted);
+  transition:
+    color var(--af-dur-tile) var(--af-ease-out),
+    background var(--af-dur-tile) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+
+/* Stock sizes the glyph off the button's own em box
+ * (`.paper-icon-button-light>.material-icons{font-size:1.6695652174em}`,
+ * a child combinator, so it must be answered with one). */
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paper-icon-button-light > .material-icons {
+  font-size: 22px;
+}
+
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paper-icon-button-light:hover {
+  color: var(--af-text-primary);
+  background: var(--af-glass-fill);
+}
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paper-icon-button-light:focus-visible,
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paper-icon-button-light.show-focus:focus {
+  outline: none;
+  color: var(--af-text-primary);
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-ring-in);
+}
+
+/* The pager: prev / next plus "1-100 of 1284". jf-web ships no CSS for
+ * .paging at all, so this is the only rule it has. */
+html.af-library .flex.justify-content-center.flex-wrap-wrap.padded-top .paging {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-muted);
+}
+
+/* --------------------------------------------------------------------- */
+/* A–Z rail                                                               */
+/* --------------------------------------------------------------------- */
+
+/* The view JS adds .alphaPicker-fixed-right to the picker and
+ * .alphabetPicker-right to its wrapper; only the first has stock CSS
+ * (`[dir=ltr] .alphaPicker-fixed-right{right:1em}`, (0,2,0)). Stock also
+ * pins `bottom:5.5em` with a safe-area twin and shrinks the whole picker
+ * through a max-height font-size ladder down to 74%. This is (0,4,1) and
+ * beats all of it; the letters below carry explicit pixel sizes, so the
+ * ladder cannot reach them either. */
+html.af-library .alphaPicker.alphaPicker-fixed.alphaPicker-vertical {
+  position: fixed;
+  right: var(--af-gutter);
+  left: auto;
+  top: calc(var(--af-header-height) + 108px);
+  bottom: var(--af-gutter);
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  align-self: auto;
+  background: none;
+  z-index: 2;
+}
+
+/* The letters are not children of .alphaPicker — the component wraps them in
+ * one `div.alphaPickerRow.alphaPickerRow-vertical`, so the distribution has
+ * to happen there or `space-between` above would be spacing a single child.
+ * Stock centres that row (`.alphaPickerRow{justify-content:center}`). */
+html.af-library .alphaPicker.alphaPicker-fixed .alphaPickerRow-vertical {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Stock leaves these buttons entirely unpainted — no background, no colour,
+ * no height — and sizes them with `padding:.1em .4em`, `flex-grow:1` and
+ * `.alphaPickerButton-vertical{width:1.5em}`. border-box is deliberate:
+ * `@media (max-height:50em)` forces `padding-block:1px!important` onto the
+ * vertical variant, which content-box would turn into a 26px letter. */
+html.af-library .alphaPicker .alphaPickerButton {
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  flex-grow: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: var(--af-type-meta-sm);
+  color: var(--af-text-primary);
+  background: transparent;
+  transition: all var(--af-dur-ring-in) var(--af-ease-out);
+}
+
+html.af-library .alphaPicker .alphaPickerButton:hover {
+  background: var(--af-glass-fill-soft);
+}
+
+/* jf-web's picker component adds and removes .alphaPickerButton-selected
+ * itself and ships NO stock rule for it — this is the entire selected state.
+ * Spelled with both classes so it is (0,4,1) and beats the :hover rule above
+ * on source order rather than needing a :not(). */
+html.af-library .alphaPicker .alphaPickerButton.alphaPickerButton-selected {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  font: var(--af-type-meta);
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: 0 0 24px rgba(var(--af-accent-primary-rgb), .45);
+}
+
+/* Same focus convention as section (e): :focus-visible for the pointer path,
+ * jf-web's .show-focus for its own keyboard/controller mode. */
+html.af-library .alphaPicker .alphaPickerButton:focus-visible,
+html.af-library .alphaPicker .alphaPickerButton.show-focus:focus {
+  outline: none;
+  color: var(--af-text-primary);
+  box-shadow: var(--af-focus-ring);
+}
+
+/* --------------------------------------------------------------------- */
+/* Backdrop                                                               */
+/* --------------------------------------------------------------------- */
+
+/* #af-space, #af-backdrop and the scrim are global, and section (c) already
+ * fades jf-web's own .backdropContainer out under html.af-backdrop. The
+ * other half only shows up here: a library page is .backdropPage, so
+ * jellyfin-web sets .withBackdrop on .backgroundContainer, and the
+ * rgba(bg,.86) scrim section (b) gives that class is position:fixed with
+ * z-index auto — above #af-space (-3). Once our art is driving it would all
+ * but erase it, so it stands down for exactly as long as ours is up.
+ * (0,4,1) against section (b)'s (0,2,0). */
+html.af-library.af-backdrop .backgroundContainer.withBackdrop {
+  background-color: transparent;
+}
+
+/* ===================================================================== */
+/* (m) Reduced motion                                                     */
 /* Durations, scales and offsets all come from tokens, which the tokens    */
 /* sheet already collapses under prefers-reduced-motion. Only the two      */
 /* keyframe drifts need switching off explicitly.                          */
@@ -1929,7 +2213,7 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
 }
 
 /* ===================================================================== */
-/* (m) Playback source badge                                              */
+/* (n) Playback source badge                                              */
 /* Injected by playback-source.js as a sibling of h3.pageTitle inside the  */
 /* OSD header's .headerLeft. Direct Play / Direct Stream / Transcoding,    */
 /* with a glass popover on focus or hover carrying the codec path, the     */

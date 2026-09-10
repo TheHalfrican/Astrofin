@@ -34,6 +34,42 @@ function onHome(overrides) {
     return { win, home, theme };
 }
 
+// The movies library as jf-web 10.11.11 renders it:
+//   .mainAnimatedPages
+//     > #moviesPage.page.libraryPage.backdropPage.pageWithAbsoluteTabs
+//       > .pageTabContent#moviesTab
+//         > .itemsContainer.vertical-wrap.padded-left.padded-right
+// Built here rather than in theme-fakes.js because the grid is the only thing
+// in the theme that reads it, and it is four nested divs.
+function buildLibrary(win) {
+    const doc = win.document;
+    const pages = doc.createElement('div');
+    pages.className = 'mainAnimatedPages';
+    const page = doc.createElement('div');
+    page.id = 'moviesPage';
+    page.className = 'page libraryPage backdropPage pageWithAbsoluteTabs';
+    const tab = doc.createElement('div');
+    tab.id = 'moviesTab';
+    tab.className = 'pageTabContent';
+    const grid = doc.createElement('div');
+    grid.className = 'itemsContainer vertical-wrap padded-left padded-right';
+    tab.appendChild(grid);
+    page.appendChild(tab);
+    pages.appendChild(page);
+    doc.body.appendChild(pages);
+    return { pages, page, tab, grid };
+}
+
+// A window with the theme installed and the movies library in the DOM.
+function onLibrary(overrides) {
+    const win = makeThemeWindow(Object.assign(
+        { hash: '#/movies.html?topParentId=lib1' }, overrides
+    ));
+    const library = buildLibrary(win);
+    const theme = loadTheme(win);
+    return { win, library, theme };
+}
+
 // ---------------------------------------------------------------------------
 // Installation and idempotency
 // ---------------------------------------------------------------------------
@@ -372,6 +408,40 @@ test('with no hash isHomeRoute falls back to the DOM probe', () => {
     assert.ok(theme.isHomeRoute());
 });
 
+test('isLibraryRoute claims the four grid views and nothing that merely starts like them', () => {
+    const { win, theme } = onLibrary();
+    const yes = [
+        '#/movies.html?topParentId=lib1', '#/tv.html', '#/music.html',
+        '#/list.html?parentId=7&serverId=s', '#!/movies', '#/tv/'
+    ];
+    for (const hash of yes) {
+        win.location.hash = hash;
+        assert.ok(theme.isLibraryRoute(), hash);
+    }
+    const no = ['#/home.html', '#/details?id=1', '#/movieslibrary', '#/tvguide', '#/search'];
+    for (const hash of no) {
+        win.location.hash = hash;
+        assert.ok(!theme.isLibraryRoute(), hash);
+    }
+});
+
+test('with no hash isLibraryRoute probes the DOM and never mistakes Home for a library', () => {
+    const win = makeThemeWindow();
+    const theme = loadTheme(win);
+    assert.ok(!theme.isLibraryRoute(), 'nothing rendered yet');
+
+    // jf-web 10.11.11 puts BOTH classes on Home, so a bare .libraryPage probe
+    // would call Home a library.
+    const home = win.document.createElement('div');
+    home.className = 'page libraryPage homePage';
+    win.document.body.appendChild(home);
+    assert.ok(!theme.isLibraryRoute(), 'Home carries .libraryPage too');
+
+    home.remove();
+    buildLibrary(win);
+    assert.ok(theme.isLibraryRoute());
+});
+
 // ---------------------------------------------------------------------------
 // Item metadata
 // ---------------------------------------------------------------------------
@@ -603,6 +673,26 @@ test('a card with no data-id, or off Home, never reaches the panel', () => {
     theme.setFocusedCard(card);
     assert.strictEqual(win.ApiClient.calls.length, 0, 'off Home the fetch is skipped');
     assert.ok(card.classList.contains('af-focused'), 'the class still tracks focus');
+});
+
+test('focusing a card on a library route crossfades the art but builds no spotlight', async () => {
+    const { win, library, theme } = onLibrary();
+    const item = {
+        Id: 'one', Name: 'Arrival', Type: 'Movie', ProductionYear: 2016,
+        BackdropImageTags: ['bt']
+    };
+    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
+    const card = makeCard(win, { id: 'one', parent: library.grid });
+    theme.setFocusedCard(card);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
+    win.images[0].onload();
+    assert.ok(theme.state().backdropLayers[0].classList.contains('af-on'));
+    assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
+    // placeSpotlight() inserts into #homeTab, which a library page does not have.
+    assert.strictEqual(theme.state().ui, null, 'no spotlight off Home');
 });
 
 test('homeSectionsContainer prefers the rails container and falls back to the tab', () => {
@@ -879,6 +969,16 @@ test('cardFrom only claims cards inside the home rails', () => {
     assert.strictEqual(theme.cardFrom(win.document.body), null);
 });
 
+test('cardFrom also claims cards inside a library grid', () => {
+    const { win, library, theme } = onLibrary();
+    const card = makeCard(win, { parent: library.grid });
+    assert.strictEqual(theme.cardFrom(card.querySelector('.cardScalable')), card);
+
+    // Same page, but outside the grid: jellyfin-web keeps that card.
+    const stray = makeCard(win, { parent: library.tab });
+    assert.strictEqual(theme.cardFrom(stray), null);
+});
+
 test('focusin selects the card immediately and cancels a pending hover', () => {
     const { win, home, theme } = onHome();
     win.ApiClient = makeThemeApiClient();
@@ -1009,6 +1109,65 @@ test('refresh off Home clears af-home and tears the selection down', () => {
     assert.ok(!win.document.documentElement.classList.contains('af-home'));
     assert.strictEqual(theme.state().focusedCard, null);
     assert.strictEqual(theme.state().ui.spotlight.hidden, true);
+});
+
+test('refresh on a library route sets af-library alone and keeps the selection', () => {
+    const { win, library, theme } = onLibrary();
+    win.ApiClient = makeThemeApiClient();
+    const card = makeCard(win, { id: 'one', parent: library.grid });
+    theme.setFocusedCard(card);
+    theme.refresh();
+    const html = win.document.documentElement;
+    assert.ok(html.classList.contains('af-library'));
+    assert.ok(!html.classList.contains('af-home'), 'never both');
+    // Cards stream into the grid long after the first hover, and each batch
+    // queues a refresh; the art must not blink off under the cursor.
+    assert.strictEqual(theme.state().focusedCard, card);
+    assert.ok(card.classList.contains('af-focused'));
+});
+
+test('refresh moving between Home and a library never leaves both classes set', () => {
+    const { win, theme } = onHome();
+    win.ApiClient = makeThemeApiClient();
+    const html = win.document.documentElement;
+    theme.refresh();
+    assert.ok(html.classList.contains('af-home'));
+    assert.ok(!html.classList.contains('af-library'));
+
+    buildLibrary(win);
+    win.location.hash = '#/movies.html?topParentId=lib1';
+    theme.refresh();
+    assert.ok(html.classList.contains('af-library'));
+    assert.ok(!html.classList.contains('af-home'));
+
+    win.location.hash = '#/home.html';
+    theme.refresh();
+    assert.ok(html.classList.contains('af-home'));
+    assert.ok(!html.classList.contains('af-library'));
+});
+
+test('refresh leaving a library grid for Home drops the grid selection', () => {
+    const { win, library, theme } = onLibrary();
+    const item = { Id: 'one', Type: 'Movie', Name: 'Arrival', BackdropImageTags: ['bt'] };
+    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
+    const card = makeCard(win, { id: 'one', parent: library.grid });
+    return theme.fetchItem('one').then(() => {
+        theme.setFocusedCard(card);
+        return Promise.resolve().then(() => {
+            theme.refresh();
+            assert.ok(theme.state().focusedItem, 'the grid selection is live');
+
+            // The card belongs to no #homeTab .verticalSection, so carrying it
+            // over would paint a stale item into the Home spotlight.
+            buildHome(win);
+            win.location.hash = '#/home.html';
+            theme.refresh();
+            assert.strictEqual(theme.state().focusedCard, null);
+            assert.strictEqual(theme.state().focusedItem, null);
+            assert.ok(!card.classList.contains('af-focused'));
+            assert.strictEqual(theme.state().currentBackdropUrl, null);
+        });
+    });
 });
 
 test('refresh repaints the panel for the card that is still focused', () => {

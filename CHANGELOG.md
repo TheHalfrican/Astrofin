@@ -128,6 +128,17 @@ project uses semantic versioning.
   macOS-only test modules are now compiled and run by CI, not only by the
   Gitea Windows runner.
 
+- Library grid restyled to the design canvas (docs/design/canvas/Main.dc.html,
+  docs/design/theme-injection.md "Library grid"): on the movies, tv, music and
+  list views (`html.af-library`) the poster grid is eight columns at the 72px
+  gutter with 24px gaps, six below 1600px and five below 1280px; the toolbar
+  is a right-aligned row of glass icon discs with the paging count in mono;
+  the alphabet picker is a fixed rail on the right with the selected letter
+  as a lit cyan disc; unfocused labels recede as on Home; and the focused
+  item's art bleeds in behind the grid through the same crossfade Home uses.
+  Two stock `!important` card margins are overridden so rows and columns
+  share the 24px gap.
+
 ### Fixed
 - The workspace test suite now passes on the GitHub macOS and Linux CI
   runners, not only on the Windows one. The jfn-cef test binary loads the
