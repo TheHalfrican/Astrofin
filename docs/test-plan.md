@@ -169,8 +169,24 @@ verified where matters:
 | Verified how | Crates |
 |---|---|
 | `cargo test` on this machine | `windows`, `windows_sink`, `gpu_paint`, `jfn_cef`, `mpv`, `xtask`, the non-Unix half of `platform_abi` |
-| `cargo check` + `clippy --target x86_64-unknown-linux-gnu --all-targets` here; run by Linux CI | `x11`, `linux_util`, `wake_event`, `mpris`, and the Linux halves of `gpu_paint`, `mpv`, `platform_abi` |
-| Logic compiled and run in a scratch crate, call sites reviewed; first compiled by CI | `wayland` (a proc-macro dependency cannot cross-build from Windows), `macos`, `macos_sink` (cef-dll-sys needs a real cross toolchain) |
+| `cargo check` + `clippy --target x86_64-unknown-linux-gnu --all-targets` here; compiled and run by Linux CI since 2026-09-10 | `x11`, `linux_util`, `wake_event`, `mpris`, and the Linux halves of `gpu_paint`, `mpv`, `platform_abi` |
+| Logic compiled and run in a scratch crate, call sites reviewed; compiled and run by Linux/macOS CI since 2026-09-10 | `wayland` (a proc-macro dependency cannot cross-build from Windows), `macos`, `macos_sink` (cef-dll-sys needs a real cross toolchain) |
+
+"Run by CI" was not true when phase 5 landed. `cargo test` and `cargo clippy`
+ran on the self-hosted Gitea Windows runner alone
+(`.gitea/workflows/build-windows.yml`): `build-linux-appimage.yml` and
+`build-macos.yml` built the app, which compiles the non-test code and nothing
+under `#[cfg(test)]`, and `.github/workflows/checks.yml` leaves both commands
+out on purpose because linking the workspace needs libmpv and CEF. So the test
+modules in the Linux- and macOS-only crates were compiled by no CI at all.
+Fixed on 2026-09-10: each of those two build workflows gained a "Lint (clippy)
+and test" step running the same pair of commands as the Gitea job, placed after
+the dependencies are in place and before the artifact upload — natively on the
+macOS runners, and inside `astrofin-appimage:base` on Linux, where the
+workspace is built in the first place (the runner itself has neither libmpv nor
+CEF's build dependencies, and the image now installs `clippy` for it). Both
+reuse the build's own `CARGO_TARGET_DIR`, its `CEF_PATH` and the meson libmpv
+directory, so nothing is downloaded or built twice.
 
 The cross-check recipe, for a later pass: from `src/`, with
 `dev/windows/env.ps1` sourced, `CC_x86_64_unknown_linux_gnu=clang`,
@@ -240,11 +256,15 @@ Found during phase 5 (also design calls):
   expansion) cannot move into a tested module without a shared
   build-dependency crate. `**/build.rs` stays exempt for that reason, not
   because those rules are untestable.
-- macOS CI (`.github/workflows/build-macos.yml`) runs neither `cargo test`
-  nor `cargo clippy`, so every `#[cfg(test)]` module in `src/macos` and
-  `src/macos_sink` is compiled for the first time only when someone runs
-  `cargo test` on the Mac. Adding those two steps is the cheapest way to
-  close the gap.
+- **Fixed 2026-09-10.** No CI compiled the platform test modules: macOS CI
+  (`.github/workflows/build-macos.yml`) ran neither `cargo test` nor
+  `cargo clippy`, and Linux CI (`build-linux-appimage.yml`) only built the app,
+  so every `#[cfg(test)]` module in `src/macos`, `src/macos_sink`, `src/x11`,
+  `src/wayland`, `src/linux_util`, `src/wake_event`, `src/mpris` and the unix
+  halves of `platform_abi`, `gpu_paint` and `mpv` was compiled for the first
+  time only when someone ran `cargo test` on that OS by hand. Both workflows
+  now run the two commands after their dependencies are in place; see the
+  phase-5 note above for how each finds libmpv and CEF.
 - `src/wayland/src/root_window.rs` (0.90) and `scale_probe.rs` (0.89) are the
   two files whose decision cores are extracted and tested in place but whose
   ratio still sits below 1.0, because the SCTK `Dispatch`/`*Handler` impls

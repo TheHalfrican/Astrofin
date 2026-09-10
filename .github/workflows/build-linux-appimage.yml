@@ -38,6 +38,32 @@ jobs:
       - name: Build AppImage
         run: ./dev/linux/appimage/build.sh
 
+      # The AppImage is compiled inside astrofin-appimage:base
+      # (dev/linux/appimage/Dockerfile) because the runner itself has neither
+      # libmpv nor CEF's build dependencies, so clippy and the tests run in that
+      # same image over the same bind mounts. They reuse the cargo target
+      # directory and the meson libmpv the build left in build/appimage/build
+      # (mounted at /build, exactly as container-build.sh sees it) plus the CEF
+      # distribution setup-cef unpacked into .cache/cef, so neither is
+      # downloaded or built a second time.
+      - name: Lint (clippy) and test
+        run: |
+          if command -v podman >/dev/null 2>&1; then cmd=podman; else cmd=docker; fi
+          "$cmd" run --rm \
+            -v "$PWD:/src" \
+            -v "$PWD/build/appimage/build:/build" \
+            -w /src \
+            -e CARGO_TARGET_DIR=/build/cargo-target \
+            -e CEF_PATH=/src/.cache/cef \
+            -e JFN_MPV_INCLUDE_DIR=/src/third_party/mpv/include \
+            -e JFN_MPV_LIB_DIR=/build/mpv-build \
+            -e LD_LIBRARY_PATH=/build/mpv-build \
+            astrofin-appimage:base \
+            sh -euc '
+              cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+              cargo test --manifest-path src/Cargo.toml --workspace
+            '
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

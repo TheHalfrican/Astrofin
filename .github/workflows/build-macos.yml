@@ -57,6 +57,24 @@ jobs:
       - name: Build app bundle
         run: cargo xtask install --prefix build/output
 
+      # The workspace links libmpv and builds CEF's C++ wrapper, so this is the
+      # first point in the run where clippy and the tests can compile: the step
+      # above meson-built libmpv into build/mpv-build and setup-cef unpacked the
+      # CEF distribution into .cache/cef. Point cargo at both (the same env
+      # `cargo xtask build` passes) so neither is downloaded or built twice, and
+      # keep the target directory the build already populated.
+      - name: Lint (clippy) and test
+        run: |
+          export CARGO_TARGET_DIR="$PWD/build/cargo-target"
+          export CEF_PATH="$PWD/.cache/cef"
+          export JFN_MPV_INCLUDE_DIR="$PWD/third_party/mpv/include"
+          export JFN_MPV_LIB_DIR="$PWD/build/mpv-build"
+          # libmpv.2.dylib sits in the meson build dir, not next to the test
+          # binaries, and cargo only appends its own target dirs to this.
+          export DYLD_FALLBACK_LIBRARY_PATH="$PWD/build/mpv-build:${DYLD_FALLBACK_LIBRARY_PATH:-$HOME/lib:/usr/local/lib:/usr/lib}"
+          cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          cargo test --manifest-path src/Cargo.toml --workspace
+
       - name: Create DMG
         run: |
           brew install create-dmg
