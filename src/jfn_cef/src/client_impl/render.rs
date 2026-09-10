@@ -3,6 +3,7 @@ use std::os::raw::c_int;
 use std::sync::Arc;
 
 use crate::client::Inner;
+use crate::client_logic::paint_is_popup;
 use crate::platform_ops;
 
 wrap_render_handler! {
@@ -48,11 +49,7 @@ wrap_render_handler! {
             height: c_int,
         ) {
             let kind: sys::cef_paint_element_type_t = type_.into();
-            let is_popup = match kind {
-                sys::cef_paint_element_type_t::PET_POPUP => true,
-                sys::cef_paint_element_type_t::PET_VIEW => false,
-                _ => return,
-            };
+            let Some(is_popup) = paint_is_popup(kind) else { return };
             let rects: Vec<platform_ops::JfnRect> = dirty_rects
                 .map(|d| {
                     d.iter()
@@ -70,11 +67,7 @@ wrap_render_handler! {
             info: Option<&AcceleratedPaintInfo>,
         ) {
             let kind: sys::cef_paint_element_type_t = type_.into();
-            let is_popup = match kind {
-                sys::cef_paint_element_type_t::PET_POPUP => true,
-                sys::cef_paint_element_type_t::PET_VIEW => false,
-                _ => return,
-            };
+            let Some(is_popup) = paint_is_popup(kind) else { return };
             let Some(info) = info else { return };
             self.inner.on_accelerated_paint(is_popup, info);
         }

@@ -13,14 +13,14 @@
 
 use std::time::Instant;
 
-use jfn_playback::sink_core::{
-    self, MediaCommand, Phase, PositionThrottle, QueuedSink, map_kind_to_phase,
-};
+mod logic;
+
+use jfn_playback::sink_core::{self, Phase, PositionThrottle, QueuedSink, map_kind_to_phase};
 use jfn_playback::{MediaMetadata, MediaType as PbMediaType, PlaybackEvent, PlaybackEventKind};
 use windows::Foundation::TimeSpan;
 use windows::Media::{
-    MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
-    SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
+    SystemMediaTransportControls, SystemMediaTransportControlsButton,
+    SystemMediaTransportControlsButtonPressedEventArgs,
     SystemMediaTransportControlsTimelineProperties,
 };
 use windows::Storage::Streams::{
@@ -152,8 +152,7 @@ fn init_smtc(hwnd_raw: isize) -> Option<Smtc> {
                     if let Some(args) = args.as_ref()
                         && let Ok(span) = args.RequestedPlaybackPosition()
                     {
-                        let pos_us = span.Duration / 10;
-                        sink_core::seek_to_ms(pos_us / 1000);
+                        sink_core::seek_to_ms(logic::ticks_to_ms(span.Duration));
                     }
                     Ok(())
                 },
@@ -180,35 +179,24 @@ fn teardown_smtc(s: Smtc) {
 }
 
 fn on_button_pressed(button: SystemMediaTransportControlsButton) {
-    use SystemMediaTransportControlsButton as B;
-    let cmd = match button {
-        B::Play => MediaCommand::Play,
-        B::Pause => MediaCommand::Pause,
-        B::Stop => MediaCommand::Stop,
-        B::Next => MediaCommand::Next,
-        B::Previous => MediaCommand::Previous,
-        _ => return,
-    };
-    sink_core::execute(cmd);
+    if let Some(cmd) = logic::button_to_command(button) {
+        sink_core::execute(cmd);
+    }
 }
 
 fn deliver(state: &mut WinState, smtc: &mut Option<Smtc>, ev: &PlaybackEvent) {
     match ev.kind {
         PlaybackEventKind::MetadataChanged => {
-            if !ev.metadata.id.is_empty() && ev.metadata.id == state.metadata.id {
+            if logic::is_same_item(&ev.metadata, &state.metadata) {
                 return;
             }
             state.metadata = ev.metadata.clone();
         }
         PlaybackEventKind::ArtworkChanged => {
             let Some(smtc) = smtc.as_mut() else { return };
-            if ev.artwork_uri.is_empty() {
-                return;
-            }
-            let Some(comma) = ev.artwork_uri.find(',') else {
+            let Some(b64) = logic::data_uri_payload(&ev.artwork_uri) else {
                 return;
             };
-            let b64 = &ev.artwork_uri[comma + 1..];
             let bytes = match decode_base64(b64) {
                 Some(b) => b,
                 None => return,
@@ -234,13 +222,14 @@ fn deliver(state: &mut WinState, smtc: &mut Option<Smtc>, ev: &PlaybackEvent) {
             let p = map_kind_to_phase(ev.kind);
             state.phase = Some(p);
             let Some(s) = smtc.as_mut() else { return };
+            let status = logic::playback_status(p);
             match p {
                 Phase::Playing => {
-                    let _ = s.smtc.SetPlaybackStatus(MediaPlaybackStatus::Playing);
+                    let _ = s.smtc.SetPlaybackStatus(status);
                     update_display_properties(state, s);
                 }
                 Phase::Paused => {
-                    let _ = s.smtc.SetPlaybackStatus(MediaPlaybackStatus::Paused);
+                    let _ = s.smtc.SetPlaybackStatus(status);
                     update_timeline(state, s);
                 }
                 Phase::Stopped => {
@@ -249,7 +238,7 @@ fn deliver(state: &mut WinState, smtc: &mut Option<Smtc>, ev: &PlaybackEvent) {
                     s.cached_thumbnail = None;
                     let _ = s.updater.ClearAll();
                     let _ = s.updater.Update();
-                    let _ = s.smtc.SetPlaybackStatus(MediaPlaybackStatus::Stopped);
+                    let _ = s.smtc.SetPlaybackStatus(status);
                     return;
                 }
             }
@@ -280,8 +269,10 @@ fn update_display_properties(state: &mut WinState, s: &mut Smtc) {
         return;
     }
     let _ = s.updater.ClearAll();
+    let _ = s
+        .updater
+        .SetType(logic::playback_type(state.metadata.media_type));
     if state.metadata.media_type == PbMediaType::Audio {
-        let _ = s.updater.SetType(MediaPlaybackType::Music);
         if let Ok(music) = s.updater.MusicProperties() {
             let _ = music.SetTitle(&HSTRING::from(&state.metadata.title));
             let _ = music.SetArtist(&HSTRING::from(&state.metadata.artist));
@@ -290,13 +281,10 @@ fn update_display_properties(state: &mut WinState, s: &mut Smtc) {
                 let _ = music.SetTrackNumber(state.metadata.track_number as u32);
             }
         }
-    } else {
-        let _ = s.updater.SetType(MediaPlaybackType::Video);
-        if let Ok(video) = s.updater.VideoProperties() {
-            let _ = video.SetTitle(&HSTRING::from(&state.metadata.title));
-            if !state.metadata.artist.is_empty() {
-                let _ = video.SetSubtitle(&HSTRING::from(&state.metadata.artist));
-            }
+    } else if let Ok(video) = s.updater.VideoProperties() {
+        let _ = video.SetTitle(&HSTRING::from(&state.metadata.title));
+        if !state.metadata.artist.is_empty() {
+            let _ = video.SetSubtitle(&HSTRING::from(&state.metadata.artist));
         }
     }
     if let Some(thumb) = &s.cached_thumbnail {
@@ -307,12 +295,14 @@ fn update_display_properties(state: &mut WinState, s: &mut Smtc) {
 }
 
 fn update_timeline(state: &WinState, s: &Smtc) {
-    if state.metadata.duration_us <= 0 {
+    if !logic::has_timeline(&state.metadata) {
         return;
     }
     let tl = SystemMediaTransportControlsTimelineProperties::new();
     let Ok(tl) = tl else { return };
-    let to_ticks = |us: i64| TimeSpan { Duration: us * 10 };
+    let to_ticks = |us: i64| TimeSpan {
+        Duration: logic::us_to_ticks(us),
+    };
     let _ = tl.SetStartTime(TimeSpan { Duration: 0 });
     let _ = tl.SetEndTime(to_ticks(state.metadata.duration_us));
     let _ = tl.SetPosition(to_ticks(state.position_us));

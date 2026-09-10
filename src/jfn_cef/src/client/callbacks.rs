@@ -6,6 +6,7 @@ use cef::{
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
 
+use crate::client_logic::{MenuResult, menu_result};
 use crate::ipc::BrowserMessage;
 use crate::platform_ops::MenuSelection;
 use crate::sink_routing::Handle;
@@ -26,22 +27,26 @@ impl Inner {
             return;
         }
         let pending = self.take_pending_menu_callback();
-        // Ids below USER_FIRST are CEF built-in commands; only cont() executes them.
-        if id >= 0 && id < MenuId::USER_FIRST.get_raw() as c_int {
-            if let Some(cb) = pending {
-                cb.cont(id, EventFlags::default());
+        match menu_result(id, MenuId::USER_FIRST.get_raw() as c_int) {
+            MenuResult::Builtin => {
+                if let Some(cb) = pending {
+                    cb.cont(id, EventFlags::default());
+                }
             }
-            return;
+            MenuResult::Dismissed => {
+                if let Some(cb) = pending {
+                    cb.cancel();
+                }
+            }
+            MenuResult::AppCommand => {
+                if let Some(cb) = pending {
+                    cb.cancel();
+                }
+                let inner = Arc::clone(self);
+                let mut task = DispatchMenuCommandTask::new(inner, id);
+                let _ = post_task(ThreadId::UI, Some(&mut task));
+            }
         }
-        if let Some(cb) = pending {
-            cb.cancel();
-        }
-        if id < 0 {
-            return;
-        }
-        let inner = Arc::clone(self);
-        let mut task = DispatchMenuCommandTask::new(inner, id);
-        let _ = post_task(ThreadId::UI, Some(&mut task));
     }
 
     fn dispatch_menu_command(&self, id: c_int) {

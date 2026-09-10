@@ -69,10 +69,11 @@ impl LayerSurface {
         let Some(viewport) = self.viewport.as_ref() else {
             return;
         };
-        if src_w > 0 && src_h > 0 {
+        let (send_source, send_destination) = viewport_update(src_w, src_h, dst_w, dst_h);
+        if send_source {
             viewport.set_source(0.0, 0.0, src_w as f64, src_h as f64);
         }
-        if dst_w > 0 && dst_h > 0 {
+        if send_destination {
             viewport.set_destination(dst_w, dst_h);
         }
     }
@@ -103,9 +104,24 @@ pub(crate) struct FrameCommit<'a> {
     dst_h: i32,
 }
 
+/// Clamp a viewport source rect to the buffer it reads from: a `wp_viewport`
+/// source larger than the attached buffer is a fatal protocol error that kills
+/// the client, so a producer that overstates its visible rect is corrected
+/// here rather than trusted.
+pub(crate) fn clamp_source(src_w: i32, src_h: i32, buf_w: i32, buf_h: i32) -> (i32, i32) {
+    (src_w.min(buf_w), src_h.min(buf_h))
+}
+
+/// Which halves of a `wp_viewport` update may go on the wire. The protocol
+/// rejects a non-positive source or destination, and omitting either leaves
+/// whatever the compositor already latched in force — which is how a frame
+/// that only rescales its destination avoids disturbing the source.
+pub(crate) fn viewport_update(src_w: i32, src_h: i32, dst_w: i32, dst_h: i32) -> (bool, bool) {
+    (src_w > 0 && src_h > 0, dst_w > 0 && dst_h > 0)
+}
+
 impl<'a> FrameCommit<'a> {
-    /// Clamps `src_*` to the buffer dimensions: a `wp_viewport` source larger
-    /// than the attached buffer is a fatal protocol error that kills the client.
+    /// Clamps `src_*` to the buffer dimensions via [`clamp_source`].
     pub(crate) fn new(
         buf: FrameBuffer<'a>,
         buf_w: i32,
@@ -115,12 +131,13 @@ impl<'a> FrameCommit<'a> {
         dst_w: i32,
         dst_h: i32,
     ) -> Self {
+        let (src_w, src_h) = clamp_source(src_w, src_h, buf_w, buf_h);
         Self {
             buf,
             buf_w,
             buf_h,
-            src_w: src_w.min(buf_w),
-            src_h: src_h.min(buf_h),
+            src_w,
+            src_h,
             dst_w,
             dst_h,
         }
@@ -146,5 +163,45 @@ impl SurfaceRef {
             viewport.destroy();
         }
         self.surface.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_source, viewport_update};
+
+    #[test]
+    fn a_source_inside_the_buffer_is_left_alone() {
+        assert_eq!(clamp_source(100, 50, 200, 200), (100, 50));
+        assert_eq!(clamp_source(200, 200, 200, 200), (200, 200));
+    }
+
+    #[test]
+    fn a_source_larger_than_the_buffer_is_clamped_per_axis() {
+        // Overstating one axis must not shrink the other.
+        assert_eq!(clamp_source(300, 50, 200, 200), (200, 50));
+        assert_eq!(clamp_source(50, 300, 200, 200), (50, 200));
+        assert_eq!(clamp_source(i32::MAX, i32::MAX, 64, 32), (64, 32));
+    }
+
+    #[test]
+    fn a_positive_source_and_destination_both_go_on_the_wire() {
+        assert_eq!(viewport_update(64, 32, 1280, 720), (true, true));
+    }
+
+    #[test]
+    fn a_non_positive_source_leaves_the_latched_source_in_force() {
+        // The reapply-viewport path deliberately passes a zero source so only
+        // the destination is rescaled.
+        assert_eq!(viewport_update(0, 0, 1280, 720), (false, true));
+        assert_eq!(viewport_update(64, 0, 1280, 720), (false, true));
+        assert_eq!(viewport_update(-1, 32, 1280, 720), (false, true));
+    }
+
+    #[test]
+    fn a_non_positive_destination_is_never_sent() {
+        assert_eq!(viewport_update(64, 32, 0, 0), (true, false));
+        assert_eq!(viewport_update(64, 32, 1280, -1), (true, false));
+        assert_eq!(viewport_update(0, 0, 0, 0), (false, false));
     }
 }

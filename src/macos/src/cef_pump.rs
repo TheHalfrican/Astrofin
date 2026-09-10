@@ -47,6 +47,24 @@ static DMLW_CALLS: AtomicU64 = AtomicU64::new(0);
 // 10.0ms — anything > 10.0ms means Run was cut short.
 const CEF_MAX_TIME_SLICE_MS: f64 = 10.0;
 
+/// Whether a drain that took `elapsed_ms` has to re-signal the work source.
+///
+/// Anything longer than CEF's own 10 ms slice means `Run` was cut short with
+/// the `WorkDeduplicator` stuck at `kDoWorkPending`, where it drops incoming
+/// `ScheduleWork` calls. Re-signalling is what gets the pump moving again —
+/// but only when nothing already signalled it while we were inside
+/// `do_message_loop_work`, since that pending signal will drain it anyway.
+fn needs_rekick(elapsed_ms: f64, pending: bool) -> bool {
+    elapsed_ms > CEF_MAX_TIME_SLICE_MS && !pending
+}
+
+/// The delay one `OnScheduleMessagePumpWork` maps onto, in seconds, or `None`
+/// for "immediately" — which CEF spells as a zero or negative delay and the
+/// pump answers by signalling the work source instead of arming the timer.
+fn schedule_delay_secs(delay_ms: i64) -> Option<f64> {
+    (delay_ms > 0).then(|| delay_ms as f64 / 1000.0)
+}
+
 /// Mark the work source signalled and wake the main run loop.
 fn signal_work_source() {
     let src = WORK_SOURCE.load(Ordering::Acquire);
@@ -80,8 +98,7 @@ fn pump_drain(trigger: &str) {
     let ms = t0.elapsed().as_secs_f64() * 1e3;
     let pending = WORK_SOURCE_PENDING.load(Ordering::Acquire);
 
-    let wedged = ms > CEF_MAX_TIME_SLICE_MS;
-    if wedged && !pending {
+    if needs_rekick(ms, pending) {
         signal_work_source();
     }
 }
@@ -162,15 +179,18 @@ pub(crate) fn on_schedule(delay_ms: i64) {
         }
         return;
     }
-    if delay_ms <= 0 {
-        SCHED_IMM_CALLS.fetch_add(1, Ordering::Relaxed);
-        signal_work_source();
-    } else {
-        SCHED_DELAYED_CALLS.fetch_add(1, Ordering::Relaxed);
-        let timer = DELAYED_TIMER.load(Ordering::Acquire);
-        // SAFETY: the pointer is null or the timer `init` stored.
-        if let Some(timer) = unsafe { timer.as_ref() } {
-            timer.set_next_fire_date(CFAbsoluteTimeGetCurrent() + delay_ms as f64 / 1000.0);
+    match schedule_delay_secs(delay_ms) {
+        None => {
+            SCHED_IMM_CALLS.fetch_add(1, Ordering::Relaxed);
+            signal_work_source();
+        }
+        Some(secs) => {
+            SCHED_DELAYED_CALLS.fetch_add(1, Ordering::Relaxed);
+            let timer = DELAYED_TIMER.load(Ordering::Acquire);
+            // SAFETY: the pointer is null or the timer `init` stored.
+            if let Some(timer) = unsafe { timer.as_ref() } {
+                timer.set_next_fire_date(CFAbsoluteTimeGetCurrent() + secs);
+            }
         }
     }
 }
@@ -201,5 +221,42 @@ pub(crate) fn shutdown() {
         // SAFETY: reclaims the +1 `init` stored.
         let source = unsafe { CFRetained::from_raw(source) };
         source.invalidate();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drain_inside_cefs_time_slice_needs_no_rekick() {
+        assert!(!needs_rekick(0.0, false));
+        assert!(!needs_rekick(9.9, false));
+    }
+
+    #[test]
+    fn the_boundary_itself_is_not_a_wedge() {
+        // CEF breaks on strict inequality, so exactly 10 ms is a clean slice.
+        assert!(!needs_rekick(10.0, false));
+        assert!(needs_rekick(10.000_001, false));
+    }
+
+    #[test]
+    fn an_already_signalled_source_is_not_signalled_again() {
+        assert!(!needs_rekick(50.0, true));
+        assert!(needs_rekick(50.0, false));
+    }
+
+    #[test]
+    fn a_positive_delay_becomes_seconds() {
+        assert_eq!(schedule_delay_secs(1000), Some(1.0));
+        assert_eq!(schedule_delay_secs(1), Some(0.001));
+    }
+
+    #[test]
+    fn a_zero_or_negative_delay_means_immediately() {
+        assert_eq!(schedule_delay_secs(0), None);
+        assert_eq!(schedule_delay_secs(-1), None);
+        assert_eq!(schedule_delay_secs(i64::MIN), None);
     }
 }

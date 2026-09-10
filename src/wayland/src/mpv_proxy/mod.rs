@@ -58,6 +58,21 @@ struct PublishedSize {
     generation: u32,
 }
 
+/// The stamp for a newly published size. Readers only ever compare stamps for
+/// inequality, never order, so wrapping is harmless; the first is 1 so that a
+/// reader starting at 0 always sees the first publication as new.
+fn next_generation(current: Option<u32>) -> u32 {
+    match current {
+        None => 1,
+        Some(g) => g.wrapping_add(1),
+    }
+}
+
+/// Whether a published size is newer than the one a reader already applied.
+fn generation_is_new(generation: u32, seen: u32) -> bool {
+    generation != seen
+}
+
 /// What the proxy's two threads share with the rest of the process.
 pub(crate) struct ProxyShared {
     /// `None` until the host toplevel has been configured — there is no
@@ -97,13 +112,15 @@ impl ProxyShared {
 
     /// The published size, or `None` when nothing newer than `seen` exists.
     fn window_size_since(&self, seen: u32) -> Option<PublishedSize> {
-        self.window.lock().filter(|p| p.generation != seen)
+        self.window
+            .lock()
+            .filter(|p| generation_is_new(p.generation, seen))
     }
 
     pub(crate) fn set_window_size(&self, size: WindowSize) {
         {
             let mut cur = self.window.lock();
-            let generation = cur.map_or(1, |p| p.generation.wrapping_add(1));
+            let generation = next_generation(cur.map(|p| p.generation));
             *cur = Some(PublishedSize { size, generation });
         }
         self.wake_mpv_thread();
@@ -200,5 +217,40 @@ impl WpFractionalScaleV1Handler for FracScaleH {
             "wp_fractional_scale_v1.preferred_scale",
             slf.try_send_preferred_scale(scale),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generation_is_new, next_generation};
+
+    #[test]
+    fn the_first_publication_is_new_to_a_reader_that_has_seen_nothing() {
+        let first = next_generation(None);
+        assert!(generation_is_new(first, 0));
+    }
+
+    #[test]
+    fn each_publication_supersedes_the_last() {
+        let mut g = next_generation(None);
+        for _ in 0..8 {
+            let next = next_generation(Some(g));
+            assert!(generation_is_new(next, g));
+            g = next;
+        }
+    }
+
+    #[test]
+    fn a_reader_that_applied_the_current_size_sees_nothing_new() {
+        let g = next_generation(Some(next_generation(None)));
+        assert!(!generation_is_new(g, g));
+    }
+
+    #[test]
+    fn the_stamp_wraps_instead_of_overflowing() {
+        assert_eq!(next_generation(Some(u32::MAX)), 0);
+        // Still distinguishable from the stamp it replaced, which is all a
+        // reader compares.
+        assert!(generation_is_new(next_generation(Some(u32::MAX)), u32::MAX));
     }
 }

@@ -26,17 +26,21 @@
 
 mod device;
 mod layer;
+mod order;
 
 use std::ffi::c_int;
 
-use jfn_gpu_paint::{Frame, FrameSize, Pixels};
-use jfn_platform_abi::{PaintFrame, Scale, SurfaceHandle};
+use jfn_gpu_paint::{Frame, Pixels};
+use jfn_platform_abi::{PaintFrame, SurfaceHandle};
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::DirectComposition::IDCompositionVisual;
 
 use crate::render::device::Devices;
 use crate::render::layer::Layer;
+use crate::render::order::{
+    bgra_stride, popup_offset, restack as restack_order, software_frame_size,
+};
 
 /// Which of a surface's two visuals a call addresses.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -222,13 +226,8 @@ pub(crate) fn restack(ordered: &[SurfaceHandle]) {
     let Some(root) = devices.as_ref().map(Devices::root) else {
         return;
     };
-    let rank = |e: &Entry| ordered.iter().position(|h| h.id() == e.id.0);
-
-    let (mut named, mut unnamed): (Vec<Entry>, Vec<Entry>) = std::mem::take(surfaces)
-        .into_iter()
-        .partition(|e| rank(e).is_some());
-    named.sort_by_key(|e| rank(e).unwrap_or(usize::MAX));
-    named.append(&mut unnamed);
+    let ordered: Vec<u64> = ordered.iter().map(|h| h.id()).collect();
+    let named = restack_order(std::mem::take(surfaces), |e| e.id.0, &ordered);
 
     unsafe {
         for entry in &named {
@@ -287,17 +286,13 @@ pub(crate) fn present(h: SurfaceHandle, part: Part, frame: PaintFrame<'_>) -> bo
             pixels,
             dirty,
         } => {
-            if pixels.is_empty() || size.w <= 0 || size.h <= 0 {
+            let Some(size) = software_frame_size(size, pixels) else {
                 return false;
-            }
-            let size = FrameSize {
-                w: size.w,
-                h: size.h,
             };
             layer.present(
                 Frame::Copied(Pixels {
                     size,
-                    stride: size.w as u32 * 4,
+                    stride: bgra_stride(size),
                     bgra: pixels,
                     dirty,
                 }),
@@ -314,15 +309,12 @@ pub(crate) fn present(h: SurfaceHandle, part: Part, frame: PaintFrame<'_>) -> bo
 /// Place the popup visual at `x`, `y` — logical pixels inside the owning
 /// surface — and show it.
 pub(crate) fn popup_show(h: SurfaceHandle, x: c_int, y: c_int) {
-    let scale = crate::window::client_scale()
-        .unwrap_or(Scale(1.0))
-        .or_one()
-        .0;
+    let (ox, oy) = popup_offset(x, y, crate::window::client_scale());
     let mut st = STATE.lock();
     let Some(entry) = st.find_mut(h) else {
         return;
     };
-    entry.popup.set_offset(x as f32 * scale, y as f32 * scale);
+    entry.popup.set_offset(ox, oy);
     entry.popup.set_visible(true);
     st.commit();
 }

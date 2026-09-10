@@ -29,6 +29,55 @@ fn paint_name(mode: crate::paint_override::WlPaintOverride) -> &'static str {
     }
 }
 
+/// What a requested paint path resolves to before any GPU device is opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PaintPlan {
+    /// The path to try. Still provisional: `Gpu` degrades to `Shm` when no
+    /// usable device turns up.
+    resolved: crate::paint_override::WlPaintOverride,
+    /// Whether a `jfn_gpu_paint::Surfaces` has to be brought up.
+    want_gpu_paint: bool,
+    /// Whether CEF must be told it cannot hand us shared textures.
+    shared_texture_unsupported: bool,
+    /// The reason, for the one log line this decision emits.
+    note: &'static str,
+}
+
+/// Resolve a requested paint path against what the display can actually do.
+///
+/// `dmabuf_available` is only meaningful for the dmabuf entry — probing it
+/// costs an EGL display, so the caller must not run the probe for the other
+/// two and passes `false` instead.
+fn plan_paint(entry: crate::paint_override::WlPaintOverride, dmabuf_available: bool) -> PaintPlan {
+    use crate::paint_override::WlPaintOverride as Req;
+    match entry {
+        Req::Shm => PaintPlan {
+            resolved: Req::Shm,
+            want_gpu_paint: false,
+            shared_texture_unsupported: true,
+            note: "using wl_shm",
+        },
+        Req::Gpu => PaintPlan {
+            resolved: Req::Gpu,
+            want_gpu_paint: true,
+            shared_texture_unsupported: true,
+            note: "Vulkan WSI pixel-upload",
+        },
+        Req::Dmabuf if dmabuf_available => PaintPlan {
+            resolved: Req::Dmabuf,
+            want_gpu_paint: false,
+            shared_texture_unsupported: false,
+            note: "EGL/GBM dmabuf shared texture",
+        },
+        Req::Dmabuf => PaintPlan {
+            resolved: Req::Gpu,
+            want_gpu_paint: true,
+            shared_texture_unsupported: true,
+            note: "EGL dmabuf unavailable; trying gpu",
+        },
+    }
+}
+
 struct ProbeDisplay<'a> {
     egl: &'a egl::Egl,
     display: egl::Display,
@@ -91,31 +140,15 @@ pub(crate) fn init(rt: &'static crate::runtime::WlRuntime) -> bool {
     let explicit = requested.is_some();
     let entry = requested.unwrap_or(Req::Dmabuf);
 
-    let mut want_gpu_paint = false;
-    let mut resolved = Req::Shm;
-    match entry {
-        Req::Shm => {
-            tracing::info!("paint: using wl_shm");
-            jfn_platform_abi::get().set_shared_texture_unsupported();
-        }
-        Req::Gpu => {
-            tracing::info!("paint: Vulkan WSI pixel-upload");
-            jfn_platform_abi::get().set_shared_texture_unsupported();
-            want_gpu_paint = true;
-            resolved = Req::Gpu;
-        }
-        Req::Dmabuf => {
-            if dmabuf_available(display) {
-                tracing::info!("paint: EGL/GBM dmabuf shared texture");
-                resolved = Req::Dmabuf;
-            } else {
-                tracing::info!("paint: EGL dmabuf unavailable; trying gpu");
-                jfn_platform_abi::get().set_shared_texture_unsupported();
-                want_gpu_paint = true;
-                resolved = Req::Gpu;
-            }
-        }
+    // The probe opens an EGL display, so it only runs for the entry that needs
+    // the answer.
+    let plan = plan_paint(entry, entry == Req::Dmabuf && dmabuf_available(display));
+    tracing::info!("paint: {}", plan.note);
+    if plan.shared_texture_unsupported {
+        jfn_platform_abi::get().set_shared_texture_unsupported();
     }
+    let want_gpu_paint = plan.want_gpu_paint;
+    let mut resolved = plan.resolved;
 
     if want_gpu_paint {
         match jfn_gpu_paint::Surfaces::init(None, None) {
@@ -173,4 +206,81 @@ pub(crate) fn cleanup(rt: &'static crate::runtime::WlRuntime) {
     crate::root_window::cleanup(rt);
     crate::input_lifecycle::lifecycle_cleanup(rt);
     // Rust-side WlState lives until process exit (mirrors C++ globals).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaintPlan, paint_name, plan_paint};
+    use crate::paint_override::WlPaintOverride as Req;
+
+    #[test]
+    fn each_paint_path_has_the_name_the_command_line_uses() {
+        // These are the `--platform-paint=` values, so they are a contract.
+        assert_eq!(paint_name(Req::Dmabuf), "dmabuf");
+        assert_eq!(paint_name(Req::Gpu), "gpu");
+        assert_eq!(paint_name(Req::Shm), "shm");
+    }
+
+    #[test]
+    fn an_explicit_shm_request_never_opens_a_gpu_device() {
+        let plan = plan_paint(Req::Shm, false);
+        assert_eq!(plan.resolved, Req::Shm);
+        assert!(!plan.want_gpu_paint);
+        assert!(plan.shared_texture_unsupported);
+    }
+
+    #[test]
+    fn an_explicit_gpu_request_ignores_dmabuf_availability() {
+        for available in [false, true] {
+            let plan = plan_paint(Req::Gpu, available);
+            assert_eq!(plan.resolved, Req::Gpu);
+            assert!(plan.want_gpu_paint);
+            assert!(plan.shared_texture_unsupported);
+        }
+    }
+
+    #[test]
+    fn dmabuf_is_the_only_path_that_keeps_shared_textures() {
+        let plan = plan_paint(Req::Dmabuf, true);
+        assert_eq!(plan.resolved, Req::Dmabuf);
+        assert!(!plan.want_gpu_paint);
+        assert!(!plan.shared_texture_unsupported);
+    }
+
+    #[test]
+    fn dmabuf_without_egl_support_falls_back_to_gpu_paint() {
+        let plan = plan_paint(Req::Dmabuf, false);
+        assert_eq!(plan.resolved, Req::Gpu);
+        assert!(plan.want_gpu_paint);
+        // CEF must be told, or it keeps handing us shared textures we cannot
+        // import.
+        assert!(plan.shared_texture_unsupported);
+    }
+
+    #[test]
+    fn every_plan_explains_itself_distinctly() {
+        let plans: Vec<PaintPlan> = vec![
+            plan_paint(Req::Shm, false),
+            plan_paint(Req::Gpu, false),
+            plan_paint(Req::Dmabuf, true),
+            plan_paint(Req::Dmabuf, false),
+        ];
+        for (i, a) in plans.iter().enumerate() {
+            assert!(!a.note.is_empty());
+            for b in &plans[i + 1..] {
+                assert_ne!(a.note, b.note, "two plans share the note {:?}", a.note);
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_gpu_plan_asks_for_a_gpu_device() {
+        for plan in [plan_paint(Req::Shm, false), plan_paint(Req::Dmabuf, true)] {
+            assert!(!plan.want_gpu_paint, "{plan:?} wanted a GPU device");
+        }
+        for plan in [plan_paint(Req::Gpu, true), plan_paint(Req::Dmabuf, false)] {
+            assert_eq!(plan.resolved, Req::Gpu);
+            assert!(plan.want_gpu_paint, "{plan:?} skipped the GPU device");
+        }
+    }
 }

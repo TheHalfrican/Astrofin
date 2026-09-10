@@ -163,3 +163,150 @@ fn visible_or_coded(visible_rect: FrameSize, coded: FrameSize) -> FrameSize {
         coded
     }
 }
+
+/// A texture with no real backing buffer, for tests that need a value rather
+/// than an importable frame. Nothing in this module dereferences the handle.
+#[cfg(test)]
+pub(crate) fn test_texture() -> SharedTexture {
+    let size = FrameSize { w: 1, h: 1 };
+    #[cfg(target_os = "linux")]
+    {
+        SharedTexture::new(size, size, DmabufFormat::Bgra8, 0, Vec::new())
+    }
+    #[cfg(windows)]
+    {
+        SharedTexture::new(std::ptr::null_mut(), size, size)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        SharedTexture::new(std::ptr::null_mut(), size, size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CODED: FrameSize = FrameSize { w: 1920, h: 1088 };
+    const VISIBLE: FrameSize = FrameSize { w: 1920, h: 1080 };
+
+    #[test]
+    fn a_visible_rect_with_area_wins_over_the_coded_size() {
+        assert_eq!(visible_or_coded(VISIBLE, CODED), VISIBLE);
+    }
+
+    #[test]
+    fn an_empty_visible_rect_falls_back_to_the_coded_size() {
+        assert_eq!(visible_or_coded(FrameSize { w: 0, h: 0 }, CODED), CODED);
+        assert_eq!(visible_or_coded(FrameSize { w: 1920, h: 0 }, CODED), CODED);
+        assert_eq!(visible_or_coded(FrameSize { w: 0, h: 1080 }, CODED), CODED);
+    }
+
+    #[test]
+    fn a_negative_visible_rect_falls_back_to_the_coded_size() {
+        assert_eq!(visible_or_coded(FrameSize { w: -1, h: -1 }, CODED), CODED);
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use super::*;
+
+        fn texture(visible: FrameSize) -> SharedTexture {
+            SharedTexture::new(CODED, visible, DmabufFormat::Rgba8, 7, Vec::new())
+        }
+
+        #[test]
+        fn a_dmabuf_texture_reports_the_coded_size_it_was_built_with() {
+            assert_eq!(texture(VISIBLE).coded(), CODED);
+        }
+
+        #[test]
+        fn a_dmabuf_texture_reports_its_format() {
+            assert_eq!(texture(VISIBLE).format(), DmabufFormat::Rgba8);
+        }
+
+        #[test]
+        fn a_dmabuf_texture_reports_its_modifier() {
+            assert_eq!(texture(VISIBLE).modifier(), 7);
+        }
+
+        #[test]
+        fn a_texture_built_without_planes_has_none() {
+            assert!(texture(VISIBLE).planes().is_empty());
+        }
+
+        #[test]
+        fn a_dmabuf_texture_reports_the_visible_rect_verbatim() {
+            assert_eq!(texture(VISIBLE).visible_rect(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible_rect().w, 0);
+        }
+
+        #[test]
+        fn a_dmabuf_textures_visible_size_falls_back_to_coded() {
+            assert_eq!(texture(VISIBLE).visible(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible(), CODED);
+        }
+    }
+
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        fn texture(visible: FrameSize) -> SharedTexture {
+            SharedTexture::new(std::ptr::dangling_mut(), CODED, visible)
+        }
+
+        #[test]
+        fn a_shared_handle_texture_hands_its_handle_back() {
+            assert_eq!(texture(VISIBLE).handle(), std::ptr::dangling_mut());
+        }
+
+        #[test]
+        fn a_shared_handle_texture_reports_the_coded_size() {
+            assert_eq!(texture(VISIBLE).coded(), CODED);
+        }
+
+        #[test]
+        fn a_shared_handle_texture_reports_the_visible_rect_verbatim() {
+            assert_eq!(texture(VISIBLE).visible_rect(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible_rect().w, 0);
+        }
+
+        #[test]
+        fn a_shared_handle_textures_visible_size_falls_back_to_coded() {
+            assert_eq!(texture(VISIBLE).visible(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible(), CODED);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos {
+        use super::*;
+
+        fn texture(visible: FrameSize) -> SharedTexture {
+            SharedTexture::new(std::ptr::dangling_mut(), CODED, visible)
+        }
+
+        #[test]
+        fn an_io_surface_texture_hands_its_surface_back() {
+            assert_eq!(texture(VISIBLE).io_surface(), std::ptr::dangling_mut());
+        }
+
+        #[test]
+        fn an_io_surface_texture_reports_the_coded_size() {
+            assert_eq!(texture(VISIBLE).coded(), CODED);
+        }
+
+        #[test]
+        fn an_io_surface_texture_reports_the_visible_rect_verbatim() {
+            assert_eq!(texture(VISIBLE).visible_rect(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible_rect().w, 0);
+        }
+
+        #[test]
+        fn an_io_surface_textures_visible_size_falls_back_to_coded() {
+            assert_eq!(texture(VISIBLE).visible(), VISIBLE);
+            assert_eq!(texture(FrameSize { w: 0, h: 0 }).visible(), CODED);
+        }
+    }
+}

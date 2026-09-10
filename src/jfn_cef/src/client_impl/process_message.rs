@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::cef_string::userfree_to_string;
 use crate::client::Inner;
+use crate::client_logic::popup_anchor;
 use crate::ipc::BrowserMessage;
 
 pub(super) fn on_process_message_received(
@@ -38,7 +39,7 @@ pub(super) fn on_process_message_received(
                 } else {
                     Vec::new()
                 };
-                let anchor = (args.int(5) != 0).then(|| (args.int(3), args.int(4)));
+                let anchor = popup_anchor(args.int(3), args.int(4), args.int(5) != 0);
                 inner.set_popup_options(opts, selected, selectable, anchor);
             }
             1

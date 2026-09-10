@@ -4,8 +4,7 @@
 //! request is parked here and handed to the input thread through a posted
 //! message; the CEF UI thread that opened it returns immediately.
 
-use std::ffi::{OsStr, c_int};
-use std::os::windows::ffi::OsStrExt;
+use std::ffi::c_int;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jfn_platform_abi::{
@@ -15,13 +14,13 @@ use parking_lot::Mutex;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, MENU_ITEM_FLAGS, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, PostMessageW, SetForegroundWindow, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx, WM_APP, WM_NULL,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, MF_SEPARATOR, PostMessageW,
+    SetForegroundWindow, TrackPopupMenuEx, WM_APP, WM_NULL,
 };
 use windows::core::PCWSTR;
 
 use crate::input::input_hwnd;
+use crate::menu_logic::{self, Append};
 use crate::platform::win_get_scale;
 
 /// Asks the input thread to track the parked request.
@@ -88,13 +87,6 @@ fn post_end() {
     }
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
 /// Runs on the input thread, from `input_wndproc`.
 pub(crate) fn on_input_message(hwnd: HWND, msg: u32) {
     if msg == WM_JFN_MENU_END {
@@ -118,34 +110,27 @@ pub(crate) fn on_input_message(hwnd: HWND, msg: u32) {
     };
 
     for item in &pending.items {
-        if item.separator {
-            let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
-            continue;
+        match menu_logic::append_kind(item) {
+            Append::Separator => {
+                let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+            }
+            Append::Skip => {}
+            Append::Command(flags) => {
+                let label = menu_logic::wide(&item.label);
+                let _ = unsafe {
+                    AppendMenuW(
+                        menu,
+                        flags,
+                        item.id as usize,
+                        PCWSTR::from_raw(label.as_ptr()),
+                    )
+                };
+            }
         }
-        if item.id <= 0 {
-            continue;
-        }
-        let flags = if item.enabled {
-            MF_STRING
-        } else {
-            MENU_ITEM_FLAGS(MF_STRING.0 | MF_GRAYED.0)
-        };
-        let label = wide(&item.label);
-        let _ = unsafe {
-            AppendMenuW(
-                menu,
-                flags,
-                item.id as usize,
-                PCWSTR::from_raw(label.as_ptr()),
-            )
-        };
     }
 
-    let scale = win_get_scale();
-    let mut pt = POINT {
-        x: (pending.x as f32 * scale).round() as i32,
-        y: (pending.y as f32 * scale).round() as i32,
-    };
+    let (ax, ay) = menu_logic::anchor(pending.x, pending.y, win_get_scale());
+    let mut pt = POINT { x: ax, y: ay };
     unsafe {
         let _ = ClientToScreen(hwnd, &mut pt);
     }
@@ -156,19 +141,13 @@ pub(crate) fn on_input_message(hwnd: HWND, msg: u32) {
 
     CANCELLED.store(false, Ordering::Release);
     TRACKING.store(true, Ordering::Release);
-    let flags =
-        TPM_RETURNCMD.0 | TPM_NONOTIFY.0 | TPM_LEFTALIGN.0 | TPM_TOPALIGN.0 | TPM_RIGHTBUTTON.0;
-    let picked = unsafe { TrackPopupMenuEx(menu, flags, pt.x, pt.y, hwnd, None) };
+    let picked = unsafe { TrackPopupMenuEx(menu, menu_logic::TRACK_FLAGS, pt.x, pt.y, hwnd, None) };
     TRACKING.store(false, Ordering::Release);
     let _ = unsafe { PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0)) };
     let _ = unsafe { DestroyMenu(menu) };
 
-    if CANCELLED.swap(false, Ordering::AcqRel) {
-        pending.on_selected.resolve(MENU_DISMISSED);
-        return;
-    }
-    let picked = picked.0;
+    let cancelled = CANCELLED.swap(false, Ordering::AcqRel);
     pending
         .on_selected
-        .resolve(if picked == 0 { MENU_DISMISSED } else { picked });
+        .resolve(menu_logic::selection(cancelled, picked.0));
 }

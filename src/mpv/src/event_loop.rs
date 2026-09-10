@@ -10,7 +10,7 @@
 //! - [`EventLoop::stop`] is called, or
 //! - the consumer drops the receiver (send error breaks the loop).
 
-use crate::event::Event;
+use crate::event::{Disposition, Event};
 use crate::handle::Handle;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::sync::Arc;
@@ -73,18 +73,17 @@ fn drain(handle: Arc<Handle>, stop: Arc<AtomicBool>, tx: Sender<Event>) {
             return;
         }
         let event = handle.wait_event(-1.0);
-        match event {
-            // Timeout sentinel; spurious wakeup (e.g. from `Handle::wakeup`).
-            Event::None => continue,
-            // Log messages go straight to tracing; consumers never see them.
-            Event::LogMessage(ref m) => crate::log::forward_to_tracing(m),
-            Event::Shutdown => {
-                // Forward shutdown so consumers can react, then exit.
-                let _ = tx.send(Event::Shutdown);
-                return;
+        match event.disposition() {
+            Disposition::Ignore => continue,
+            Disposition::Log => {
+                if let Event::LogMessage(m) = &event {
+                    crate::log::forward_to_tracing(m);
+                }
             }
-            other => {
-                if tx.send(other).is_err() {
+            // A send error means the consumer is gone; `last` is Shutdown,
+            // which is forwarded so consumers can react and then ends the loop.
+            Disposition::Forward { last } => {
+                if tx.send(event).is_err() || last {
                     return;
                 }
             }

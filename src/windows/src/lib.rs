@@ -24,13 +24,16 @@ use jfn_platform_abi::{DisplayBackend, PaintFrame, Platform, WindowDecorations};
 
 mod file_dialog;
 mod input;
+mod input_logic;
 mod menu;
+mod menu_logic;
 mod mpv_host;
 mod osr_popup;
 mod platform;
 mod process;
 mod render;
 mod window;
+mod window_logic;
 
 use crate::input::jfn_input_windows_set_cursor;
 use crate::platform::{

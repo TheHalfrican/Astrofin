@@ -17,9 +17,8 @@ use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE,
-    WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
+    IsZoomed, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowsHookExW,
+    SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET,
 };
 use windows::core::{PCWSTR, w};
 
@@ -28,13 +27,14 @@ use jfn_mpv::api::{
     jfn_mpv_toggle_fullscreen,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
-use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
+use jfn_platform_abi::geometry::{WindowGeometry, clamp_to_bounds};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
 use crate::input::{
     jfn_input_windows_resize_to_parent, jfn_input_windows_run_input_thread,
     jfn_input_windows_stop_input_thread,
 };
+use crate::window_logic::{self, WindowMessage};
 
 struct WinState {
     mpv_hwnd_raw: usize,
@@ -98,7 +98,7 @@ pub(crate) fn win_is_fullscreen() -> bool {
         return false;
     };
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-    (style & WS_CAPTION.0) == 0 && (style & WS_THICKFRAME.0) == 0
+    window_logic::is_fullscreen_style(style)
 }
 
 /// The window's own DPI once it exists, the system DPI before it does.
@@ -114,8 +114,7 @@ pub(crate) fn win_get_display_scale(_x: c_int, _y: c_int) -> f32 {
 }
 
 fn system_scale() -> f32 {
-    let dpi = unsafe { GetDpiForSystem() };
-    if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 }
+    window_logic::scale_from_dpi(unsafe { GetDpiForSystem() })
 }
 
 pub(crate) fn win_set_fullscreen(fullscreen: bool) {
@@ -169,13 +168,13 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
-            match msg.message {
-                WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
+            match window_logic::classify(msg.message, msg.wParam.0) {
+                WindowMessage::Minimized => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(false);
                     }
                 }
-                WM_SIZE => {
+                WindowMessage::Resized => {
                     let restored = std::mem::replace(&mut STATE.lock().was_minimized, false);
                     if let Some(client) = crate::window::publish_deferred() {
                         jfn_input_windows_resize_to_parent(client.w, client.h);
@@ -184,14 +183,14 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(true);
                     }
                 }
-                WM_MOVE => {
+                WindowMessage::Moved => {
                     crate::window::sample();
                 }
-                WM_DPICHANGED | WM_STYLECHANGED => {
+                WindowMessage::Rescaled => {
                     crate::window::publish_deferred();
                 }
-                WM_CLOSE => jfn_shutdown_initiate(),
-                _ => {}
+                WindowMessage::Closed => jfn_shutdown_initiate(),
+                WindowMessage::Ignored => {}
             }
         }
     }
@@ -297,10 +296,8 @@ pub(crate) fn win_clamp_window_geometry(
     if ok.is_err() {
         return;
     }
-    let vw = work.right - work.left;
-    let vh = work.bottom - work.top;
     let mut g = WindowGeometry::from_raw(*w, *h, *x, *y);
-    clamp_to_bounds(&mut g, Bounds { w: vw, h: vh });
+    clamp_to_bounds(&mut g, window_logic::work_area_bounds(work));
     *w = g.w;
     *h = g.h;
     let (nx, ny) = g.raw_position();

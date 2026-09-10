@@ -42,6 +42,7 @@ use jfn_gpu_paint::{
 };
 use jfn_platform_abi::{JfnRect, PhysicalSize};
 
+use crate::compositor_logic::{backing_size, contents_scale, frame_size, software_frame_stride};
 use crate::dispatch::{is_main_thread, run_on_main_async, run_on_main_sync};
 use crate::init::{jfn_macos_get_input_view, jfn_macos_get_window};
 
@@ -236,10 +237,7 @@ pub fn macos_alloc_surface() -> *mut c_void {
         let Some(layer) = NonNull::new(layer.cast::<c_void>()) else {
             return;
         };
-        let size = FrameSize {
-            w: (frame.size.width * scale) as c_int,
-            h: (frame.size.height * scale) as c_int,
-        };
+        let size = backing_size(frame, scale);
         match gpu.new_surface(WindowTarget::CoreAnimationLayer { layer }, size) {
             Ok(painter) => *surf.painter.lock() = Some(painter),
             Err(e) => tracing::error!("[GPU] surface creation failed: {e}"),
@@ -289,22 +287,16 @@ pub fn macos_surface_present_software(
     size: PhysicalSize,
     dirty: &[JfnRect],
 ) -> bool {
-    if pixels.is_empty() || size.w <= 0 || size.h <= 0 {
+    // CEF's OnPaint buffer is tightly packed.
+    let Some(stride) = software_frame_stride(pixels, size) else {
         return false;
-    }
+    };
     present_frame(
         s,
-        FrameSize {
-            w: size.w,
-            h: size.h,
-        },
-        // CEF's OnPaint buffer is tightly packed.
+        frame_size(size),
         Frame::Copied(Pixels {
-            size: FrameSize {
-                w: size.w,
-                h: size.h,
-            },
-            stride: size.w as u32 * 4,
+            size: frame_size(size),
+            stride,
             bgra: pixels,
             dirty,
         }),
@@ -390,12 +382,10 @@ pub fn macos_surface_resize(s: *mut c_void, lw: c_int, _lh: c_int, pw: c_int, ph
                 let _: () = objc2::msg_send![surf.view, setFrame: bounds];
             }
         }
-        let scale: f64 = if pw > 0 && lw > 0 {
-            pw as f64 / lw as f64
-        } else if !win.is_null() {
-            objc2::msg_send![win, backingScaleFactor]
-        } else {
-            1.0
+        let scale: f64 = match contents_scale(pw, lw) {
+            Some(scale) => scale,
+            None if !win.is_null() => objc2::msg_send![win, backingScaleFactor],
+            None => 1.0,
         };
         let _: () = objc2::msg_send![surf.layer, setContentsScale: scale];
         if pw > 0 && ph > 0 {

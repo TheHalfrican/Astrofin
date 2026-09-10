@@ -10,6 +10,7 @@ pub(crate) mod clipboard;
 pub(crate) mod decoration_probe;
 pub(crate) mod input;
 pub(crate) mod input_lifecycle;
+pub(crate) mod input_logic;
 #[cfg(feature = "kde-palette")]
 pub(crate) mod kde_palette;
 pub(crate) mod layer;

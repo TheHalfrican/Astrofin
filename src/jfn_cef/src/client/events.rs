@@ -4,6 +4,8 @@ use std::sync::atomic::Ordering;
 
 use jfn_platform_abi::cursor::CursorShape;
 
+use crate::client_logic::{console_level, format_console};
+
 use super::{Inner, platform_ops, tasks};
 
 impl Inner {
@@ -20,23 +22,8 @@ impl Inner {
     }
 
     pub(crate) fn on_console_message(&self, level: c_int, msg: &str, src: &str, line: c_int) {
-        const LOGSEVERITY_VERBOSE: c_int = 1;
-        const LOGSEVERITY_INFO: c_int = 2;
-        const LOGSEVERITY_WARNING: c_int = 3;
-        const LOGSEVERITY_ERROR: c_int = 4;
-        const LOGSEVERITY_DEFAULT: c_int = 0;
-        let formatted = format!("{} ({}:{})", msg, src, line);
-        let lvl = if level >= LOGSEVERITY_ERROR {
-            jfn_logging::LEVEL_ERROR
-        } else if level == LOGSEVERITY_WARNING {
-            jfn_logging::LEVEL_WARN
-        } else if level == LOGSEVERITY_INFO || level == LOGSEVERITY_DEFAULT {
-            jfn_logging::LEVEL_INFO
-        } else {
-            let _ = LOGSEVERITY_VERBOSE;
-            jfn_logging::LEVEL_DEBUG
-        };
-        jfn_logging::log(jfn_logging::CATEGORY_JS, lvl, &formatted);
+        let formatted = format_console(msg, src, line);
+        jfn_logging::log(jfn_logging::CATEGORY_JS, console_level(level), &formatted);
     }
 
     pub(crate) fn on_load_end(&self, is_main: bool, code: c_int, url: &str) {

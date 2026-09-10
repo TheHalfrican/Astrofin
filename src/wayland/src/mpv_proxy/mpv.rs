@@ -355,16 +355,23 @@ impl WpViewporterHandler for ClientViewporterH {
     }
 }
 
+/// Whether one of mpv's `wp_viewport.set_destination` requests may go
+/// upstream.
+///
+/// Virtualizing mpv's shell means it can size a viewport before it has any
+/// geometry, emitting a transient `set_destination(0, 0)` — an instant
+/// protocol error that would kill the shared connection. `(-1, -1)` is the
+/// protocol's own "unset the destination" form and is always legal; mpv
+/// re-sizes once our synthesized configure gives it geometry.
+fn viewport_destination_allowed(width: i32, height: i32) -> bool {
+    let unset = width == -1 && height == -1;
+    unset || (width > 0 && height > 0)
+}
+
 struct ClientViewportH;
 impl WpViewportHandler for ClientViewportH {
     fn handle_set_destination(&mut self, slf: &Rc<WpViewport>, width: i32, height: i32) {
-        // Virtualizing mpv's shell means it can size a viewport before it has a
-        // real geometry, emitting a transient set_destination(0,0) — an instant
-        // protocol error that would kill the shared connection. Drop non-positive
-        // destinations (the unset form is -1,-1); mpv re-sizes once it has
-        // geometry from our synthesized configure.
-        let unset = width == -1 && height == -1;
-        if !unset && (width <= 0 || height <= 0) {
+        if !viewport_destination_allowed(width, height) {
             return;
         }
         // Forward mpv's own destination rect unchanged: mpv is pinned to our
@@ -470,5 +477,36 @@ impl XdgToplevelHandler for MpvToplevelH {
     }
     fn handle_unset_fullscreen(&mut self, _slf: &Rc<XdgToplevel>) {
         reassert_mpv_state(&self.ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::viewport_destination_allowed;
+
+    #[test]
+    fn a_real_destination_is_forwarded() {
+        assert!(viewport_destination_allowed(1920, 1080));
+        assert!(viewport_destination_allowed(1, 1));
+    }
+
+    #[test]
+    fn the_protocols_unset_form_is_forwarded_unchanged() {
+        assert!(viewport_destination_allowed(-1, -1));
+    }
+
+    #[test]
+    fn a_geometry_less_zero_destination_is_dropped() {
+        // Forwarding this kills the connection mpv and CEF share.
+        assert!(!viewport_destination_allowed(0, 0));
+        assert!(!viewport_destination_allowed(1920, 0));
+        assert!(!viewport_destination_allowed(0, 1080));
+    }
+
+    #[test]
+    fn a_half_unset_destination_is_dropped_rather_than_guessed_at() {
+        assert!(!viewport_destination_allowed(-1, 1080));
+        assert!(!viewport_destination_allowed(1920, -1));
+        assert!(!viewport_destination_allowed(-2, -2));
     }
 }

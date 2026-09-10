@@ -5,22 +5,8 @@ use std::sync::Arc;
 
 use crate::cef_string::userfree_to_string;
 use crate::client::Inner;
+use crate::client_logic::strip_accelerator;
 use crate::platform_ops::{MENU_DISMISSED, MenuDelivery, MenuItem, MenuKind, MenuRequest};
-
-const STRIP_ACCEL_KEEP: u8 = b'&';
-
-fn strip_accelerator(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b != STRIP_ACCEL_KEEP {
-            out.push(b as char);
-        }
-    }
-    if s.is_ascii() {
-        return out;
-    }
-    s.chars().filter(|c| *c != '&').collect()
-}
 
 wrap_context_menu_handler! {
     pub struct JfnContextMenuHandlerBuilder {

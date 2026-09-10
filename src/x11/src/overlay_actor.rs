@@ -7,7 +7,9 @@
 //!
 //! The content surface is attached after the geometry thread creates the
 //! window ([`OverlayActor::attach_content`]); frames that arrive before then
-//! are dropped (the surface has nowhere to land yet).
+//! are dropped (the surface has nowhere to land yet). The frame arithmetic —
+//! validation, damage clipping, row offsets — lives in
+//! [`crate::overlay_actor_logic`].
 
 use std::thread::{self, JoinHandle};
 
@@ -21,9 +23,13 @@ use x11rb::protocol::shm::ConnectionExt as _;
 use x11rb::protocol::xproto;
 use x11rb::rust_connection::RustConnection;
 
+use crate::overlay_actor_logic::{
+    clip_rect, degrade_to_shm_on_gpu_init_failure, image_depth, next_buffer, row_ranges,
+    software_frame,
+};
 use crate::registry::ContentSurface;
 use crate::shm::{shm_alloc, shm_free};
-use crate::x11_state::ShmBuffer;
+use crate::shm_logic::ShmBuffer;
 
 enum PendingFrame {
     Pixels {
@@ -101,16 +107,10 @@ impl OverlayActor {
         width: i32,
         height: i32,
     ) -> bool {
-        if width <= 0 || height <= 0 {
-            return false;
-        }
-        let stride = (width as usize).saturating_mul(4);
-        let Some(len) = (height as usize).checked_mul(stride) else {
+        let Some(frame) = software_frame(width, height, pixels.len()) else {
             return false;
         };
-        if pixels.len() < len {
-            return false;
-        }
+        let (stride, len) = (frame.stride, frame.len);
         self.mailbox.update(|s| {
             if !s.visible {
                 return;
@@ -302,7 +302,7 @@ fn present_gpu(
                 // Degrading a shared frame strands the surface: SHM cannot
                 // present it, so it would be dropped here and so would every
                 // frame after it. Stay on GPU and retry creation next frame.
-                if matches!(frame, PendingFrame::Shared(_)) {
+                if !degrade_to_shm_on_gpu_init_failure(matches!(frame, PendingFrame::Shared(_))) {
                     tracing::warn!("[x11] overlay actor gpu init failed: {e}; dropping frame");
                     return true;
                 }
@@ -376,7 +376,7 @@ fn present_shm(
         // fatal, so it never degrades.
         return;
     };
-    let depth = crate::x11_state::paint().map_or(32, |p| p.argb_depth);
+    let depth = image_depth(crate::x11_state::paint().map(|p| p.argb_depth));
     let buf = &mut state.bufs[state.idx];
     if !shm_alloc(buf, conn, width, height) {
         eprintln!("[x11] overlay actor shm allocation failed");
@@ -390,13 +390,8 @@ fn present_shm(
             continue;
         };
         for row in 0..rh {
-            let src_off = ((ry + row) as usize) * stride + (rx as usize) * 4;
-            let dst_off = ((ry + row) as usize) * dst_stride + (rx as usize) * 4;
-            let row_bytes = (rw as usize) * 4;
-            let (Some(src), Some(dst_row)) = (
-                pixels.get(src_off..src_off + row_bytes),
-                dst.get_mut(dst_off..dst_off + row_bytes),
-            ) else {
+            let (src_range, dst_range) = row_ranges(rx, ry, row, rw, stride, dst_stride);
+            let (Some(src), Some(dst_row)) = (pixels.get(src_range), dst.get_mut(dst_range)) else {
                 continue;
             };
             dst_row.copy_from_slice(src);
@@ -419,33 +414,8 @@ fn present_shm(
             0,
         );
     }
-    state.idx ^= 1;
+    state.idx = next_buffer(state.idx);
     let _ = conn.flush();
-}
-
-fn clip_rect(rect: &JfnRect, width: i32, height: i32) -> Option<(i32, i32, i32, i32)> {
-    let mut rx = rect.x;
-    let mut ry = rect.y;
-    let mut rw = rect.w;
-    let mut rh = rect.h;
-    if rx < 0 {
-        rw += rx;
-        rx = 0;
-    }
-    if ry < 0 {
-        rh += ry;
-        ry = 0;
-    }
-    if rx + rw > width {
-        rw = width - rx;
-    }
-    if ry + rh > height {
-        rh = height - ry;
-    }
-    if rw <= 0 || rh <= 0 {
-        return None;
-    }
-    Some((rx, ry, rw, rh))
 }
 
 fn teardown(
@@ -470,35 +440,5 @@ fn teardown(
             }
         });
         let _ = conn.flush();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rect(x: i32, y: i32, w: i32, h: i32) -> JfnRect {
-        JfnRect { x, y, w, h }
-    }
-
-    #[test]
-    fn clip_rect_clamps_negative_origin() {
-        assert_eq!(clip_rect(&rect(-2, -2, 4, 4), 10, 10), Some((0, 0, 2, 2)));
-    }
-
-    #[test]
-    fn clip_rect_clamps_overflow() {
-        assert_eq!(clip_rect(&rect(8, 8, 10, 10), 10, 10), Some((8, 8, 2, 2)));
-    }
-
-    #[test]
-    fn clip_rect_rejects_zero_and_off_screen() {
-        assert_eq!(clip_rect(&rect(0, 0, 0, 5), 10, 10), None);
-        assert_eq!(clip_rect(&rect(10, 0, 4, 4), 10, 10), None);
-    }
-
-    #[test]
-    fn clip_rect_passes_through_in_bounds() {
-        assert_eq!(clip_rect(&rect(1, 2, 3, 4), 10, 10), Some((1, 2, 3, 4)));
     }
 }

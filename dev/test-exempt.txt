@@ -12,64 +12,109 @@
 # glue to a display server, a GPU, a live CEF/mpv process or the OS ABI".
 # Pure logic inside an exempt file is meant to be extracted into a testable
 # function rather than left behind the exemption; phase 5 of the test plan
-# revisits every line here. Exempt code is covered by the E2E smoke suite.
+# (done 2026-09-09) walked every line here and did exactly that, so a file
+# still listed below is one whose every public function needs a display
+# server, a GPU, a live CEF/mpv process, a session bus or a real syscall.
+# Exempt code is covered by the E2E smoke suite.
 
 # --- Linux windowing -------------------------------------------------------
-src/wayland/**              | Wayland protocol glue; needs a live compositor.
-src/x11/**                  | Xlib/XCB glue; needs a live X server.
+src/wayland/**              | wayland-client/SCTK protocol glue and the mpv Wayland proxy; needs a live compositor.
+!src/wayland/src/input_logic.rs | key/button/modifier tables and scroll + repeat arithmetic, unit-tested.
+!src/wayland/src/scale.rs       | fractional-scale (120ths) arithmetic; no protocol types, unit-tested.
+!src/wayland/src/scene/mod.rs   | subsurface stacking-order reducer, unit-tested.
+!src/wayland/src/layer_actor.rs | dirty-rect composition and frame routing, testable without a compositor.
+!src/wayland/src/kde_palette.rs | KWin colour-scheme text and palette file naming, unit-tested.
+!src/wayland/src/lifecycle.rs   | paint-path resolution (dmabuf -> gpu -> shm), unit-tested.
+!src/wayland/src/clipboard.rs   | selection decode and deliver-exactly-once, unit-tested.
+# `root_window.rs` and `scale_probe.rs` stay listed: their decision cores
+# (`presentation::plan`, `ScaleDiscovery`, `select_scale`, ...) are extracted
+# and unit-tested in place, but the files are the live toplevel and the output
+# probe, and the SCTK handler impls that dominate their public surface exist
+# only to satisfy trait bounds.
+
+src/x11/**                  | X11 connections, windows and threads; needs a live X server.
+!src/x11/src/conn_source_logic.rs   | x11rb/xcb error classification and readiness, unit-tested.
+!src/x11/src/geometry_logic.rs      | work lattice, z-order, EWMH fold and resize-sync maths, unit-tested.
+!src/x11/src/input_logic.rs         | button/keysym/cursor tables and event masks, unit-tested.
+!src/x11/src/lifecycle_logic.rs     | boot placement, screen clamp, ARGB visual pick, unit-tested.
+!src/x11/src/make_platform_logic.rs | window-decoration resolution, unit-tested.
+!src/x11/src/menu/logic.rs          | popup placement and keysym lookup, unit-tested.
+!src/x11/src/mpv_proxy.rs           | X11 request/reply rewriter, unit-tested; the socket and env lifecycle is E2E-only.
+!src/x11/src/mpv_proxy_logic.rs     | display/socket names, X framing lengths, xauth records, unit-tested.
+!src/x11/src/overlay_actor_logic.rs | frame validation, damage clipping, row offsets, unit-tested.
+!src/x11/src/overlay_fsm.rs         | overlay placement state machine, unit-tested.
+!src/x11/src/paint_logic.rs         | dmabuf/gpu/shm tier ladder, unit-tested.
+!src/x11/src/paint_override.rs      | CLI paint preference over a OnceLock, unit-tested.
+!src/x11/src/scale_logic.rs         | Xft.dpi quantization and scale conversion, unit-tested.
+!src/x11/src/shm_logic.rs           | SHM buffer record and segment size/reuse maths, unit-tested.
+!src/x11/src/window_source.rs       | ParentSnapshot to WindowSnapshot mapping, unit-tested.
 
 # --- macOS -----------------------------------------------------------------
 src/macos/**                | AppKit/ObjC glue; needs a Cocoa main thread.
-src/macos_sink/**           | IOSurface/Metal media sink; needs a GPU.
+!src/macos/src/input_logic.rs      | NSEvent modifier/keycode/cursor tables, unit-tested.
+!src/macos/src/window_logic.rs     | window/screen geometry, colour and path arithmetic, unit-tested.
+!src/macos/src/compositor_logic.rs | layer sizing arithmetic, testable without a GPU.
+!src/macos/src/file_dialog.rs      | pure filter/extension logic, unit-tested.
+!src/macos/src/menu.rs             | NSMenu argument mapping, unit-tested.
+!src/macos/src/cef_pump.rs         | CEF pump wedge/delay heuristic, unit-tested.
+src/macos_sink/**           | MPNowPlayingInfoCenter / MPRemoteCommandCenter glue; needs the MediaPlayer frameworks.
+!src/macos_sink/src/logic.rs | now-playing key table and enum projections, unit-tested.
 
 # --- Windows ---------------------------------------------------------------
 src/windows/**              | Win32 window, input and D3D glue; needs a HWND.
-!src/windows/src/file_dialog.rs | pure filter/extension logic, unit-tested.
-src/windows_sink/**         | D3D11 shared-texture media sink; needs a device.
+!src/windows/src/file_dialog.rs  | pure filter/extension logic, unit-tested.
+!src/windows/src/input_logic.rs  | WPARAM/LPARAM decoding, modifier and cursor tables, unit-tested.
+!src/windows/src/window_logic.rs | rect/DPI arithmetic and the WndProc routing table, unit-tested.
+!src/windows/src/menu_logic.rs   | menu item flags, anchor scaling and selection mapping, unit-tested.
+!src/windows/src/render/order.rs | restack ordering and frame validation, testable without a GPU.
+src/windows_sink/**         | SystemMediaTransportControls glue; needs an SMTC session bound to a HWND.
+!src/windows_sink/src/logic.rs | SMTC button table, data-URI split and tick arithmetic, unit-tested.
 
 # --- GPU compositing -------------------------------------------------------
 src/gpu_paint/**            | Vulkan/D3D12/Metal interop; needs a real adapter.
+!src/gpu_paint/src/lib.rs   | module wiring and re-exports only; no adapter involved.
 !src/gpu_paint/src/painter.rs | damage/geometry maths, testable without a GPU.
+!src/gpu_paint/src/select.rs  | adapter usability and preference rules, unit-tested.
+!src/gpu_paint/src/types.rs   | frame value types and the paint-mode projection, unit-tested.
+!src/gpu_paint/src/error.rs   | surface-lost error text, unit-tested.
+!src/gpu_paint/src/shared_texture.rs | shared-frame value type and visible/coded fallback, unit-tested.
 
 # --- CEF -------------------------------------------------------------------
 src/jfn_cef/src/client/**      | CefClient vtable wiring; needs a live browser.
 src/jfn_cef/src/client_impl/** | CefClient callbacks; needs a live browser.
 !src/jfn_cef/src/client_impl/dialog.rs | file-chooser argument mapping, unit-tested.
-src/jfn_cef/src/ffi.rs         | raw cef-dll-sys pointer conversions.
-src/jfn_cef/src/app.rs         | CefApp process wiring; needs the CEF runtime.
+src/jfn_cef/src/ffi.rs         | CefSettings + MainArgs construction; needs the CEF runtime.
+src/jfn_cef/src/app.rs         | CefApp process wiring and V8 walking; needs the CEF runtime.
 src/jfn_cef/src/v8_handler.rs  | V8 handler vtable; needs a renderer process.
-src/jfn_cef/src/cef_string.rs  | cef_string_t marshalling; needs the CEF allocator.
 
 # --- mpv -------------------------------------------------------------------
 src/mpv/src/sys.rs        | bindgen output for libmpv.
-src/mpv/src/handle.rs     | libmpv handle lifetime; needs a real mpv core.
-src/mpv/src/event_loop.rs | libmpv event pump; needs a real mpv core.
+src/mpv/src/handle.rs     | libmpv FFI, one call per method; needs a real mpv core.
+src/mpv/src/event_loop.rs | libmpv event pump thread; needs a real mpv core.
 src/mpv/src/probe.rs      | creates a live mpv core to read its version properties.
 
 # --- Linux/OS ABI ----------------------------------------------------------
-src/linux_util/src/egl.rs           | EGL entry points; needs a GPU driver.
-src/linux_util/src/xkb.rs           | libxkbcommon FFI; needs a keymap fd.
-src/linux_util/src/input.rs         | evdev/libinput FFI; needs input devices.
-src/linux_util/src/idle_inhibit.rs  | D-Bus idle inhibitor; needs a session bus.
+src/linux_util/src/egl.rs           | dlopens libEGL.so.1; needs a GPU driver.
+src/linux_util/src/xkb.rs           | queries a live xkb state; the flag table it feeds is in keysym.rs.
+src/linux_util/src/input.rs         | dispatch only; the routing table it follows is in keysym.rs.
 src/linux_util/src/open_url.rs      | spawns the desktop URL handler.
-src/wake_event/src/eventfd.rs       | eventfd(2) syscall wrapper.
-src/wake_event/src/pipe.rs          | pipe(2) syscall wrapper.
-src/wake_event/src/fd_wait.rs       | poll(2) syscall wrapper.
-src/platform_abi/src/signal_unix.rs   | sigaction(2) wrapper.
-src/platform_abi/src/signal_other.rs  | non-Unix signal stub.
-src/platform_abi/src/process_unix.rs  | fork/exec wrapper.
-src/platform_abi/src/process_other.rs | non-Unix process stub.
+src/platform_abi/src/signal_unix.rs   | installs real SIGINT/SIGTERM dispositions process-wide.
+src/platform_abi/src/process_unix.rs  | arms a real signal handler process-wide.
 
 # --- Entry points and tooling ---------------------------------------------
-src/jfn_rust/src/main.rs       | process entry point; covered by the E2E suite.
+src/jfn_rust/src/main.rs       | process entry point and panic hook; covered by the E2E suite.
 src/jfn_rust/src/platform_install.rs | composition root; installs the real Platform backend.
 src/mpris/src/lib.rs           | MediaSink shim over the zbus sink; needs a session bus.
-src/xtask/src/main.rs          | CLI dispatch only.
+src/xtask/src/main.rs          | clap definitions and CLI dispatch only.
 src/xtask/src/bundle_macos.rs  | drives codesign/plutil on macOS.
-src/xtask/src/platform_*.rs    | per-OS shell-outs (cmake, ninja, msbuild).
+src/xtask/src/platform_*.rs    | per-OS shell-outs and staging copies.
 src/xtask/src/install.rs       | copies a staged tree to a prefix.
 src/xtask/src/cef.rs           | downloads and unpacks the CEF distribution.
-src/xtask/src/mpv.rs           | drives the mpv submodule build.
+src/xtask/src/mpv.rs           | drives the meson/ninja mpv build.
 src/xtask/src/build.rs         | drives cargo and stages build/.
-src/xtask/src/package.rs       | drives the archive/installer builds.
-**/build.rs                    | build scripts; exercised by building.
+src/xtask/src/package.rs       | walks a staged tree into a zip/tarball.
+# A build script cannot link the crate it builds, so its rules (jfn_cef's
+# `version_full`, jfn_rust's rc template expansion) cannot move into a tested
+# module without a new build-dependency crate — a change larger than a pure
+# extraction. See docs/test-plan.md §6.
+**/build.rs                    | build scripts; cannot link crate code, exercised by building.

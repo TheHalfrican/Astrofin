@@ -1,8 +1,9 @@
 //! SHM segment lifecycle.
 //!
 //! Wraps `memfd_create` + `mmap` plus the matching x11rb MIT-SHM
-//! attach-fd/detach so a `ShmBuffer` ends up registered with the X server
-//! and ready for `shm_put_image`.
+//! attach-fd/detach so a [`ShmBuffer`] ends up registered with the X server
+//! and ready for `shm_put_image`. The buffer record itself and the size/reuse
+//! arithmetic live in [`crate::shm_logic`].
 
 use memmap2::{MmapMut, MmapOptions};
 use nix::fcntl::{FcntlArg, SealFlag, fcntl};
@@ -12,14 +13,14 @@ use x11rb::connection::Connection;
 use x11rb::protocol::shm::{self, ConnectionExt as X11rbShmConnection};
 use x11rb::rust_connection::RustConnection;
 
-use crate::x11_state::ShmBuffer;
+use crate::shm_logic::{ShmBuffer, can_reuse, segment_size};
 
 /// Allocate or reuse a SHM buffer at (w, h). Returns false on failure;
 /// `buf` is left in its previous state when the reuse condition matched, or
 /// in `empty()` state on failure.
 pub fn shm_alloc(buf: &mut ShmBuffer, conn: &RustConnection, w: i32, h: i32) -> bool {
-    let size: usize = (w as usize) * (h as usize) * 4;
-    if buf.is_mapped() && buf.dims() == (w, h) {
+    let size: usize = segment_size(w, h);
+    if can_reuse(buf.is_mapped(), buf.dims(), w, h) {
         return true;
     }
 

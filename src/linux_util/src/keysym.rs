@@ -1,6 +1,64 @@
-//! xkb keysym → Windows VK code.
+//! The X11/Wayland input translation tables: xkb keysym -> Windows VK code,
+//! xkb modifier state -> CEF event flags, and what a raw key press does.
+//!
+//! Everything here is input -> output. The two backends' input modules
+//! (`crate::input`, `crate::xkb`) do the xkb queries and the dispatch; the
+//! tables themselves need neither a keymap nor a display.
 
+use std::ffi::c_int;
+
+use jfn_platform_abi::event_flags::{
+    EVENTFLAG_ALT_DOWN, EVENTFLAG_CONTROL_DOWN, EVENTFLAG_SHIFT_DOWN,
+};
 use xkbcommon::xkb::keysyms as ks;
+
+/// `XKB_KEY_XF86Back` — the browser Back key.
+pub const XF86_BACK: u32 = 0x1008FF26;
+/// `XKB_KEY_XF86Forward` — the browser Forward key.
+pub const XF86_FORWARD: u32 = 0x1008FF27;
+
+/// The CEF event-flag bits for an xkb modifier state, given which of the
+/// three tracked modifiers are effectively active.
+pub fn cef_mods(shift: bool, ctrl: bool, alt: bool) -> u32 {
+    let mut m = 0u32;
+    if shift {
+        m |= EVENTFLAG_SHIFT_DOWN;
+    }
+    if ctrl {
+        m |= EVENTFLAG_CONTROL_DOWN;
+    }
+    if alt {
+        m |= EVENTFLAG_ALT_DOWN;
+    }
+    m
+}
+
+/// What a raw key event from a Linux backend does.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum RawKey {
+    /// A browser Back/Forward key on its press half: 1 forward, 0 back.
+    HistoryNav(c_int),
+    /// A browser Back/Forward key on its release half: swallowed, nothing
+    /// dispatched.
+    Swallow,
+    /// Hand the key to CEF. `native` is the X11 keycode CEF expects in
+    /// `native_key_code` — the evdev keycode plus 8, on Wayland as on X11.
+    Dispatch { vkey: i32, native: i32 },
+}
+
+/// Route one raw key event.
+pub fn raw_key_action(keysym: u32, native_code: u32, pressed: c_int) -> RawKey {
+    if keysym == XF86_BACK || keysym == XF86_FORWARD {
+        if pressed == 0 {
+            return RawKey::Swallow;
+        }
+        return RawKey::HistoryNav((keysym == XF86_FORWARD) as c_int);
+    }
+    RawKey::Dispatch {
+        vkey: keysym_to_vkey(keysym),
+        native: native_code as i32 + 8,
+    }
+}
 
 pub fn keysym_to_vkey(sym: u32) -> i32 {
     if (ks::KEY_a..=ks::KEY_z).contains(&sym) {
@@ -147,5 +205,55 @@ mod tests {
         assert_eq!(keysym_to_vkey(ks::KEY_Z), 0x5a);
         assert_eq!(keysym_to_vkey(ks::KEY_F1), 0x70);
         assert_eq!(keysym_to_vkey(ks::KEY_Escape), 0x1B);
+    }
+    #[test]
+    fn no_active_modifier_is_no_flags() {
+        assert_eq!(cef_mods(false, false, false), 0);
+    }
+
+    #[test]
+    fn each_modifier_contributes_its_own_flag() {
+        assert_eq!(cef_mods(true, false, false), EVENTFLAG_SHIFT_DOWN);
+        assert_eq!(cef_mods(false, true, false), EVENTFLAG_CONTROL_DOWN);
+        assert_eq!(cef_mods(false, false, true), EVENTFLAG_ALT_DOWN);
+        assert_eq!(
+            cef_mods(true, true, true),
+            EVENTFLAG_SHIFT_DOWN | EVENTFLAG_CONTROL_DOWN | EVENTFLAG_ALT_DOWN
+        );
+    }
+
+    #[test]
+    fn the_browser_keys_navigate_on_their_press_half() {
+        assert_eq!(raw_key_action(XF86_BACK, 158, 1), RawKey::HistoryNav(0));
+        assert_eq!(raw_key_action(XF86_FORWARD, 159, 1), RawKey::HistoryNav(1));
+    }
+
+    #[test]
+    fn the_browser_keys_are_swallowed_on_release() {
+        assert_eq!(raw_key_action(XF86_BACK, 158, 0), RawKey::Swallow);
+        assert_eq!(raw_key_action(XF86_FORWARD, 159, 0), RawKey::Swallow);
+    }
+
+    #[test]
+    fn an_ordinary_key_is_dispatched_with_its_vk_and_x11_keycode() {
+        // evdev keycode 30 ("A") is X11 keycode 38.
+        assert_eq!(
+            raw_key_action(ks::KEY_a, 30, 1),
+            RawKey::Dispatch {
+                vkey: keysym_to_vkey(ks::KEY_a),
+                native: 38,
+            }
+        );
+    }
+
+    #[test]
+    fn a_released_ordinary_key_is_still_dispatched() {
+        assert_eq!(
+            raw_key_action(ks::KEY_Escape, 1, 0),
+            RawKey::Dispatch {
+                vkey: 0x1B,
+                native: 9,
+            }
+        );
     }
 }

@@ -13,6 +13,8 @@ use jfn_platform_abi::{
     PhysicalSize, Scale, WindowExtent, WindowPos, WindowSnapshot, WindowSource,
     notify_window_changed,
 };
+
+use crate::window_logic;
 use parking_lot::{Condvar, Mutex};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -87,25 +89,17 @@ pub(crate) fn sample() -> Option<PhysicalSize> {
     let hwnd = crate::platform::win_ensure_hwnd()?;
     let mut rc = RECT::default();
     unsafe { GetClientRect(hwnd, &mut rc) }.ok()?;
-    let client = PhysicalSize {
-        w: rc.right - rc.left,
-        h: rc.bottom - rc.top,
-    };
-    if client.w <= 0 || client.h <= 0 {
-        return None;
-    }
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let scale = if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 };
-    let extent = WindowExtent::new(client, Scale(scale));
+    let client = window_logic::client_size(rc)?;
+    let extent = window_logic::extent_from(client, unsafe { GetDpiForWindow(hwnd) });
     let fullscreen = crate::platform::win_is_fullscreen();
-    let snap = WindowSnapshot {
-        extent: Some(extent),
-        position: window_position(hwnd),
-        maximized: !fullscreen && unsafe { IsZoomed(hwnd) }.as_bool(),
+    let snap = window_logic::snapshot(
+        extent,
+        window_position(hwnd),
         fullscreen,
-    };
+        unsafe { IsZoomed(hwnd) }.as_bool(),
+    );
     let previous = SNAPSHOT.lock().replace(snap);
-    if previous.and_then(|p| p.extent) != Some(extent) {
+    if window_logic::extent_changed(previous, extent) {
         log_sample(hwnd, extent);
     }
     Some(client)
@@ -125,10 +119,7 @@ fn window_position(hwnd: HWND) -> Option<WindowPos> {
     if !unsafe { GetMonitorInfoW(mon, &mut mi) }.as_bool() {
         return None;
     }
-    Some(WindowPos {
-        x: wr.left - mi.rcWork.left,
-        y: wr.top - mi.rcWork.top,
-    })
+    Some(window_logic::position_in_work_area(wr, mi.rcWork))
 }
 
 /// The client size, the client origin in screen coordinates, the window rect,

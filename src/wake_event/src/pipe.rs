@@ -44,3 +44,73 @@ impl AsFd for WakeEvent {
         self.read_fd.as_fd()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsFd;
+
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+    use super::*;
+
+    /// Does a `poll` see the read end as readable right now?
+    fn readable(ev: &WakeEvent) -> bool {
+        let mut fds = [PollFd::new(ev.as_fd(), PollFlags::POLLIN)];
+        poll(&mut fds, PollTimeout::ZERO).unwrap_or(0) > 0
+    }
+
+    #[test]
+    fn a_fresh_event_has_a_real_read_fd_and_is_not_signaled() {
+        let ev = WakeEvent::new().expect("pipe");
+        assert!(ev.fd() >= 0);
+        assert!(!readable(&ev));
+    }
+
+    #[test]
+    fn signal_makes_the_read_end_readable() {
+        let ev = WakeEvent::new().expect("pipe");
+        ev.signal();
+        assert!(readable(&ev));
+    }
+
+    #[test]
+    fn drain_clears_a_signal() {
+        let ev = WakeEvent::new().expect("pipe");
+        ev.signal();
+        ev.drain();
+        assert!(!readable(&ev));
+    }
+
+    #[test]
+    fn one_drain_clears_every_pending_signal() {
+        let ev = WakeEvent::new().expect("pipe");
+        for _ in 0..4 {
+            ev.signal();
+        }
+        ev.drain();
+        assert!(!readable(&ev), "one drain must clear every signal");
+    }
+
+    #[test]
+    fn draining_an_unsignaled_event_leaves_it_usable() {
+        // Both ends are non-blocking, so a drain with nothing to read must
+        // return rather than park the caller.
+        let ev = WakeEvent::new().expect("pipe");
+        ev.drain();
+        ev.signal();
+        assert!(readable(&ev));
+    }
+
+    #[test]
+    fn wait_returns_at_once_for_a_signal_that_already_landed() {
+        let ev = WakeEvent::new().expect("pipe");
+        ev.signal();
+        ev.wait();
+    }
+
+    #[test]
+    fn the_borrowed_fd_is_the_read_end_fd_reports() {
+        let ev = WakeEvent::new().expect("pipe");
+        assert_eq!(ev.as_fd().as_raw_fd(), ev.fd());
+    }
+}

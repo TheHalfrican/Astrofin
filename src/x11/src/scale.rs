@@ -2,16 +2,17 @@
 //!
 //! The app owns geometry and scale on X11 (mpv is embedded and passive), so
 //! this probe defines the logical ↔ physical conversion everywhere: boot
-//! restore, persist, CEF device scale, and input mapping. The Xft.dpi
-//! half-step quantization matches mpv's historical behavior
-//! (`third_party/mpv/video/out/x11_common.c`) so saved logical sizes
-//! round-trip across the ownership change; the tests pin it.
+//! restore, persist, CEF device scale, and input mapping. The arithmetic —
+//! including the Xft.dpi half-step quantization that matches mpv's historical
+//! behavior so saved logical sizes round-trip across the ownership change —
+//! lives in [`crate::scale_logic`], which is where the tests pin it. What is
+//! left here is the connection: the resource database and the screen geometry.
 
 use x11rb::connection::Connection;
 use x11rb::resource_manager::new_from_resource_manager;
 use x11rb::rust_connection::RustConnection;
 
-const BASE_DPI: f64 = 96.0;
+use crate::scale_logic::{quantize_dpi, screen_dpi_scale};
 
 pub(crate) fn query_display_scale() -> Option<f32> {
     // Explicitly target the real server: while the mpv proxy has DISPLAY
@@ -37,63 +38,10 @@ fn query_xft_dpi_scale(conn: &impl Connection) -> Option<f32> {
 
 fn query_screen_dpi_scale(conn: &impl Connection, screen_num: usize) -> Option<f32> {
     let screen = conn.setup().roots.get(screen_num)?;
-    let w_mm = screen.width_in_millimeters;
-    let h_mm = screen.height_in_millimeters;
-    if w_mm == 0 || h_mm == 0 {
-        return None;
-    }
-
-    let dpi_x = screen.width_in_pixels as f64 * 25.4 / f64::from(w_mm);
-    let dpi_y = screen.height_in_pixels as f64 * 25.4 / f64::from(h_mm);
-    if !dpi_x.is_finite() || !dpi_y.is_finite() {
-        return None;
-    }
-
-    let sx = quantize_dpi_steps(dpi_x)?;
-    let sy = quantize_dpi_steps(dpi_y)?;
-    if sx == sy {
-        Some(sx as f32 / 2.0)
-    } else {
-        None
-    }
-}
-
-fn quantize_dpi(dpi: f64) -> Option<f32> {
-    let s = quantize_dpi_steps(dpi)?;
-    Some(s as f32 / 2.0)
-}
-
-fn quantize_dpi_steps(dpi: f64) -> Option<i32> {
-    if !dpi.is_finite() {
-        return None;
-    }
-    let s = (2.0 * dpi / BASE_DPI).clamp(0.0, 20.0).round_ties_even() as i32;
-    if s > 2 && s < 20 { Some(s) } else { None }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{quantize_dpi, quantize_dpi_steps};
-
-    #[test]
-    fn xft_dpi_uses_mpv_half_step_quantization() {
-        assert_eq!(quantize_dpi(144.0), Some(1.5));
-        assert_eq!(quantize_dpi(168.0), Some(2.0));
-        assert_eq!(quantize_dpi(192.0), Some(2.0));
-        assert_eq!(quantize_dpi(288.0), Some(3.0));
-    }
-
-    #[test]
-    fn unscaled_or_invalid_dpi_is_ignored() {
-        assert_eq!(quantize_dpi(96.0), None);
-        assert_eq!(quantize_dpi(120.0), None);
-        assert_eq!(quantize_dpi(0.0), None);
-        assert_eq!(quantize_dpi(f64::NAN), None);
-    }
-
-    #[test]
-    fn screen_dpi_fallback_requires_matching_axes() {
-        assert_eq!(quantize_dpi_steps(144.0), Some(3));
-        assert_ne!(quantize_dpi_steps(144.0), quantize_dpi_steps(192.0));
-    }
+    screen_dpi_scale(
+        screen.width_in_pixels,
+        screen.height_in_pixels,
+        screen.width_in_millimeters,
+        screen.height_in_millimeters,
+    )
 }

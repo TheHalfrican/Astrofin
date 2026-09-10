@@ -5,6 +5,10 @@
 //! and the video host. It publishes the parent's live geometry as an immutable
 //! [`ParentSnapshot`] so all other readers are lock-free.
 //!
+//! The pure half of what this thread decides — the work lattice, the z-order
+//! merge, the EWMH state fold, the resize-sync bookkeeping — lives in
+//! [`crate::geometry_logic`]; this module is the connection and the effects.
+//!
 //! Structure (create/size/place/map/restack) runs on the geometry connection;
 //! content (pixel upload) runs on the content connection inside each surface's
 //! [`crate::overlay_actor::OverlayActor`]. No overlay window ever has two
@@ -30,6 +34,10 @@ use jfn_playback::shutdown::jfn_shutdown_initiate;
 use jfn_wake_event::{Drain, WakeEvent, WakeSource};
 
 use crate::conn_source::X11Source;
+use crate::geometry_logic::{
+    Pending, PropertyTarget, ResizeSync, classify_property, fold_wm_state, geometric_fullscreen,
+    host_fill_size, is_wm_delete, merged_order, parent_changed, scale_changed, sync_request_value,
+};
 use crate::input::x11_shutdown_waker;
 use crate::overlay_fsm::{self, Effect, Geom, OverlayState};
 use crate::registry::{
@@ -155,10 +163,9 @@ struct GeoWork {
     fsm: HashMap<SurfaceId, OverlayState>,
     /// Bottom-to-top overlay z-order.
     order: Vec<SurfaceId>,
-    /// `_NET_WM_SYNC_REQUEST` counter, or 0 when the protocol was not advertised.
-    sync_counter: u32,
-    sync_pending: Option<(i32, u32)>,
-    sync_armed: bool,
+    /// `_NET_WM_SYNC_REQUEST` handshake state; inert when the protocol was not
+    /// advertised.
+    sync: ResizeSync,
 }
 
 impl GeoWork {
@@ -174,29 +181,16 @@ impl GeoWork {
             structures: HashMap::new(),
             fsm: HashMap::new(),
             order: Vec::new(),
-            sync_counter: crate::x11_state::host().map_or(0, |h| h.sync_counter),
-            sync_pending: None,
-            sync_armed: false,
+            sync: ResizeSync::new(crate::x11_state::host().map_or(0, |h| h.sync_counter)),
         }
-    }
-
-    fn latch_sync(&mut self, hi: i32, lo: u32) {
-        if self.sync_counter == 0 {
-            return;
-        }
-        self.sync_pending = Some((hi, lo));
-        self.sync_armed = false;
     }
 
     /// The counter write tells the WM our configures for this resize are done,
     /// so it must be queued behind them on the same connection.
     fn commit_resize(&mut self, conn: &RustConnection) {
         let _ = conn.flush();
-        if !self.sync_armed {
-            return;
-        }
-        if let Some((hi, lo)) = self.sync_pending.take() {
-            let _ = conn.sync_set_counter(self.sync_counter, Int64 { hi, lo });
+        if let Some((counter, hi, lo)) = self.sync.take_commit() {
+            let _ = conn.sync_set_counter(counter, Int64 { hi, lo });
             let _ = conn.flush();
         }
     }
@@ -364,13 +358,8 @@ fn handle_create(conn: &RustConnection, work: &mut GeoWork, id: SurfaceId) {
     work.structures.insert(id, structure);
     // Born unmapped: the FSM maps it on the next reconcile (and sets
     // override_redirect stacking if fullscreen).
-    work.fsm.insert(
-        id,
-        OverlayState {
-            mapped: false,
-            unmanaged: work.fullscreen,
-        },
-    );
+    work.fsm
+        .insert(id, OverlayState::new_unmapped(work.fullscreen));
     if !work.order.contains(&id) {
         work.order.push(id);
     }
@@ -390,18 +379,7 @@ fn handle_destroy(conn: &RustConnection, work: &mut GeoWork, id: SurfaceId) {
 }
 
 fn handle_set_order(conn: &RustConnection, work: &mut GeoWork, ids: Vec<SurfaceId>) {
-    // Keep only ids we still own; preserve the requested order.
-    let mut new_order: Vec<SurfaceId> = ids
-        .into_iter()
-        .filter(|id| work.structures.contains_key(id))
-        .collect();
-    // Append any owned surface the caller omitted (defensive).
-    for id in &work.order {
-        if !new_order.contains(id) {
-            new_order.push(*id);
-        }
-    }
-    work.order = new_order;
+    work.order = merged_order(ids, &work.order, |id| work.structures.contains_key(id));
     // Apply the z-order once, on this reorder — not every reconcile (which would
     // feed our own ConfigureNotify back into a restack loop). Stack bottom-to-top
     // above the app top-level.
@@ -519,20 +497,19 @@ fn read_wm_state(conn: &RustConnection, win: Window) -> (bool, bool) {
         .map(|c| c.reply())
         && let Some(vals) = reply.value32()
     {
-        let (mut fs, mut mv, mut mh) = (false, false, false);
-        for atom in vals {
-            fs |= atom == a.net_wm_state_fullscreen;
-            mv |= atom == a.net_wm_state_maximized_vert;
-            mh |= atom == a.net_wm_state_maximized_horz;
-        }
-        return (fs, mv && mh);
+        return fold_wm_state(
+            vals,
+            a.net_wm_state_fullscreen,
+            a.net_wm_state_maximized_vert,
+            a.net_wm_state_maximized_horz,
+        );
     }
     (false, false)
 }
 
-fn geometric_fullscreen(conn: &RustConnection, root: Window, geom: Geom) -> bool {
+fn root_fullscreen(conn: &RustConnection, root: Window, geom: Geom) -> bool {
     if let Ok(Ok(rgeo)) = conn.get_geometry(root).map(|c| c.reply()) {
-        return geom.2 >= rgeo.width as i32 && geom.3 >= rgeo.height as i32;
+        return geometric_fullscreen(geom, i32::from(rgeo.width), i32::from(rgeo.height));
     }
     false
 }
@@ -607,12 +584,12 @@ fn reconcile(
         return;
     };
     let (state_fs, parent_max) = read_wm_state(conn, parent);
-    let parent_fs = state_fs || geometric_fullscreen(conn, root, parent_geom);
+    let parent_fs = state_fs || root_fullscreen(conn, root, parent_geom);
 
     // The video host is a child, so it fills the client area in local coords
     // (0,0). Publish before the ConfigureWindow reaches the server so the proxy
     // forwards mpv only the ConfigureNotify matching the published size.
-    let (fill_w, fill_h) = (parent_geom.2.max(1), parent_geom.3.max(1));
+    let (fill_w, fill_h) = host_fill_size(parent_geom.2, parent_geom.3);
     crate::mpv_proxy::publish_host_geometry(fill_w as u16, fill_h as u16);
     let fill = ConfigureWindowAux::new()
         .x(0)
@@ -624,10 +601,16 @@ fn reconcile(
         let _ = conn.configure_window(embed, &fill);
     }
 
-    let changed = (work.parent_x, work.parent_y, work.pw, work.ph)
-        != (parent_geom.0, parent_geom.1, parent_geom.2, parent_geom.3)
-        || work.fullscreen != parent_fs
-        || work.maximized != parent_max;
+    let changed = parent_changed(
+        (
+            (work.parent_x, work.parent_y, work.pw, work.ph),
+            work.fullscreen,
+            work.maximized,
+        ),
+        parent_geom,
+        parent_fs,
+        parent_max,
+    );
     work.parent_x = parent_geom.0;
     work.parent_y = parent_geom.1;
     work.pw = parent_geom.2;
@@ -662,10 +645,11 @@ fn reconcile(
             record.visible
         };
 
-        let mut state = work.fsm.get(&id).copied().unwrap_or(OverlayState {
-            mapped: false,
-            unmanaged: parent_fs,
-        });
+        let mut state = work
+            .fsm
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| OverlayState::new_unmapped(parent_fs));
         let inputs = overlay_fsm::Inputs {
             parent_geom,
             parent_fullscreen: parent_fs,
@@ -683,32 +667,27 @@ fn reconcile(
     work.commit_resize(conn);
 }
 
-fn is_wm_delete(e: &ClientMessageEvent) -> bool {
+fn wm_delete_message(e: &ClientMessageEvent) -> bool {
     let Some(host) = crate::x11_state::host() else {
         return false;
     };
-    e.type_ == host.atoms.wm_protocols && e.data.as_data32()[0] == host.atoms.wm_delete_window
+    is_wm_delete(
+        e.type_,
+        e.data.as_data32()[0],
+        host.atoms.wm_protocols,
+        host.atoms.wm_delete_window,
+    )
 }
 
-/// Data layout: `[protocol, timestamp, lo, hi, _]`.
 fn parse_sync_request(e: &ClientMessageEvent) -> Option<(i32, u32)> {
     let host = crate::x11_state::host()?;
-    if host.sync_counter == 0 || host.atoms.net_wm_sync_request == 0 {
-        return None;
-    }
-    let data = e.data.as_data32();
-    if e.type_ != host.atoms.wm_protocols || data[0] != host.atoms.net_wm_sync_request {
-        return None;
-    }
-    Some((data[3] as i32, data[2]))
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Pending {
-    Idle,
-    Reconcile,
-    Restack,
-    Refocus,
+    sync_request_value(
+        e.type_,
+        e.data.as_data32(),
+        host.atoms.wm_protocols,
+        host.atoms.net_wm_sync_request,
+        host.sync_counter,
+    )
 }
 
 enum Phase {
@@ -795,7 +774,7 @@ impl GeoLoop {
 
     fn raise_to(&mut self, pending: Pending) {
         if let Phase::Running(cur) = self.phase {
-            self.phase = Phase::Running(cur.max(pending));
+            self.phase = Phase::Running(cur.merge(pending));
         }
     }
 
@@ -813,7 +792,7 @@ impl GeoLoop {
 
     fn refresh_display_scale(&mut self) -> Pending {
         let scale = crate::scale::query_display_scale().unwrap_or(1.0);
-        if (self.work.scale - scale).abs() > f32::EPSILON {
+        if scale_changed(self.work.scale, scale) {
             self.work.scale = scale;
             self.work.publish();
             tracing::info!(target: "Platform", "display scale changed: {scale}");
@@ -849,7 +828,7 @@ fn handle_event(state: &mut GeoLoop, ev: Event) -> Pending {
         Event::ConfigureNotify(e) => {
             if is_parentish(e.window) {
                 if e.window == state.parent {
-                    state.work.sync_armed = true;
+                    state.work.sync.arm();
                 }
                 Pending::Restack
             } else {
@@ -863,15 +842,17 @@ fn handle_event(state: &mut GeoLoop, ev: Event) -> Pending {
                 Pending::Reconcile
             }
         }
-        Event::PropertyNotify(e) => {
-            if e.window == state.parent {
-                Pending::Restack
-            } else if e.window == state.root && e.atom == u32::from(AtomEnum::RESOURCE_MANAGER) {
-                state.refresh_display_scale()
-            } else {
-                Pending::Idle
-            }
-        }
+        Event::PropertyNotify(e) => match classify_property(
+            e.window,
+            e.atom,
+            state.parent,
+            state.root,
+            u32::from(AtomEnum::RESOURCE_MANAGER),
+        ) {
+            PropertyTarget::Parent => Pending::Restack,
+            PropertyTarget::ResourceManager => state.refresh_display_scale(),
+            PropertyTarget::Other => Pending::Idle,
+        },
         Event::ReparentNotify(e) => {
             if e.window == state.parent {
                 let new_frame = find_frame(&state.conn, state.parent, state.root);
@@ -915,12 +896,12 @@ fn handle_event(state: &mut GeoLoop, ev: Event) -> Pending {
             Pending::Idle
         }
         Event::ClientMessage(e) => {
-            if e.window == state.parent && is_wm_delete(&e) {
+            if e.window == state.parent && wm_delete_message(&e) {
                 jfn_shutdown_initiate();
             } else if e.window == state.parent
                 && let Some((hi, lo)) = parse_sync_request(&e)
             {
-                state.work.latch_sync(hi, lo);
+                state.work.sync.latch(hi, lo);
             }
             Pending::Idle
         }

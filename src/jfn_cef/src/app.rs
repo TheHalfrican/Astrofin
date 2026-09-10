@@ -13,66 +13,24 @@ use crate::embedded_js;
 use crate::injection::ExtraInfo;
 use crate::paint_scheduler::PaintScheduler;
 use crate::state;
+use crate::switches::{
+    self, APP_SCHEME_OPTIONS, SwitchAction, baseline_disabled_features, is_browser_process,
+};
 use crate::v8_handler::NativeHandlerBuilder;
-
-// `app://` scheme options. Match CEF_SCHEME_OPTION_* from
-// include/internal/cef_types.h (verified against CEF 151.3.24):
-// STANDARD 1<<0, LOCAL 1<<1, DISPLAY_ISOLATED 1<<2, SECURE 1<<3,
-// CORS_ENABLED 1<<4, CSP_BYPASSING 1<<5, FETCH_ENABLED 1<<6.
-const SCHEME_OPTION_STANDARD: i32 = 1 << 0;
-const SCHEME_OPTION_LOCAL: i32 = 1 << 1;
-const SCHEME_OPTION_SECURE: i32 = 1 << 3;
-const SCHEME_OPTION_CORS_ENABLED: i32 = 1 << 4;
-const SCHEME_OPTION_FETCH_ENABLED: i32 = 1 << 6;
 
 // V8 property attribute. Equivalent to V8_PROPERTY_ATTRIBUTE_READONLY.
 fn readonly_attr() -> V8Propertyattribute {
     V8Propertyattribute::from(sys::cef_v8_propertyattribute_t::V8_PROPERTY_ATTRIBUTE_READONLY)
 }
 
-// Baseline Chromium features disabled in every process (Google services,
-// telemetry, spell check). Merged with all other `disable-features`
-// contributors by `append_merged_features`.
-const DISABLED_FEATURES: &[&str] = &[
-    "PushMessaging",
-    "BackgroundSync",
-    "SafeBrowsing",
-    "Translate",
-    "OptimizationHints",
-    "MediaRouter",
-    "DialMediaRouteProvider",
-    "AcceptCHFrame",
-    "AutofillServerCommunication",
-    "CertificateTransparencyComponentUpdater",
-    "SyncNotificationServiceWhenSignedIn",
-    "SpellCheck",
-    "SpellCheckService",
-    "PasswordManager",
-    "ImmersiveReadAnything",
-];
-
-fn split_features(value: &str) -> impl Iterator<Item = String> + '_ {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|f| !f.is_empty())
-        .map(str::to_string)
-}
-
 // A feature-list switch is last-occurrence-wins in Chromium, so it must be
 // appended exactly once with every contributor's features merged in.
-fn append_merged_features(cl: &mut CommandLine, name: &str, mut features: Vec<String>) {
+fn append_merged_features(cl: &mut CommandLine, name: &str, features: Vec<String>) {
     let key = CefString::from(name);
-    if cl.has_switch(Some(&key)) == 1 {
-        let existing = userfree_to_string(&cl.switch_value(Some(&key)));
-        features.extend(split_features(&existing));
-    }
-    let mut seen = std::collections::HashSet::new();
-    features.retain(|f| seen.insert(f.clone()));
-    cl.append_switch_with_value(
-        Some(&key),
-        Some(&CefString::from(features.join(",").as_str())),
-    );
+    let existing =
+        (cl.has_switch(Some(&key)) == 1).then(|| userfree_to_string(&cl.switch_value(Some(&key))));
+    let merged = switches::merge_features(features, existing.as_deref());
+    cl.append_switch_with_value(Some(&key), Some(&CefString::from(merged.as_str())));
 }
 
 // ----- App ------------------------------------------------------------------
@@ -145,25 +103,22 @@ wrap_app! {
             // whatever is already on the command line (Chromium forwards the
             // browser's set to subprocesses), the baseline below, and any
             // pending switch.
-            let mut disable_features: Vec<String> = DISABLED_FEATURES
-                .iter()
-                .map(|f| (*f).to_string())
-                .collect();
+            let mut disable_features: Vec<String> = baseline_disabled_features();
 
             // Browser-process-only switches from CefRuntime::Set*().
-            let is_browser_process = process_type
-                .map(|s| s.to_string().is_empty())
-                .unwrap_or(true);
-            if is_browser_process {
+            let process_type = process_type.map(|s| s.to_string());
+            if is_browser_process(process_type.as_deref()) {
                 for sw in state::snapshot_switches() {
-                    match (sw.name.as_str(), sw.value) {
-                        ("disable-features", Some(v)) => {
-                            disable_features.extend(split_features(&v));
+                    match switches::switch_action(&sw) {
+                        SwitchAction::MergeFeatures(v) => {
+                            disable_features.extend(switches::split_features(v));
                         }
-                        (name, None) => cl.append_switch(Some(&CefString::from(name))),
-                        (name, Some(v)) => cl.append_switch_with_value(
+                        SwitchAction::Flag(name) => {
+                            cl.append_switch(Some(&CefString::from(name)));
+                        }
+                        SwitchAction::Valued(name, v) => cl.append_switch_with_value(
                             Some(&CefString::from(name)),
-                            Some(&CefString::from(v.as_str())),
+                            Some(&CefString::from(v)),
                         ),
                     }
                 }
@@ -175,14 +130,7 @@ wrap_app! {
         fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
             let Some(reg) = registrar else { return };
             let name = CefString::from("app");
-            reg.add_custom_scheme(
-                Some(&name),
-                SCHEME_OPTION_STANDARD
-                    | SCHEME_OPTION_SECURE
-                    | SCHEME_OPTION_LOCAL
-                    | SCHEME_OPTION_CORS_ENABLED
-                    | SCHEME_OPTION_FETCH_ENABLED,
-            );
+            reg.add_custom_scheme(Some(&name), APP_SCHEME_OPTIONS);
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {

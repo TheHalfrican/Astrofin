@@ -493,6 +493,16 @@ fn emit_properties_changed(
 /// Spawn the MPRIS sink thread. `service_suffix` is appended to the base
 /// service name (`org.mpris.MediaPlayer2.Astrofin<suffix>`).
 /// No-op if already running.
+/// The bus-name suffix one app instance publishes under:
+/// `org.mpris.MediaPlayer2.astrofin.instance_<id>`.
+///
+/// MPRIS requires a unique well-known name per player, and a second Astrofin
+/// window is a second player — the suffix is what keeps two instances from
+/// fighting over one name.
+pub(crate) fn service_suffix(instance_id: impl std::fmt::Display) -> String {
+    format!(".instance_{instance_id}")
+}
+
 pub(crate) fn start(service_suffix: &str) {
     let mut slot = SINK.write();
     if slot.is_some() {
@@ -590,5 +600,17 @@ mod tests {
         let next = props([("Metadata", b)])?;
         assert!(changed_properties(&last, &next)?.is_empty());
         Ok(())
+    }
+    #[test]
+    fn an_instance_publishes_under_a_suffix_naming_its_id() {
+        assert_eq!(
+            service_suffix("0191d0aa7b5c7f2e9a11"),
+            ".instance_0191d0aa7b5c7f2e9a11"
+        );
+    }
+
+    #[test]
+    fn two_instances_do_not_share_a_bus_name() {
+        assert_ne!(service_suffix("aaaa"), service_suffix("bbbb"));
     }
 }

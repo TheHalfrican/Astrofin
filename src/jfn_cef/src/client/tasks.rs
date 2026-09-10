@@ -4,6 +4,7 @@ use crossbeam_channel::Sender;
 use std::sync::Arc;
 
 use super::Inner;
+use crate::client_logic::paste_js;
 use jfn_playback::shutdown::jfn_shutting_down;
 
 wrap_task! {
@@ -67,9 +68,7 @@ wrap_task! {
     }
     impl Task {
         fn execute(&self) {
-            let text = jfn_js_json::to_js_json(&self.text).unwrap_or_else(|| "\"\"".to_string());
-            let js = format!("document.execCommand('insertText',false,{text});");
-            self.inner.exec_js_focused(&js);
+            self.inner.exec_js_focused(&paste_js(&self.text));
         }
     }
 }
