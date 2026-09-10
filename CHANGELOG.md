@@ -122,6 +122,12 @@ project uses semantic versioning.
   scalable icon read as "Unrecognized image file format". The comment now
   sits inside the root element. (freedesktop.org serves the uchardet
   tarball again, which is what let the job get this far.)
+- Double-clicks reach the page on every platform. The shared mouse-button
+  dispatcher stamped every click as a single, so Chromium never produced a
+  `dblclick` (double-click to toggle fullscreen in the player, for one). It
+  now recovers the count from the press stream on Windows, X11 and Wayland
+  (Chromium's own thresholds: under 500 ms, within 4 px, same button, up to
+  three) and macOS passes the `NSEvent` click count through, clamped.
 
 ## [0.4.0] - 2026-09-09
 

@@ -7,9 +7,14 @@ use jfn_platform_abi::{BrowserBridge, browser_bridge};
 use jfn_playback::hotkey::jfn_hotkey_classify_keydown;
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 use std::os::raw::c_int;
+use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::Instant;
 
 pub mod buttons;
+mod click_count;
 pub mod scroll;
+
+use click_count::{ClickCounter, MAX_CLICKS};
 
 const KEYEVENT_RAWKEYDOWN: c_int = 0;
 const KEYEVENT_KEYUP: c_int = 2;
@@ -37,6 +42,28 @@ pub fn jfn_input_dispatch_mouse_move(x: i32, y: i32, mods: u32, leave: c_int) {
     with_bridge(|b| b.send_mouse_move(x, y, mods, leave != 0));
 }
 
+/// Process-wide click counter for the hosts that have no native count.
+static CLICK_COUNTER: Mutex<ClickCounter> = Mutex::new(ClickCounter::new());
+
+/// Monotonic base for the counter's clock; `Instant::now()` at first use.
+static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+fn now_ms() -> u64 {
+    u64::try_from(PROCESS_START.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Forgets the last press, so one test's clicks cannot become another's
+/// double click. Called from the test setup that takes the serial lock.
+#[cfg(test)]
+pub(crate) fn reset_click_counter() {
+    *CLICK_COUNTER.lock().unwrap_or_else(PoisonError::into_inner) = ClickCounter::new();
+}
+
+/// Mouse button dispatch for hosts whose events carry no click count —
+/// Windows, X11 and Wayland. The count is recovered from the press stream by
+/// [`click_count::ClickCounter`], so `dblclick` reaches the page. macOS has a
+/// real count on the `NSEvent` and uses
+/// [`jfn_input_dispatch_mouse_button_counted`] instead.
 pub fn jfn_input_dispatch_mouse_button(
     button_code: u32,
     pressed: c_int,
@@ -47,7 +74,36 @@ pub fn jfn_input_dispatch_mouse_button(
     let Some(btn) = cef_button(button_code) else {
         return;
     };
-    with_bridge(|b| b.send_mouse_click(x, y, mods, btn, pressed == 0, 1));
+    let count = {
+        let mut counter = CLICK_COUNTER.lock().unwrap_or_else(PoisonError::into_inner);
+        if pressed == 0 {
+            // A release repeats the count of the press it closes.
+            counter.last()
+        } else {
+            counter.press(button_code, x, y, now_ms())
+        }
+    };
+    with_bridge(|b| b.send_mouse_click(x, y, mods, btn, pressed == 0, count));
+}
+
+/// Mouse button dispatch with a platform-supplied click count, for hosts that
+/// track one themselves (macOS `NSEvent.clickCount`). The count is clamped to
+/// the range CEF understands; a synthetic event can report 0, which is one
+/// click here. This path deliberately bypasses the shared counter, so a
+/// platform never counts a click twice.
+pub fn jfn_input_dispatch_mouse_button_counted(
+    button_code: u32,
+    pressed: c_int,
+    x: i32,
+    y: i32,
+    mods: u32,
+    click_count: c_int,
+) {
+    let Some(btn) = cef_button(button_code) else {
+        return;
+    };
+    let count = click_count.clamp(1, MAX_CLICKS);
+    with_bridge(|b| b.send_mouse_click(x, y, mods, btn, pressed == 0, count));
 }
 
 pub fn jfn_input_dispatch_scroll(x: i32, y: i32, dx: i32, dy: i32, mods: u32) {
@@ -308,6 +364,7 @@ mod tests {
         INSTALL.call_once(|| jfn_platform_abi::install_browser_bridge(Box::new(Recorder)));
         let guard = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         CALLS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        reset_click_counter();
         guard
     }
 
@@ -377,6 +434,51 @@ mod tests {
                 click_count: 1,
             }]
         );
+    }
+
+    #[test]
+    fn two_quick_presses_at_one_point_are_dispatched_as_a_double_click() {
+        let _serial = recording();
+        for _ in 0..2 {
+            jfn_input_dispatch_mouse_button(buttons::BTN_LEFT, 1, 7, 8, 0);
+            jfn_input_dispatch_mouse_button(buttons::BTN_LEFT, 0, 7, 8, 0);
+        }
+        let counts: Vec<(bool, c_int)> = calls()
+            .iter()
+            .filter_map(|c| match *c {
+                Call::Click {
+                    mouse_up,
+                    click_count,
+                    ..
+                } => Some((mouse_up, click_count)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            counts,
+            vec![(false, 1), (true, 1), (false, 2), (true, 2)],
+            "the release carries the count of the press it closes"
+        );
+    }
+
+    #[test]
+    fn the_counted_dispatch_forwards_its_count_and_clamps_it_to_the_cef_range() {
+        let _serial = recording();
+        for (given, expected) in [(2, 2), (0, 1), (-3, 1), (7, 3)] {
+            jfn_input_dispatch_mouse_button_counted(buttons::BTN_LEFT, 1, 0, 0, 0, given);
+            assert_eq!(
+                calls(),
+                vec![Call::Click {
+                    x: 0,
+                    y: 0,
+                    mods: 0,
+                    button: MBT_LEFT,
+                    mouse_up: false,
+                    click_count: expected,
+                }],
+                "a native count of {given}"
+            );
+        }
     }
 
     #[test]

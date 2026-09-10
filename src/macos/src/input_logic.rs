@@ -211,6 +211,22 @@ pub(crate) fn mouse_buttons_after(prev: u32, flag: u32, pressed: bool) -> u32 {
     if pressed { prev | flag } else { prev & !flag }
 }
 
+/// `NSEvent.clickCount` as a CEF click count.
+///
+/// AppKit keeps counting past a triple click and reports `0` for a synthetic
+/// event that never joined a click sequence; CEF only distinguishes single,
+/// double and triple, and treats anything below one as no click at all.
+pub(crate) fn cef_click_count(native: isize) -> c_int {
+    match native {
+        n if n <= 1 => 1,
+        2 => 2,
+        _ => MAX_CLICKS,
+    }
+}
+
+/// Highest click count CEF understands — `jfn_input` clamps to the same bound.
+const MAX_CLICKS: c_int = 3;
+
 /// Whether a point in window coordinates lands in the title-bar strip above
 /// the content layout rect, which the input view makes click-through so
 /// AppKit's own frame view handles window drags and double-click-to-zoom.
@@ -509,6 +525,16 @@ mod tests {
                 set: None
             }
         );
+    }
+
+    #[test]
+    fn a_native_click_count_is_clamped_to_the_range_cef_understands() {
+        assert_eq!(cef_click_count(1), 1);
+        assert_eq!(cef_click_count(2), 2);
+        assert_eq!(cef_click_count(3), 3);
+        assert_eq!(cef_click_count(9), 3, "AppKit keeps counting, CEF does not");
+        assert_eq!(cef_click_count(0), 1, "a synthetic event reports no clicks");
+        assert_eq!(cef_click_count(-1), 1);
     }
 
     #[test]

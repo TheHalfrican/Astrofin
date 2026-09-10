@@ -37,9 +37,10 @@ use jfn_platform_abi::cursor::CursorShape;
 // The NSEvent translation tables live in `input_logic`; this module only
 // reads the values off the event and dispatches.
 use crate::input_logic::{
-    CursorPlan, NsCursor, button_event_flag, cursor_plan, event_type_carries_characters,
-    history_nav_for_button, modifier_key_pressed, mouse_buttons_after, ns_cursor_for,
-    ns_keycode_to_vkey, ns_to_cef_modifiers, point_is_in_titlebar, should_forward_char,
+    CursorPlan, NsCursor, button_event_flag, cef_click_count, cursor_plan,
+    event_type_carries_characters, history_nav_for_button, modifier_key_pressed,
+    mouse_buttons_after, ns_cursor_for, ns_keycode_to_vkey, ns_to_cef_modifiers,
+    point_is_in_titlebar, should_forward_char,
 };
 
 // NSTrackingArea options (NSTrackingArea.h).
@@ -54,7 +55,7 @@ const NS_TRACKING_IN_VISIBLE_RECT: u64 = 0x200;
 
 use jfn_input::{
     jfn_input_dispatch_char_sys, jfn_input_dispatch_history_nav, jfn_input_dispatch_key_full,
-    jfn_input_dispatch_keyboard_focus, jfn_input_dispatch_mouse_button,
+    jfn_input_dispatch_keyboard_focus, jfn_input_dispatch_mouse_button_counted,
     jfn_input_dispatch_mouse_move, jfn_input_dispatch_scroll_precise,
 };
 
@@ -401,14 +402,17 @@ fn dispatch_mouse_button(view: &InputView, event: &AnyObject, button_code: u32, 
 
     let loc = mouse_loc_in_view(view, event);
     let raw_flags: u64 = unsafe { msg_send![event, modifierFlags] };
-    let _click: isize = unsafe { msg_send![event, clickCount] };
+    // AppKit already sequences clicks, so this path carries its count through
+    // rather than re-deriving one: without it CEF never fires `dblclick`.
+    let click: isize = unsafe { msg_send![event, clickCount] };
     let mods = ns_to_cef_modifiers(raw_flags) | next;
-    jfn_input_dispatch_mouse_button(
+    jfn_input_dispatch_mouse_button_counted(
         button_code,
         if pressed { 1 } else { 0 },
         loc.x as i32,
         loc.y as i32,
         mods,
+        cef_click_count(click),
     );
 }
 
