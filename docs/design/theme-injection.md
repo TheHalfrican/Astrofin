@@ -799,16 +799,29 @@ that puts the stack after `.detailPagePrimaryContent` puts it off screen on
 exactly the items with the most to say. Measured at 1064 px before the order
 was settled: `#btnPlay` at y=**1094** on The Animatrix (17 tags, 6 directors,
 4 writers, 6 studios), present and correct and entirely below the fold. After:
-y=**452** on that item and on a short one alike, whole stack in view.
+y=**452** on that item and on a short one alike, the stack's bottom edge at
+712 px, whole stack in view at both 1708x1064 and 1920x1080.
 
-That is jellyfin-web's own DOM order, and it costs one declaration:
 `.detailRibbon` gets **`display: contents`**, which drops its box and promotes
 `.infoWrapper` and `.mainDetailButtons` to siblings of
-`.detailPagePrimaryContent`. There is no `order` anywhere in the left column —
-DOM order is the design's order, which is why the stack's position no longer
-depends on how much the item has to say. The ribbon has nothing of its own left
-to draw: its 7.2 em height, its −7.2 em margin and its 32.45 vw left padding all
-exist to clear the poster this page no longer has.
+`.detailPagePrimaryContent`. The three then carry explicit orders:
+
+| order | element |
+| --- | --- |
+| 1 | `.infoWrapper` — eyebrow, `.parentName`, `.itemName`, the chip strip |
+| **2** | **`.mainDetailButtons`** — `margin: 22px 0 6px` |
+| 3 | `.detailPagePrimaryContent` — track pickers, tagline, blurb, tags, links, credits, and the season/episode shelves |
+
+That matches jellyfin-web's own DOM order on 10.11.11, so the orders change
+nothing today. They are there to say the intent out loud: a future template
+that moves `.mainDetailButtons` out of the ribbon, or puts the blurb ahead of
+it, cannot silently push the stack under the fold again. Because everything
+variable-length sits at order 3, the stack's y is a function of the chip strip
+alone — 452 px on every item measured, long or short.
+
+The ribbon has nothing of its own left to draw: its 7.2 em height, its −7.2 em
+margin and its 32.45 vw left padding all exist to clear the poster this page no
+longer has.
 
 An earlier attempt promoted four wrappers and ordered every block explicitly so
 the stack could sit between the credits and the tags. It worked, but it made

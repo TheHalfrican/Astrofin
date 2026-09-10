@@ -107,3 +107,62 @@ build and a live CDP check with screenshots; (4) commit with the changelog.
   comment INSIDE `<svg>` (that was the Flatpak appstream failure).
 - freedesktop.org serves the uchardet tarball again; the Flatpak job is
   green and stays in the required set.
+
+## 5. Settings page survey (for the screen-7 artboard), 2026-09-10
+
+Read out of `src/web/client-settings.js` and `src/web/native-shim.js`.
+
+- **Mounting.** No hash route. jellyfin-web's user menu shows "Client
+  settings" because `NativeShell.AppHost.supports('clientsettings')` is true
+  (`native-shim.js:~445`); the click runs `showSettingsPage()`, which appends
+  `div#clientSettingsPage.mainAnimatedPage.page.libraryPage.userPreferencesPage.noSecondaryNavPage`
+  into `.mainAnimatedPages`, hides the visible pages, pushes history, fires
+  the view/page show events, and tears itself down on `HISTORY_UPDATE`.
+  Inside: `.settingsContainer.padded-left.padded-right.padded-bottom-page > form`,
+  generated from `window.jmpInfo.settingsDescriptions`, with jellyfin-web's
+  own controls (`.verticalSection` + `h2.sectionTitle`, `.selectContainer` +
+  `select[is=emby-select]`, `.inputContainer` + `.emby-input`,
+  `.checkboxContainer(-withDescription)` + `input[is=emby-checkbox]`,
+  `.fieldDescription`, `.raised.button-cancel.block.emby-button`). A leading
+  `.infoBanner` says changes take effect after a restart.
+- **Settings, in section order** (key -> options, default; live = applies
+  without restart):
+  - Playback: Hardware Decoding `hwdec` select (macOS auto/no/videotoolbox/
+    vulkan, default videotoolbox; Windows auto/no/d3d11va/nvdec/vulkan; Linux
+    auto/no/vaapi/nvdec/vulkan; default `no` off macOS); Video mode
+    `videoMode` select auto/live-action/animation/off, default auto, LIVE;
+    Transcode warning `transcodeNotice` off/cpu/any, default cpu.
+  - Audio: Audio Passthrough `audioPassthrough` textarea (comma list);
+    Exclusive Audio Output `audioExclusive` checkbox; Audio Channel Layout
+    `audioChannels` Auto/stereo/5.1/7.1.
+  - Transcode: Force Transcoding `forceTranscoding` checkbox.
+  - Advanced: Window Decorations `windowDecorations` (Auto/in-app/system/
+    system themed, only when more than one is available); Transparent
+    Titlebar `transparentTitlebar` (macOS only); Hide Scrollbar
+    `hideScrollbar`; Device Name `deviceName` text (64 max); Log Level
+    `logLevel` Default(Info)/verbose/debug/warn/error.
+  - MPV config: "Open mpv config directory" button. Server: "Reset Saved
+    Server" button (`saveServerUrl('')` then reload). Both only when a server
+    URL is saved.
+  - Writes go through `window.api.settings.setValue` ->
+    `jmpNative.setSettingValue(section, key, string)`
+    (`src/jfn_cef/src/business_common.rs:~89`); only `videoMode` calls
+    `apply_current` mid-playback.
+- **Design implications.** The brief's "Movies / Anime" two-option switch is
+  incomplete: the honest control is a four-state segmented mode switch
+  (Auto / Live-Action / Animation / Off) with Auto as the resolved default and
+  the current resolution shown ("Auto -> Anime for this title" when a title
+  is loaded). There is no Server section beyond the reset button: the design's
+  Server section should show the saved URL, the connection kind (direct play,
+  http/https note) and the reset action. No subtitle or UI-scale setting
+  exists; do not draw one. The restart banner is real for everything except
+  video mode; the design should mark live vs restart per control rather than
+  one banner.
+- **About** is a separate CEF layer (`app://resources/about.html`, reached
+  from the right-click context menu and the macOS App menu): a glass card
+  over the starfield with logo, wordmark, app version, CEF version, "Based
+  on Jellium Desktop (GPL-2.0)", config dir and log path with open-path
+  actions (now guarded to those roots). It is already in the theme
+  vocabulary; the brief's "About" section of Settings can link to it rather
+  than duplicate it. (The survey report was cut off after the GPL line;
+  read `src/web/about.js` for the rest.)
