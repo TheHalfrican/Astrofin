@@ -943,8 +943,17 @@ mod tests {
 
         assert!(new_dir.join("settings.json").is_file());
         // Either the link came across as a link, or it was skipped; what must
-        // never happen is the target's contents being copied in.
-        assert!(!new_dir.join("escape").join("secret.txt").exists());
+        // never happen is the target's contents being copied in. A recreated
+        // relative link still resolves to `outside`, so `exists()` through it
+        // proves nothing: look at the entry itself.
+        match fs::symlink_metadata(new_dir.join("escape")) {
+            Ok(meta) => assert!(
+                meta.file_type().is_symlink(),
+                "escape was materialised as a {:?}",
+                meta.file_type()
+            ),
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::NotFound),
+        }
         assert_eq!(counts.failed, 0);
         assert_eq!(
             fs::read_to_string(outside.join("secret.txt")).expect("read"),
