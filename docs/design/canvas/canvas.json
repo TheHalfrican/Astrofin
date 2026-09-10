@@ -1,0 +1,64 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Screens"
+    },
+    {
+      "id": "page-2",
+      "name": "Foundations"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "3 Library grid (Movies)",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "page": "page-1",
+      "is_interactive": true
+    },
+    {
+      "file": "MovieDetail.dc.html",
+      "title": "4 Item detail (movie)",
+      "x": 2400,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "page": "page-1"
+    },
+    {
+      "file": "Astrofin.dc.html",
+      "title": "1 Foundations: tokens, accents, Home, connect",
+      "x": 0,
+      "y": 0,
+      "w": 2010,
+      "h": 5600,
+      "page": "page-2"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "library-notes",
+      "x": 2000,
+      "y": 0,
+      "w": 300,
+      "page": "page-1",
+      "text": "Library grid, screen 3 of the brief.\n\nSame header and tile vocabulary as Home (1c). Posters 2:3, 8 columns at 1920 with the 72px gutter, 24px gap. Focus scales 1.06 with the tile ring; unfocused labels recede to 72%.\n\nJump rail on the right: the focused title's letter is lit; letters with no titles are dimmed. Click a letter or use the arrow keys.\n\nFocused item's art bleeds in behind everything, PS5-style, blurred with the two scrims.\n\nOne tile (Akira) shows the missing-art placeholder; Blade Runner and Jin-Roh carry a watched-progress bar."
+    },
+    {
+      "id": "movie-notes",
+      "x": 4400,
+      "y": 0,
+      "w": 300,
+      "page": "page-1",
+      "text": "Item detail, movie, screen 4 of the brief. \"Game hub\" layout: key art full-bleed under the two scrims, logo (or the title in display type when the server has no logo) top-left, metadata chips, a three-line blurb, then the vertical action stack with Resume focused and its remaining time. Cast and More-like-this shelves on the right; a glass File panel top-right with the stream facts and the video mode Auto resolved to.\n\nStatic: no live focus on this one yet."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}

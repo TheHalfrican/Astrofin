@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&amp;family=Inter:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070A14;font-family:Inter,system-ui,sans-serif}
+a{color:#6FE3FF}a:hover{color:#a9efff}
+@keyframes drift1{from{transform:translate3d(0,0,0)}to{transform:translate3d(-60px,-24px,0)}}
+@keyframes drift2{from{transform:translate3d(0,0,0)}to{transform:translate3d(-140px,18px,0)}}
+</style>
+</helmet>
+<div style="width:1920px;height:1080px;position:relative;overflow:hidden;background:#070A14;color:#EAF0FF;font-family:Inter,system-ui,sans-serif">
+
+  <div style="position:absolute;inset:0;background:linear-gradient(115deg, hsl(24 46% 30%) 0%, hsl(200 44% 18%) 55%, hsl(230 40% 9%) 100%)"></div>
+  <div style="position:absolute;inset:0;background:radial-gradient(1100px 620px at 68% 30%, rgba(255,184,107,.22), rgba(255,184,107,0) 70%)"></div>
+  <div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(7,10,20,.94) 0%,rgba(7,10,20,.72) 42%,rgba(7,10,20,.42) 100%)"></div>
+  <div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,10,20,.96) 0%,rgba(7,10,20,.35) 38%,rgba(7,10,20,.55) 100%)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.7;animation:drift1 90s linear infinite alternate;background-image:radial-gradient(1.6px 1.6px at 12% 18%,#EAF0FF,transparent),radial-gradient(1.4px 1.4px at 32% 62%,#CFE0FF,transparent),radial-gradient(1.8px 1.8px at 58% 12%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 74% 44%,#BFD4FF,transparent),radial-gradient(1.5px 1.5px at 88% 72%,#EAF0FF,transparent),radial-gradient(1.2px 1.2px at 22% 84%,#AFC4FF,transparent),radial-gradient(1.6px 1.6px at 46% 34%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 66% 88%,#DCE8FF,transparent)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.35;animation:drift2 150s linear infinite alternate;background-image:radial-gradient(1px 1px at 8% 52%,#9AA6C8,transparent),radial-gradient(1px 1px at 28% 26%,#9AA6C8,transparent),radial-gradient(1px 1px at 52% 76%,#9AA6C8,transparent),radial-gradient(1px 1px at 71% 20%,#9AA6C8,transparent),radial-gradient(1px 1px at 84% 58%,#9AA6C8,transparent),radial-gradient(1px 1px at 94% 34%,#9AA6C8,transparent),radial-gradient(1px 1px at 38% 8%,#9AA6C8,transparent)"></div>
+
+  <div style="position:absolute;top:0;left:0;right:0;height:88px;display:flex;align-items:center;justify-content:space-between;padding:0 72px;box-sizing:border-box">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:28px;height:28px;position:relative"><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid #6FE3FF;opacity:.45"></div><svg viewBox="0 0 28 28" style="position:absolute;inset:0;width:28px;height:28px;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div>
+      <div style="font:300 20px/1 Sora,sans-serif;letter-spacing:.22em;text-transform:uppercase">Astrofin</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:28px;font:400 16px Inter,sans-serif;color:#9AA6C8">
+      <div>Search</div><div>Home</div><div style="color:#EAF0FF">Movies</div><div>Series</div><div>Anime</div>
+      <div style="width:1px;height:22px;background:rgba(159,180,255,.22)"></div>
+      <div style="font:400 16px 'IBM Plex Mono',monospace;color:#EAF0FF">21:14</div>
+      <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(140deg,#8B6CFF,#6FE3FF);display:grid;place-items:center;font:600 14px Inter,sans-serif;color:#070A14">A</div>
+    </div>
+  </div>
+
+  <div style="position:absolute;left:72px;top:150px;width:640px;display:flex;flex-direction:column;gap:22px">
+    <div style="font:500 13px/1 Inter,sans-serif;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Movie</div>
+    <div style="font:200 64px/72px Sora,sans-serif;letter-spacing:.01em;text-wrap:pretty">Blade Runner 2049</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">2017</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">2h 44m</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">R</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#FFB86B;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">★ 8.0</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">4K · HDR10</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6FE3FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px;text-transform:uppercase">Direct play</div>
+    </div>
+    <div style="font:400 16px/26px Inter,sans-serif;color:#9AA6C8;max-width:600px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">Thirty years after the events of the first film, a new blade runner, LAPD Officer K, unearths a long-buried secret that has the potential to plunge what's left of society into chaos.</div>
+    <div style="font:400 15px/1.6 Inter,sans-serif;color:#9AA6C8"><span style="color:#EAF0FF">Directed by</span> Denis Villeneuve &nbsp;·&nbsp; <span style="color:#EAF0FF">Written by</span> Hampton Fancher, Michael Green</div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px;width:360px">
+      <div style="display:flex;align-items:center;gap:14px;background:#6FE3FF;color:#070A14;border-radius:999px;padding:17px 28px;font:600 18px/1 Inter,sans-serif;box-shadow:0 0 0 3px rgba(111,227,255,.28),0 0 44px rgba(111,227,255,.35)">
+        <div style="width:0;height:0;border-left:13px solid #070A14;border-top:8px solid transparent;border-bottom:8px solid transparent"></div>
+        <div style="flex:1">Resume</div>
+        <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;opacity:.8">1h 32m left</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:17px 28px;font:500 18px/1 Inter,sans-serif;color:#EAF0FF">
+        <svg viewBox="0 0 20 20" style="width:20px;height:20px"><path d="M4 3v14M7 10l9-6v12z" fill="none" stroke="#EAF0FF" stroke-width="1.6" stroke-linejoin="round"></path></svg>
+        <div>Play from start</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:17px 28px;font:500 18px/1 Inter,sans-serif;color:#EAF0FF">
+        <svg viewBox="0 0 20 20" style="width:20px;height:20px"><rect x="2.5" y="4.5" width="15" height="11" rx="2" fill="none" stroke="#EAF0FF" stroke-width="1.6"></rect><path d="M8.5 8v4l3.5-2z" fill="#EAF0FF"></path></svg>
+        <div>Trailer</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:17px 28px;font:500 18px/1 Inter,sans-serif;color:#EAF0FF">
+        <svg viewBox="0 0 20 20" style="width:20px;height:20px"><path d="M4 10.5l4 4 8-9" fill="none" stroke="#EAF0FF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <div>Mark watched</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;width:360px;margin-top:-6px">
+      <div style="flex:1;height:3px;background:rgba(234,240,255,.22);border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#6FE3FF;width:44%"></div></div>
+      <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8">1:12 / 2:44</div>
+    </div>
+  </div>
+
+  <div style="position:absolute;left:800px;right:72px;top:440px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:baseline;gap:16px"><div style="font:500 20px/1 Inter,sans-serif">Cast</div><div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8">12</div></div>
+    <div style="display:flex;gap:20px;padding:6px 0 6px 6px;overflow:hidden">
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(214 28% 30%),hsl(250 30% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Ryan Gosling</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">K</div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(20 30% 30%),hsl(340 26% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Harrison Ford</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Rick Deckard</div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(300 24% 30%),hsl(260 30% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Ana de Armas</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Joi</div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(180 26% 28%),hsl(200 32% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Sylvia Hoeks</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Luv</div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(44 30% 30%),hsl(20 28% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Robin Wright</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Lt. Joshi</div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:#161C33;box-shadow:0 0 0 1px rgba(159,180,255,.16);display:grid;place-items:center"><svg viewBox="0 0 28 28" style="width:36px;height:36px;opacity:.28;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div><div style="font:500 16px/22px Inter,sans-serif;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Jared Leto</div><div style="font:400 14px/20px Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Niander Wallace</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute;left:800px;right:72px;top:760px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:baseline;gap:16px"><div style="font:500 20px/1 Inter,sans-serif">More like this</div></div>
+    <div style="display:flex;gap:20px;padding:6px 0 0 6px;overflow:hidden">
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(214 52% 34%),hsl(254 52% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(196 46% 34%),hsl(236 46% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(330 42% 34%),hsl(10 42% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(160 34% 34%),hsl(200 34% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(268 40% 34%),hsl(308 40% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+      <div style="flex:none;width:130px"><div style="width:130px;height:195px;border-radius:14px;background:linear-gradient(160deg,hsl(44 44% 34%),hsl(84 44% 12%));box-shadow:0 0 0 1px rgba(159,180,255,.16)"></div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute;right:72px;top:150px;width:300px;border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:22px 26px;box-sizing:border-box">
+    <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase;margin-bottom:14px">File</div>
+    <div style="display:flex;justify-content:space-between;font:400 15px/1.7 Inter,sans-serif;color:#9AA6C8"><span>Video</span><span style="color:#EAF0FF">HEVC 4K · HDR10</span></div>
+    <div style="display:flex;justify-content:space-between;font:400 15px/1.7 Inter,sans-serif;color:#9AA6C8"><span>Audio</span><span style="color:#EAF0FF">TrueHD 7.1</span></div>
+    <div style="display:flex;justify-content:space-between;font:400 15px/1.7 Inter,sans-serif;color:#9AA6C8"><span>Subtitles</span><span style="color:#EAF0FF">EN · FR · JA</span></div>
+    <div style="height:1px;background:rgba(159,180,255,.16);margin:14px 0"></div>
+    <div style="display:flex;justify-content:space-between;font:400 15px/1.7 Inter,sans-serif;color:#9AA6C8"><span>Mode</span><span style="color:#6FE3FF;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">LIVE-ACTION</span></div>
+    <div style="display:flex;justify-content:space-between;font:400 15px/1.7 Inter,sans-serif;color:#9AA6C8"><span>Size</span><span style="color:#EAF0FF;font-family:'IBM Plex Mono',monospace">38.2 GB</span></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

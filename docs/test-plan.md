@@ -257,7 +257,13 @@ Recorded, needing a design decision before they change behaviour:
 - There is still no `OnBeforeBrowse` handler pinning which URLs a layer may
   navigate to. The per-origin `jmpNative` gate above removes the consequence
   that mattered (a document the main layer wanders onto no longer gets the
-  IPC surface), but the navigation itself is still unconstrained.
+  IPC surface), but the navigation itself is still unconstrained. **Decided
+  2026-09-10, to do:** for the main layer's top frame, allow the saved
+  server's origin and internal `app://` pages; allow a server-initiated
+  redirect to another origin (reverse proxies, SSO plugins bounce the main
+  window and back); cancel any other cross-origin navigation and hand the
+  URL to `Platform::open_external_url`, which is what popups already do. A
+  pure three-case decision function with tests; the hook stays thin.
 
 ### Decided and fixed 2026-09-10
 

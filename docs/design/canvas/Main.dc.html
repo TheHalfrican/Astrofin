@@ -1,0 +1,185 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&amp;family=Inter:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070A14;font-family:Inter,system-ui,sans-serif}
+a{color:#6FE3FF}a:hover{color:#a9efff}
+@keyframes drift1{from{transform:translate3d(0,0,0)}to{transform:translate3d(-60px,-24px,0)}}
+@keyframes drift2{from{transform:translate3d(0,0,0)}to{transform:translate3d(-140px,18px,0)}}
+</style>
+</helmet>
+<div tabindex="0" onKeyDown="{{ onKey }}" style="width:1920px;height:1080px;position:relative;overflow:hidden;background:#070A14;color:#EAF0FF;outline:none;font-family:Inter,system-ui,sans-serif">
+
+  <div style="position:absolute;inset:-6% -6% -6% -6%;opacity:.9;background:{{ backdropArt }};transition:background 600ms linear"></div>
+  <div style="position:absolute;inset:0;backdrop-filter:blur(38px);background:linear-gradient(90deg,rgba(7,10,20,.94) 0%,rgba(7,10,20,.72) 42%,rgba(7,10,20,.42) 100%)"></div>
+  <div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,10,20,.96) 0%,rgba(7,10,20,.35) 38%,rgba(7,10,20,.55) 100%)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.7;animation:drift1 90s linear infinite alternate;background-image:radial-gradient(1.6px 1.6px at 12% 18%,#EAF0FF,transparent),radial-gradient(1.4px 1.4px at 32% 62%,#CFE0FF,transparent),radial-gradient(1.8px 1.8px at 58% 12%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 74% 44%,#BFD4FF,transparent),radial-gradient(1.5px 1.5px at 88% 72%,#EAF0FF,transparent),radial-gradient(1.2px 1.2px at 22% 84%,#AFC4FF,transparent),radial-gradient(1.6px 1.6px at 46% 34%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 66% 88%,#DCE8FF,transparent)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.35;animation:drift2 150s linear infinite alternate;background-image:radial-gradient(1px 1px at 8% 52%,#9AA6C8,transparent),radial-gradient(1px 1px at 28% 26%,#9AA6C8,transparent),radial-gradient(1px 1px at 52% 76%,#9AA6C8,transparent),radial-gradient(1px 1px at 71% 20%,#9AA6C8,transparent),radial-gradient(1px 1px at 84% 58%,#9AA6C8,transparent),radial-gradient(1px 1px at 94% 34%,#9AA6C8,transparent),radial-gradient(1px 1px at 38% 8%,#9AA6C8,transparent)"></div>
+  <div style="position:absolute;left:62%;top:-10%;width:900px;height:900px;border-radius:50%;background:radial-gradient(circle,rgba(139,108,255,.20),rgba(139,108,255,0) 62%);filter:blur(20px)"></div>
+
+  <div style="position:absolute;top:0;left:0;right:0;height:88px;display:flex;align-items:center;justify-content:space-between;padding:0 72px;box-sizing:border-box">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:28px;height:28px;position:relative"><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid #6FE3FF;opacity:.45"></div><svg viewBox="0 0 28 28" style="position:absolute;inset:0;width:28px;height:28px;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div>
+      <div style="font:300 20px/1 Sora,sans-serif;letter-spacing:.22em;text-transform:uppercase">Astrofin</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:28px;font:400 16px Inter,sans-serif;color:#9AA6C8">
+      <div>Search</div><div>Home</div><div style="color:#EAF0FF">Movies</div><div>Series</div><div>Anime</div>
+      <div style="width:1px;height:22px;background:rgba(159,180,255,.22)"></div>
+      <div style="font:400 16px 'IBM Plex Mono',monospace;color:#EAF0FF">21:14</div>
+      <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(140deg,#8B6CFF,#6FE3FF);display:grid;place-items:center;font:600 14px Inter,sans-serif;color:#070A14">A</div>
+    </div>
+  </div>
+
+  <div style="position:absolute;top:112px;left:72px;right:136px;display:flex;align-items:flex-end;justify-content:space-between;gap:32px">
+    <div style="display:flex;align-items:baseline;gap:18px">
+      <div style="font:300 48px/56px Sora,sans-serif;letter-spacing:.01em">Movies</div>
+      <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8;text-transform:uppercase">1,284 titles</div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;padding-bottom:8px">
+      <div style="display:flex;align-items:center;gap:10px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:11px 16px"><span style="color:#9AA6C8">Sort</span><span>Name</span></div>
+      <div style="display:flex;align-items:center;gap:10px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:11px 16px"><span style="color:#9AA6C8">Filter</span><span>Unplayed</span></div>
+      <div style="display:flex;align-items:center;gap:10px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#9AA6C8;background:rgba(22,28,51,.55);border:1px solid rgba(159,180,255,.16);border-radius:999px;padding:11px 16px"><span>Genres</span></div>
+    </div>
+  </div>
+
+  <div style="position:absolute;top:172px;left:48px;right:112px;bottom:0;overflow:hidden;padding:24px 24px 0;box-sizing:border-box">
+    <div style="display:grid;grid-template-columns:repeat({{ columns }}, minmax(0, 1fr));gap:24px;transform:translateY({{ gridOffset }}px);transition:transform 420ms cubic-bezier(.32,.72,0,1)">
+      <sc-for list="{{ tiles }}" as="t" hint-placeholder-count="16">
+        <div style="cursor:pointer" onClick="{{ t.onSelect }}">
+          <div style="aspect-ratio:2/3;border-radius:14px;overflow:hidden;position:relative;transition:transform 180ms cubic-bezier(.2,.8,.2,1),box-shadow 140ms ease-out;transform:{{ t.transform }};box-shadow:{{ t.shadow }};background:{{ t.art }}">
+            <sc-if value="{{ t.missing }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;inset:0;display:grid;place-items:center;background:#161C33"><svg viewBox="0 0 28 28" style="width:44px;height:44px;opacity:.28;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div>
+            </sc-if>
+            <div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,10,20,.85),rgba(7,10,20,0) 58%);opacity:{{ t.scrimAlpha }}"></div>
+            <sc-if value="{{ t.watched }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;right:12px;top:12px;width:26px;height:26px;border-radius:50%;background:#6FE3FF;display:grid;place-items:center"><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M3 8.5 L6.5 12 L13 4.5" fill="none" stroke="#070A14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+            </sc-if>
+            <sc-if value="{{ t.inProgress }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;left:14px;right:14px;bottom:12px;height:3px;background:rgba(234,240,255,.22);border-radius:2px"><div style="position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#6FE3FF;width:{{ t.pct }}%"></div></div>
+            </sc-if>
+          </div>
+          <div style="margin-top:14px;opacity:{{ t.labelAlpha }};transition:opacity 180ms ease-out">
+            <div style="font:500 20px/26px Inter,sans-serif;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis">{{ t.title }}</div>
+            <div style="font:400 16px/22px Inter,sans-serif;color:#9AA6C8;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.sub }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="position:absolute;right:72px;top:196px;bottom:72px;width:40px;display:flex;flex-direction:column;justify-content:space-between;align-items:center;padding:6px 0;box-sizing:border-box">
+    <sc-for list="{{ rail }}" as="l" hint-placeholder-count="27">
+      <div onClick="{{ l.onJump }}" style="cursor:pointer;width:{{ l.size }}px;height:{{ l.size }}px;border-radius:50%;display:grid;place-items:center;font:500 {{ l.font }}px/1 'IBM Plex Mono',monospace;color:{{ l.color }};background:{{ l.bg }};box-shadow:{{ l.shadow }};transition:all 140ms ease-out">{{ l.letter }}</div>
+    </sc-for>
+  </div>
+
+  <div style="position:absolute;left:72px;bottom:28px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8;text-transform:uppercase">{{ position }}</div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":1920,"height":1080},"columns":{"editor":"int","default":8,"min":6,"max":10,"section":"Grid"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { focus: 2 };
+  }
+  data() {
+    const hues = [[214,52],[268,40],[330,42],[20,48],[160,34],[196,46],[290,36],[44,44],[240,40],[350,44],[180,38],[80,34],[300,40],[24,42],[200,44],[120,30],[262,46],[10,40],[150,36],[230,48],[320,38],[60,40],[188,42],[276,40]];
+    const titles = [
+      ['Akira','1988 · 2h 4m',0,1,0],
+      ['Aliens','1986 · 2h 17m',1,0,0],
+      ['Arrival','2016 · 1h 56m',0,0,0],
+      ['Blade Runner 2049','2017 · 2h 44m',0,0,62],
+      ['Dune: Part Two','2024 · 2h 46m',0,0,0],
+      ['Everything Everywhere All at Once','2022 · 2h 19m',1,0,0],
+      ['Ghost in the Shell','1995 · 1h 23m',0,0,0],
+      ['Heat','1995 · 2h 50m',0,1,0],
+      ['Her','2013 · 2h 6m',0,0,0],
+      ['Interstellar','2014 · 2h 49m',1,0,0],
+      ['The Iron Giant','1999 · 1h 26m',0,0,0],
+      ['Jin-Roh: The Wolf Brigade','1999 · 1h 42m',0,0,18],
+      ['Kiki\'s Delivery Service','1989 · 1h 43m',0,0,0],
+      ['Mad Max: Fury Road','2015 · 2h',1,0,0],
+      ['The Matrix','1999 · 2h 16m',0,0,0],
+      ['Moonlight','2016 · 1h 51m',0,0,0],
+      ['Nausicaä of the Valley of the Wind','1984 · 1h 57m',0,0,0],
+      ['Paprika','2006 · 1h 30m',0,0,0],
+      ['Perfect Blue','1997 · 1h 21m',0,0,0],
+      ['Prospect','2018 · 1h 40m',0,1,0],
+      ['Sicario','2015 · 2h 1m',0,0,0],
+      ['Spirited Away','2001 · 2h 5m',1,0,0],
+      ['Tampopo','1985 · 1h 54m',0,0,0],
+      ['Whisper of the Heart','1995 · 1h 51m',0,0,0]
+    ];
+    return titles.map((t, i) => {
+      const [h, s] = hues[i % hues.length];
+      const art = `linear-gradient(160deg, hsl(${h} ${s}% 34%), hsl(${(h + 40) % 360} ${s}% 12%))`;
+      return { title: t[0], sub: t[1], watched: !!t[2], missing: !!t[3], pct: t[4], inProgress: t[4] > 0, art, backdrop: `linear-gradient(120deg, hsl(${h} ${s}% 28%), hsl(${(h + 60) % 360} ${s}% 10%))` };
+    });
+  }
+  renderVals() {
+    const items = this.data();
+    const cols = this.props.columns ?? 8;
+    const focus = Math.min(this.state.focus, items.length - 1);
+    const focused = items[focus];
+    const tiles = items.map((it, i) => {
+      const on = i === focus;
+      return {
+        ...it,
+        transform: on ? 'scale(1.06)' : 'scale(1)',
+        shadow: on ? '0 0 0 3px #6FE3FF, 0 0 44px rgba(111,227,255,.45)' : '0 0 0 1px rgba(159,180,255,.16)',
+        labelAlpha: on ? 1 : .72,
+        scrimAlpha: it.inProgress ? 1 : 0,
+        onSelect: () => this.setState({ focus: i })
+      };
+    });
+    const first = (s) => { const c = s.replace(/^The /, '')[0].toUpperCase(); return /[A-Z]/.test(c) ? c : '#'; };
+    const current = first(focused.title);
+    const letters = ['#'].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+    const rail = letters.map((letter) => {
+      const has = items.some((it) => first(it.title) === letter);
+      const on = letter === current;
+      return {
+        letter,
+        size: on ? 30 : 24,
+        font: on ? 14 : 12,
+        color: on ? '#070A14' : (has ? '#EAF0FF' : 'rgba(154,166,200,.38)'),
+        bg: on ? '#6FE3FF' : 'transparent',
+        shadow: on ? '0 0 24px rgba(111,227,255,.45)' : 'none',
+        onJump: () => { const j = items.findIndex((it) => first(it.title) === letter); if (j >= 0) this.setState({ focus: j }); }
+      };
+    });
+    const onKey = (e) => {
+      const k = e.key;
+      let n = focus;
+      if (k === 'ArrowRight') n = focus + 1;
+      else if (k === 'ArrowLeft') n = focus - 1;
+      else if (k === 'ArrowDown') n = focus + cols;
+      else if (k === 'ArrowUp') n = focus - cols;
+      else return;
+      e.preventDefault();
+      if (n >= 0 && n < items.length) this.setState({ focus: n });
+    };
+    // Keep the focused row on screen: rows 0-1 sit at rest, a later row
+    // scrolls the grid so it becomes the second visible row.
+    const colWidth = (1712 - (cols - 1) * 24) / cols;
+    const rowPitch = colWidth * 1.5 + 116;
+    const gridOffset = -Math.max(0, Math.floor(focus / cols) - 1) * rowPitch;
+    return {
+      tiles, rail, onKey, gridOffset,
+      columns: cols,
+      backdropArt: focused.backdrop,
+      position: `${focus + 1} of ${items.length} · ${current}`
+    };
+  }
+}
+</script>
+</body>
+</html>
