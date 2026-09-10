@@ -357,4 +357,15 @@
     }
 
     window._openClientSettings = showSettingsPage;
+
+    // Test hook (see src/web/client-settings.test.js); a no-op in the browser,
+    // where `module` is undefined.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            showSettingsPage,
+            buildSettingsForm,
+            renderCodecList,
+            dispatchPageEvents
+        };
+    }
 })();

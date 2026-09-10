@@ -170,4 +170,15 @@
         e.preventDefault();
         openMenu(document.activeElement);
     }, true);
+
+    // Test hook (see src/web/select-menu.test.js); a no-op in the browser,
+    // where `module` is undefined.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            isDropdown,
+            openMenu,
+            closeOpen,
+            isOpen: function () { return !!open; }
+        };
+    }
 })();

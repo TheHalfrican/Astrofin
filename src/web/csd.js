@@ -261,4 +261,21 @@
     wireSignals();
     // Ask the native side whether CSD applies (setting + backend).
     call('csdReady');
+
+    // Test hook (see src/web/csd.test.js); a no-op in the browser, where
+    // `module` is undefined. `host`/`insetStyle` are handed out as getters
+    // because both are built lazily.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            csd: window.__jmpCsd,
+            state,
+            update,
+            svgIcon,
+            makeButton,
+            buildHost,
+            buildInsetStyle,
+            host: () => host,
+            insetStyle: () => insetStyle,
+        };
+    }
 })();

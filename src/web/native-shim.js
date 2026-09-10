@@ -535,4 +535,11 @@
     });
 
     console.debug('[Media] Native shim installed');
+
+    // Unit tests run this file under node, where there is no window. Only the
+    // three pieces that are not reachable through `window` are exported;
+    // everything else is asserted on the fake window the tests install.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = { createSignal, getDeviceProfile, playerState };
+    }
 })();

@@ -263,6 +263,22 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+// Test hook (see src/web/overlay.test.js); a no-op in the browser, where
+// `module` is undefined. `state()` reports the module-level flags a test would
+// otherwise have to infer from the DOM.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        cancellableDelay,
+        tryConnect,
+        startConnecting,
+        cancelConnection,
+        setState,
+        updateButtonState,
+        showConnectionFailedDialog,
+        state: () => ({ isConnecting, mainLoaded, userCancelled, savedServerUrl })
+    };
+}
+
 // Auto-connect on load
 (async () => {
     console.log('Auto-connect: starting');

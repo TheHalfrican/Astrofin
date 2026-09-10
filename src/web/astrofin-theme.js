@@ -33,6 +33,12 @@
 
         if (window.__afTheme) {
             try { window.__afTheme.refresh(); } catch (e) { /* ignore */ }
+            // Unit tests run this file under node: re-entry hands back the
+            // installation that is already there, so a second load is visibly
+            // a refresh and not a second install.
+            if (typeof module !== 'undefined' && module.exports) {
+                module.exports = window.__afTheme;
+            }
             return;
         }
 
@@ -1030,6 +1036,85 @@
         }
 
         window.__afTheme = { refresh: guard(refresh) };
+
+        // Unit tests run this file under node, where there is no window and
+        // `module` exists; in the browser `module` is undefined and none of
+        // this runs. `state()` is the read-only view of the module-private
+        // variables the tests assert on.
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = {
+                isFolderLike: isFolderLike,
+                guard: guard,
+                tokenMs: tokenMs,
+                keepThemeLast: keepThemeLast,
+                watchStylesheets: watchStylesheets,
+                pinThemeColor: pinThemeColor,
+                ensureSpace: ensureSpace,
+                updateVideoMode: updateVideoMode,
+                setBackdrop: setBackdrop,
+                clearBackdrop: clearBackdrop,
+                isHomeRoute: isHomeRoute,
+                videoModeLabel: videoModeLabel,
+                buildUi: buildUi,
+                renderServerPanel: renderServerPanel,
+                cacheItem: cacheItem,
+                minutes: minutes,
+                formatRuntime: formatRuntime,
+                videoStream: videoStream,
+                resolutionLabel: resolutionLabel,
+                chipsFor: chipsFor,
+                titleFor: titleFor,
+                backdropUrlFor: backdropUrlFor,
+                fetchItem: fetchItem,
+                setFocusedCard: setFocusedCard,
+                homeSectionsContainer: homeSectionsContainer,
+                sectionOf: sectionOf,
+                defaultSection: defaultSection,
+                placeSpotlight: placeSpotlight,
+                writeSpotlight: writeSpotlight,
+                renderSpotlight: renderSpotlight,
+                primaryCardButton: primaryCardButton,
+                cardLinkTarget: cardLinkTarget,
+                clickSyntheticAction: clickSyntheticAction,
+                navigateToDetails: navigateToDetails,
+                onPlayClick: onPlayClick,
+                onDetailsClick: onDetailsClick,
+                cardFrom: cardFrom,
+                onFocusIn: onFocusIn,
+                onPointerMove: onPointerMove,
+                onPointerOver: onPointerOver,
+                ensureUi: ensureUi,
+                showOverlays: showOverlays,
+                leaveHome: leaveHome,
+                decorateCards: decorateCards,
+                refresh: refresh,
+                watchPages: watchPages,
+                queueRefresh: queueRefresh,
+                start: start,
+                state: function () {
+                    return {
+                        ui: ui,
+                        space: space,
+                        backdropLayers: backdropLayers,
+                        backdropSlot: backdropSlot,
+                        currentBackdropUrl: currentBackdropUrl,
+                        focusedCard: focusedCard,
+                        focusedItem: focusedItem,
+                        shownCard: shownCard,
+                        shownItem: shownItem,
+                        spotlightPainted: spotlightPainted,
+                        swapTimer: swapTimer,
+                        hoverTimer: hoverTimer,
+                        overlaysWanted: overlaysWanted,
+                        pointerMovedSincePlace: pointerMovedSincePlace,
+                        itemCache: itemCache,
+                        itemCacheKeys: itemCacheKeys,
+                        pagesObserved: pagesObserved,
+                        refreshQueued: refreshQueued
+                    };
+                }
+            };
+        }
 
         if (doc.readyState === 'loading') {
             doc.addEventListener('DOMContentLoaded', guard(start), { once: true });

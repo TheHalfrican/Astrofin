@@ -952,15 +952,23 @@ function getDefaultLanguage() {
   return fallbackLanguage;
 }
 
-let language = getDefaultLanguage().toLowerCase();
+// Exact tag, then the bare language, then English: 'pt-br' has its own table,
+// 'de-de' has none but 'de' does, and anything unknown lands on en-us.
+function resolveLanguage(tag) {
+  let lang = tag.toLowerCase();
 
-if (!languages.find(l => l.lang === language)) {
-  language = language.split('-')[0];
+  if (!languages.find(l => l.lang === lang)) {
+    lang = lang.split('-')[0];
+  }
+
+  if (!languages.find(l => l.lang === lang)) {
+    lang = fallbackLanguage;
+  }
+
+  return lang;
 }
 
-if (!languages.find(l => l.lang === language)) {
-  language = fallbackLanguage;
-}
+let language = resolveLanguage(getDefaultLanguage());
 
 const languageStrings = languages.find(l => l.lang === language);
 const fallbackStrings = languages.find(l => l.lang === fallbackLanguage);
@@ -978,3 +986,22 @@ document.getElementById('address').placeholder = languageStrings.LabelServerHost
 document.getElementById('connect-button').innerText = connectText;
 document.getElementById('connect-button').setAttribute('data-original-text', connectText);
 window.cancelButtonText = 'Cancel';
+
+// Unit tests run this file under node, where there is no window; in the
+// browser `module` is undefined and none of this runs.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    languages: languages,
+    fallbackLanguage: fallbackLanguage,
+    getDefaultLanguage: getDefaultLanguage,
+    resolveLanguage: resolveLanguage,
+    language: language,
+    languageStrings: languageStrings,
+    fallbackStrings: fallbackStrings,
+    titleText: titleText,
+    connectText: connectText,
+    headerConnectionFailureText: headerConnectionFailureText,
+    messageUnableToConnectToServerText: messageUnableToConnectToServerText,
+    buttonGotItText: buttonGotItText
+  };
+}

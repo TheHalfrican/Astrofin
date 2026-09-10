@@ -225,4 +225,6 @@
     MpvPlayerBase.TRACK_DISABLE = 0;  // disable track (sid=0, aid=0)
 
     window.MpvPlayerBase = MpvPlayerBase;
+    // Unit tests run this file under node, where there is no window.
+    if (typeof module !== 'undefined' && module.exports) module.exports = MpvPlayerBase;
 })();

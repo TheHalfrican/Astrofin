@@ -455,4 +455,9 @@
 
     window._mpvVideoPlayer = mpvVideoPlayer;
     console.debug('[Media] mpvVideoPlayer class installed');
+    // Unit tests run this file under node, where there is no window. The two
+    // index helpers are pure and are exported so they can be tested directly.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = { mpvVideoPlayer, getRelativeIndexByType, getStreamByIndex };
+    }
 })();
