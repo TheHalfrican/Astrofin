@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Pinned jellyfin-web build served by the E2E mock server at /web/.",
+    "jellyfin-web's own GitHub releases carry no built assets, so the build is",
+    "taken from the Jellyfin server's Debian package, which is the smallest",
+    "published archive that contains a compiled web client (~32 MB against the",
+    "~168 MB Windows server zip). The package is architecture-independent",
+    "(_all.deb); the +deb12 flavour is picked arbitrarily among the three.",
+    "Astrofin's device profile is written against Jellyfin 10.11 (see",
+    "src/jellyfin/src/lib.rs), so the web client is pinned to the same line.",
+    "To bump: change version/url, run `node dev/e2e/setup.mjs --print-sha256`",
+    "and paste the digest here."
+  ],
+  "version": "10.11.11",
+  "url": "https://repo.jellyfin.org/files/server/debian/stable/v10.11.11/amd64/jellyfin-web_10.11.11%2Bdeb12_all.deb",
+  "sha256": "f289b91e47cb44e52630c6a4262f3bdfe67a53c05db8f560edf479300ed0a37a",
+  "webRootInPackage": "usr/share/jellyfin/web"
+}

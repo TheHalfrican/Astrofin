@@ -1,6 +1,6 @@
 # Test-suite plan
 
-Status: phases 0-3 done 2026-09-09; phase 4 (E2E smoke) in progress. Owner decisions are recorded in §1;
+Status: phases 0-4 done 2026-09-09; phase 5 (platform glue) in progress. Owner decisions are recorded in §1;
 agents executing a phase read §3 for the working rules and §4 for the phase
 they are on. Update the status line and the phase table as work lands.
 
@@ -87,7 +87,7 @@ functions = 0.72** over 136 files, which is the floor in
 | 1 | Security audit of untrusted-input surfaces, tests and fixes for findings | `test/phase-1-security` | done 2026-09-09: 15+13+20 findings, 9 fixed in code, rest recorded in §6 |
 | 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend` | done 2026-09-09: every non-exempt Rust file at or above 1.0 |
 | 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | done 2026-09-09: 20 JS files all tested, 605 JS cases, total ratio 2.32 |
-| 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | planned |
+| 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | done 2026-09-09: 10 scenarios in ~20 s, muted by default, CI job manual-only (`docs/e2e.md`) |
 | 5 | Platform glue: pure extractions in `windows`, `macos`, `wayland`, `x11`, `gpu_paint`, `jfn_cef`; finalise exemptions | `test/phase-5-platform` | planned |
 
 ### Phase 1: security audit surfaces
@@ -141,8 +141,11 @@ bundled mpv encoder at harness setup), a CDP driver that launches the staged
 scenarios: launch and version probe, connect overlay -> mock server ->
 login -> home rendered, start playback -> mpv reports playing -> pause/seek
 -> stop, settings write round-trip, second-instance forwarding, clean quit
-with zero `ERROR` log lines. `just e2e` locally; a job on the self-hosted
-runner (needs the runner to have a desktop session; verify before wiring).
+with zero `ERROR` log lines. `just e2e` locally (`node dev/e2e/run.mjs`
+without `just`); the self-hosted runner has a desktop session, so
+`.gitea/workflows/e2e-windows.yml` exists but is `workflow_dispatch`-only
+because the suite takes the developer's screen. Details, the pinned
+jellyfin-web build and the known gaps: `docs/e2e.md`.
 
 ## 5. Out of scope for now
 
