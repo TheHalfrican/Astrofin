@@ -198,7 +198,9 @@ html.af-video #af-spotlight,
 html.transparentDocument #af-server-panel,
 html.af-video #af-server-panel,
 html.transparentDocument #af-hint,
-html.af-video #af-hint {
+html.af-video #af-hint,
+html.transparentDocument #af-detail-panel,
+html.af-video #af-detail-panel {
   display: none !important;
 }
 
@@ -319,7 +321,12 @@ html.af-video {
       rgba(var(--af-accent-primary-rgb), 0) 72%
     ),
     var(--af-scrim-vertical),
-    rgba(var(--af-bg-base-rgb), .58);
+    /* The flat base wash. A variable with the Home value as its fallback, so
+     * this rule is unchanged everywhere except where a gate overrides
+     * --af-scrim-wash — section (o) does, because on a detail page the art is
+     * the subject rather than a mood and .58 on top of everything else here
+     * leaves 4% of it on screen. */
+    var(--af-scrim-wash, rgba(var(--af-bg-base-rgb), .58));
 }
 
 /* ===================================================================== */
@@ -674,8 +681,12 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
  * links, e.g. the tag list on a details page) and .button-flat (the round
  * icon+label detail actions). .listItem covers the action-sheet rows, which
  * are `button.listItem.listItem-button.actionSheetMenuItem.emby-button` in
- * 10.11.11 and turned the subtitle/audio pickers into a wall of pills. */
-.emby-button:not(.raised):not(.button-submit):not(.paper-icon-button-light):not(.emby-tab-button):not(.navMenuOption):not(.cardOverlayButton):not(.textActionButton):not(.itemAction):not(.button-link):not(.button-flat):not(.listItem) {
+ * 10.11.11 and turned the subtitle/audio pickers into a wall of pills.
+ * .overview-expand is the details page's "Show more": an inline text control
+ * in the same family as .button-link, which jf-web simply forgot to class
+ * that way. As a 56px pill it outweighed the blurb it belongs to and cost the
+ * action stack a line of height. */
+.emby-button:not(.raised):not(.button-submit):not(.paper-icon-button-light):not(.emby-tab-button):not(.navMenuOption):not(.cardOverlayButton):not(.textActionButton):not(.itemAction):not(.button-link):not(.button-flat):not(.listItem):not(.overview-expand) {
   border-radius: var(--af-radius-pill);
   background: var(--af-glass-fill-soft);
   border: 1px solid var(--af-edge-strong);
@@ -2392,4 +2403,963 @@ html.af-library.af-backdrop .backgroundContainer.withBackdrop {
   .af-source-badge--struggling .af-source-badge-dot {
     animation: none;
   }
+}
+
+/* ===================================================================== */
+/* (o) Item detail                                                        */
+/* Targets: docs/design/canvas/MovieDetail.dc.html and SeriesDetail.dc.   */
+/* html — a 640px blurb column at the 72px gutter starting 150px down, an */
+/* 88px gap, then the shelves; no poster; the logo (or a 64/72 display    */
+/* title) top left under a cyan eyebrow; the actions as a 360px stack of  */
+/* 56px pills with Resume in accent; a 300px glass facts panel top right; */
+/* and, on a season page, episode rows of 208x117 stills.                 */
+/*                                                                        */
+/* Gate: html.af-detail, set by astrofin-theme.js's isDetailRoute() and   */
+/* never set together with af-home or af-library. The item type has to    */
+/* come from the item JSON — jf-web 10.11.11 renders movie, series,       */
+/* season and episode from one template and marks none of them — so the   */
+/* script writes html[data-af-detail-type] and the eyebrow keys off that. */
+/*                                                                        */
+/* Four deliberate deviations from the artboards. The first three are     */
+/* owner decisions; the fourth came out of the live check.                */
+/*   1. seasons stay cards. SeriesDetail draws them as a row of pills;    */
+/*      jellyfin-web renders #listChildrenCollapsible as an              */
+/*      .itemsContainer of .card.overflowPortraitCard, which already      */
+/*      carries the tile rules from section (e), and rebuilding them as   */
+/*      pills would mean hiding real season art.                          */
+/*   2. btnMoreCommands / btnUserRating / btnDownload / btnInstantMix /   */
+/*      btnSplitVersions become 56px icon discs on a row of their own     */
+/*      under the pills. jf-web wraps none of them, so there is no        */
+/*      element to make that row: the stack is a wrapping flex row whose  */
+/*      pills are `flex: 0 0 100%` and whose discs are `flex: 0 0 56px`   */
+/*      at `order: 2`, which puts them all on the line after the pills    */
+/*      whatever order the template happens to use.                       */
+/*   3. no separate remaining-time scrubber under the stack. The artboard */
+/*      draws one; the same number rides the Resume pill instead (see     */
+/*      data-af-left below), and a second copy would say it twice.        */
+/*   4. no per-row overview on a season page. Both artboards draw an      */
+/*      episode row as still + "E9 · Title" + "24m · Aired …" and         */
+/*      nothing else; see the .listItem-overview rule for the measured    */
+/*      reason and the one-line revert.                                   */
+/*                                                                        */
+/* Nine !important declarations, every one of them answering an           */
+/* !important or an inline style in jellyfin-web: the page's top padding, */
+/* the inline misc-info margin, the two stock group margins, the button   */
+/* margin/padding pair, the disc padding, the icon font size and the card */
+/* box margin. Everything else in the section is plain specificity.       */
+/* ===================================================================== */
+
+/* --- Page frame ------------------------------------------------------ */
+
+/* `.libraryPage{padding-top:7em!important}` is the header clearance every
+ * library-shaped page gets, and 8575.css exempts every library page from
+ * its own 3.25rem *except* the detail page. The grid below sets its own
+ * 150px top inset, and only !important can answer !important — (0,2,1)
+ * against the stock (0,1,0). */
+html.af-detail .itemDetailPage {
+  padding-top: 0 !important;
+}
+
+/* Our own #af-backdrop drives the art here, exactly as on Home and the
+ * library grids, so jellyfin-web's two art layers stand down: the fixed
+ * .backdropContainer (already faded by section (c) whenever af-backdrop is
+ * up, hidden outright here so it never fades back in between items) and
+ * #itemBackdrop, the 40vh inline band 10.11.11 renders above the ribbon. */
+html.af-detail .backdropContainer,
+html.af-detail .itemBackdrop {
+  display: none;
+}
+
+/* The art. On a detail page the backdrop IS the subject: one item fills the
+ * screen and two thirds of the canvas is empty, where on Home the art is a
+ * peripheral wash behind dense rails. Section (c)'s treatment is tuned for
+ * Home and, stacked up, passes
+ *
+ *   brightness .5 x layer opacity .5 x (1-.42 horizontal at the right edge)
+ *     x (1-.58 base wash) x (1-.35 vertical minimum)  =  4%
+ *
+ * of the source luminance. A typical frame reaches the screen as rgb(11,11,11)
+ * against a base of rgb(7,10,20) — measured, and the reason a detail page read
+ * as having no backdrop at all. Everything below is scoped to html.af-detail;
+ * Home and the library grids keep section (c) exactly as it was.
+ *
+ * The values below were not computed, they were TUNED against a measurement
+ * harness: a pure-white frame substituted for the art, the page content set
+ * to `visibility: hidden`, and the bare canvas screenshotted and sampled on a
+ * 9x5 grid. Pure white is the adversarial case no real backdrop reaches. On
+ * that grid, over the whole area text can occupy (x <= the 72px right gutter)
+ * --af-text-muted measures between 4.51:1 and 7.95:1, worst at (1500, 400).
+ * Against the Home treatment on the identical frame the art gains x6.3 in the
+ * blurb column, x4.6 mid-canvas and x3.0 at the right edge — and the blurb
+ * column is still DARKER than Home's, because the horizontal scrim's first
+ * two stops are deepened (.94 -> .96, .72@42% -> .82@36%) even as its tail is
+ * lifted (.42 -> .50). The art is bought at the right, where the page is
+ * empty, not underneath the text. */
+html.af-detail {
+  --af-glass-blur-backdrop: 6px;
+  --af-scrim-horizontal: linear-gradient(90deg, rgba(7, 10, 20, .96) 0%, rgba(7, 10, 20, .82) 36%, rgba(7, 10, 20, .50) 100%);
+  --af-scrim-vertical: linear-gradient(0deg, rgba(7, 10, 20, .94) 0%, rgba(7, 10, 20, .22) 44%, rgba(7, 10, 20, .52) 100%);
+  --af-scrim-wash: rgba(var(--af-bg-base-rgb), .28);
+}
+
+/* Home desaturates hard because jellyfin-web's rails are full of high-chroma
+ * poster art and a 38px blur turns it into yellow and green blobs. At 6px
+ * there is a real frame on screen instead of a blur field, so it can keep
+ * more of its own colour and light. */
+html.af-detail .af-backdrop-layer {
+  filter: saturate(.62) brightness(.78) contrast(.96);
+}
+html.af-detail .af-backdrop-layer.af-on {
+  opacity: .84;
+}
+
+/* A poster is not a backdrop. When the item has neither its own Backdrop tag
+ * nor a parent's, backdropUrlFor() falls back to ImageTags.Primary, and
+ * `background-size: cover` then crops a 2:3 poster to a 16:9 canvas — a
+ * blown-up detail of somebody's chin. astrofin-theme.js stamps where the art
+ * came from; a poster gets blurred back towards a wash. */
+html.af-detail[data-af-backdrop-src="primary"] {
+  --af-glass-blur-backdrop: 26px;
+}
+html.af-detail[data-af-backdrop-src="primary"] .af-backdrop-layer {
+  filter: saturate(.42) brightness(.62) contrast(.94);
+}
+
+/* Same trade as the library grid: .backgroundContainer.withBackdrop is
+ * position:fixed at z-index auto, i.e. above #af-space (-3), and section
+ * (b)'s rgba(bg,.86) scrim on it would all but erase our art. It stands
+ * down for exactly as long as ours is up. (0,4,1) against (0,2,0). */
+html.af-detail.af-backdrop .backgroundContainer.withBackdrop {
+  background-color: transparent;
+}
+
+/* --- The two columns ------------------------------------------------- */
+
+/* Stock is `.layout-desktop .detailPageWrapperContainer{display:flex;
+ * flex-wrap:wrap;margin:1em 0}` (0,2,0) over a table-ish border-collapse
+ * base; this is (0,3,1). 72 + 640 + 88 = 800, which is where both artboards
+ * put the right-hand column. */
+html.af-detail .itemDetailPage .detailPageWrapperContainer {
+  display: grid;
+  grid-template-columns: 640px minmax(0, 1fr);
+  column-gap: 88px;
+  align-items: start;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 150px var(--af-gutter) var(--af-gutter);
+}
+
+/* One column below 1600px: 640 + 88 + a shelf of six 130px tiles does not
+ * fit, and squeezing the blurb column is worse than stacking. */
+@media (max-width: 1599px) {
+  html.af-detail .itemDetailPage .detailPageWrapperContainer {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--af-space-12);
+  }
+}
+
+/* --- Left column: no poster, logo or title --------------------------- */
+
+/* Both copies — jf-web renders .detailImageContainer twice, once
+ * .hide-mobile beside the ribbon and once .hide-desktop inside it. The
+ * design has no poster on this page at all: the backdrop is the art. */
+html.af-detail .detailImageContainer {
+  display: none;
+}
+
+/* Stock parks the logo at `right:25vw;top:10vh;width:25vw;height:16vh`,
+ * centred, opposite the poster. It moves to the head of the blurb column,
+ * left-aligned, at the artboard's 150px. It stays absolute, so it does not
+ * take part in the column's flow — the padding-top below is what makes room
+ * for it. */
+html.af-detail .detailLogo {
+  position: absolute;
+  left: var(--af-gutter);
+  right: auto;
+  top: 150px;
+  width: 520px;
+  height: 140px;
+  background-position: left center;
+  background-size: contain;
+  z-index: 3;
+}
+
+/* jf-web already hides the logo below 68.75em; this carries that up to the
+ * 1280px the two-column layout needs, so between the two there is never a
+ * 520px logo over a single-column page. */
+@media (max-width: 1279px) {
+  html.af-detail .detailLogo {
+    display: none;
+  }
+}
+
+/* With a logo up, the blurb column starts under it (140px + 24px) and the
+ * name is redundant — jellyfin-web puts the same words in the artwork.
+ * .detailLogo is a previous sibling of .detailPageWrapperContainer, and it
+ * gains .hide when the item has neither ImageTags.Logo nor a
+ * ParentLogoImageTag, so `:not(.hide)` is the whole test. */
+html.af-detail .detailLogo:not(.hide) ~ .detailPageWrapperContainer .detailPagePrimaryContainer {
+  padding-top: 164px;
+}
+/* Only where the logo really is the title. On a season or an episode the logo
+ * is the *series* logo (jf-web falls back to ParentLogoImageTag), while
+ * .itemName is "Season 1" or the episode's own name — hiding it there left
+ * the page with nothing but the show's wordmark on it. Measured live on a
+ * season page before this was scoped. */
+html.af-detail[data-af-detail-type="movie"] .detailLogo:not(.hide) ~ .detailPageWrapperContainer .itemName,
+html.af-detail[data-af-detail-type="series"] .detailLogo:not(.hide) ~ .detailPageWrapperContainer .itemName {
+  display: none;
+}
+
+/* --- Left column: order --------------------------------------------- */
+
+/* The artboard reads name → chips → **actions** → blurb → credits, and the
+ * actions go directly after the chips for one reason: the fold. Everything
+ * below them is variable-length — a 3-line blurb, a tag wall, a credits block
+ * that runs to four wrapping rows on a film with six directors — so any order
+ * that puts the stack after `.detailPagePrimaryContent` puts it off screen on
+ * exactly the items with the most to say. Measured before this: #btnPlay at
+ * y=1094 in a 1064px viewport on The Animatrix.
+ *
+ * `.detailRibbon` gets `display: contents`, which drops its box and promotes
+ * .infoWrapper and .mainDetailButtons to siblings of
+ * .detailPagePrimaryContent. The three then carry explicit orders 1/2/3.
+ * That happens to match jellyfin-web's own DOM order today, so the orders
+ * change nothing on 10.11.11 — they are there to say the intent out loud, so
+ * a future template that moves .mainDetailButtons out of the ribbon or puts
+ * the blurb ahead of it cannot silently push the stack under the fold again.
+ * The ribbon has nothing of its own left to draw: its 7.2em height, -7.2em
+ * margin and 32.45vw left padding all exist to clear the poster this page no
+ * longer has. */
+/* `themes/<name>/theme.css` — the sheet jellyfin-web puts in a <div> inside
+ * <body>, which is why this one had to be found on a running page rather
+ * than in the chunk CSS — paints both column containers #101010 and the
+ * ribbon rgba(32,32,32,.8). Measured live before this rule: two opaque slabs
+ * 640x1214 and 836x1057 covering the art the page is built around. */
+html.af-detail .itemDetailPage .detailPagePrimaryContainer,
+html.af-detail .itemDetailPage .detailPageSecondaryContainer,
+html.af-detail .itemDetailPage .detailPageContent,
+html.af-detail .itemDetailPage .detailRibbon {
+  background: transparent;
+}
+
+html.af-detail .itemDetailPage .detailPagePrimaryContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 22px;
+  min-width: 0;
+}
+html.af-detail .itemDetailPage .detailRibbon {
+  display: contents;
+}
+html.af-detail .itemDetailPage .infoWrapper {
+  order: 1;
+  /* Stock is `flex:1 0 0`, which in a column means a zero basis that grows
+   * to fill — the blurb column would be one tall empty box. */
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 22px;
+  width: 100%;
+  min-width: 0;
+}
+html.af-detail .itemDetailPage .detailPagePrimaryContent {
+  order: 3;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+}
+
+/* --- Left column: eyebrow, name, chips ------------------------------- */
+
+html.af-detail .nameContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--af-space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+/* The eyebrow is synthesised. Nothing in the markup names the item kind, and
+ * `content: attr(...)` cannot reach <html> — attr() resolves against the
+ * pseudo-element's own originating element — so the four labels are spelled
+ * out, one rule each, keyed on the attribute astrofin-theme.js writes.
+ * `order:-1` puts it above .parentName whichever way round jf-web has
+ * ordered the name pair (it has two, .parentNameLast being the other). */
+html.af-detail .nameContainer::before {
+  order: -1;
+  font: var(--af-type-eyebrow);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+html.af-detail[data-af-detail-type="movie"] .nameContainer::before { content: "Movie"; }
+html.af-detail[data-af-detail-type="series"] .nameContainer::before { content: "Series"; }
+html.af-detail[data-af-detail-type="season"] .nameContainer::before { content: "Season"; }
+html.af-detail[data-af-detail-type="episode"] .nameContainer::before { content: "Episode"; }
+
+/* The series name over an episode's own title. */
+html.af-detail .nameContainer .parentName {
+  margin: 0;
+  font: var(--af-type-tile);
+  color: var(--af-text-muted);
+}
+
+/* Stock is `font-weight:600;margin:.5em 0;white-space:nowrap` with an
+ * ellipsis — a one-line clip. The display token is 200 weight, and the title
+ * is allowed two lines because "Frieren: Beyond Journey's End" is 29
+ * characters at 64px. */
+html.af-detail .nameContainer .itemName {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  font: var(--af-type-display);
+  letter-spacing: var(--af-tracking-display);
+  color: var(--af-text-primary);
+  white-space: normal;
+  text-overflow: clip;
+  text-wrap: pretty;
+}
+
+/* The misc-info rows become the chip strip. jf-web writes
+ * `style="margin-bottom:.6em"` inline on both of them, and an inline style
+ * yields to nothing else. */
+html.af-detail .itemMiscInfo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  overflow: visible;
+}
+html.af-detail .infoWrapper > .itemMiscInfo {
+  margin-bottom: 0 !important;
+}
+html.af-detail .itemMiscInfo .mediaInfoItem {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--af-edge-chip);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+  white-space: nowrap;
+}
+/* Ratings are the warm accent in both artboards. .starIcon carries jf-web's
+ * own #f2b01e at (0,1,0); this is (0,4,1). */
+html.af-detail .itemMiscInfo .starRatingContainer,
+html.af-detail .itemMiscInfo .mediaInfoCriticRating {
+  color: var(--af-accent-warm);
+}
+html.af-detail .itemMiscInfo .starRatingContainer .starIcon {
+  margin-right: 6px;
+  font-size: 1.1em;
+  color: var(--af-accent-warm);
+}
+
+/* --- Left column: track pickers, blurb, credits ---------------------- */
+
+/* The version / video / audio / subtitle selects, one glass row above the
+ * blurb. Their .selectContainer margins are `!important` in stock, so this
+ * one is too. `.trackSelections.hide` keeps jf-web's own display:none,
+ * which outranks the flex here through its own !important. */
+html.af-detail .trackSelections {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--af-space-3);
+  max-width: 640px;
+  margin: 0 0 var(--af-space-4);
+}
+
+/* jellyfin-web disables a picker when the item offers exactly one option, and
+ * forces it chrome-less with
+ * `.emby-select[disabled]{background:none!important;border-color:transparent
+ * !important}` — correct, a dead control must not look clickable. But a row
+ * reading "Video   4K HEVC SDR" is then a label pretending to be a form
+ * field, and it says nothing the chip strip and the facts panel have not
+ * already said. Pickers that offer no choice are dropped, so the form is what
+ * decision 5 asked for: one row of glass selects, each of them a real
+ * decision. Nothing is lost — the codec, resolution and track list are on the
+ * chips and in #af-detail-panel. */
+html.af-detail .trackSelections .selectContainer:has(.emby-select[disabled]) {
+  display: none;
+}
+html.af-detail .trackSelections .selectContainer {
+  flex: 0 1 auto;
+  max-width: none;
+  margin: 0 !important;
+}
+html.af-detail .trackSelections .emby-select {
+  width: auto;
+  padding: 10px 34px 10px 16px;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill-soft);
+  font: var(--af-type-tile-sub);
+  color: var(--af-text-primary);
+}
+html.af-detail .trackSelections .selectContainer .selectLabel {
+  /* Stock reserves a 6.25em label gutter per row, which in a one-row layout
+   * is six inches of nothing between "Audio" and its select. */
+  flex-basis: auto;
+  margin: 0 8px 0 0;
+  font: var(--af-type-body);
+  color: var(--af-text-muted);
+}
+html.af-detail .trackSelections .selectArrowContainer {
+  top: auto;
+  right: 12px;
+  bottom: 8px;
+}
+
+html.af-detail .detailSectionContent .itemGenres {
+  margin: 0 0 var(--af-space-3);
+  font: var(--af-type-body);
+  color: var(--af-text-muted);
+}
+html.af-detail .detailSectionContent .tagline {
+  margin: 0 0 var(--af-space-3);
+  font: var(--af-type-tile);
+  color: var(--af-text-primary);
+}
+html.af-detail .detailSectionContent .overview {
+  max-width: 600px;
+  margin: 0 0 var(--af-space-3);
+  font: var(--af-type-body-lg);
+  color: var(--af-text-muted);
+}
+/* jf-web clamps the blurb by *adding* .detail-clamp-text and removes it when
+ * "Show more" is clicked, so the 3-line clamp has to ride that class or the
+ * expand control would have nothing left to undo. Stock puts 12 lines there,
+ * 6 above 40em, at (0,1,0); this is (0,4,1). */
+html.af-detail .detailSectionContent .overview.detail-clamp-text {
+  -webkit-line-clamp: 3;
+}
+html.af-detail .detailSectionContent .overview-controls {
+  justify-content: flex-start;
+  margin: 0 0 var(--af-space-4);
+}
+/* Section (f) now leaves .overview-expand chrome-less; this is the whole of
+ * its styling. */
+html.af-detail .detailSectionContent .overview-expand {
+  padding: 0;
+  min-height: 0;
+  font: var(--af-type-body);
+  color: var(--af-accent-primary);
+}
+html.af-detail .detailSectionContent .overview-expand:focus-visible {
+  outline: none;
+  border-radius: var(--af-radius-xs);
+  box-shadow: var(--af-focus-ring);
+}
+
+/* "Directed by Denis Villeneuve · Written by …": one muted line per group
+ * with the label in text-primary. Stock's margin is !important here too. */
+html.af-detail .itemDetailsGroup {
+  margin: var(--af-space-4) 0 0;
+}
+html.af-detail .detailsGroupItem {
+  max-width: 640px;
+  margin: 0 0 6px !important;
+  font: var(--af-type-body);
+  color: var(--af-text-muted);
+}
+html.af-detail .detailsGroupItem .label {
+  flex-basis: auto;
+  margin: 0 8px 0 0;
+  color: var(--af-text-primary);
+}
+
+/* --- Left column: the action stack ----------------------------------- */
+
+/* A 360px column of 56px pills. It is spelled as a wrapping *row* rather
+ * than `flex-direction: column` for deviation 2 above: the pills claim a
+ * whole line each, the icon discs claim 56px each at a later `order`, and
+ * they land together on the line after. */
+html.af-detail .itemDetailPage .mainDetailButtons {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  order: 2;
+  width: 360px;
+  gap: 12px;
+  margin: 22px 0 6px;
+}
+
+/* Stock: `.detailButton{flex-direction:column;justify-content:center;
+ * margin:0!important;padding:.7em .7em!important}` plus three more
+ * padding-left/right !important rules in media queries, and
+ * `.detailButton,.itemLinks,…{text-align:center}`. Everything here is
+ * (0,4,1), so the two !importants below outrank those (0,1,0) ones.
+ * Section (f)'s secondary-pill rule deliberately excludes .button-flat, so
+ * nothing else in this sheet is competing for these buttons. */
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton {
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  height: 56px;
+  margin: 0 !important;
+  padding: 0 24px !important;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill-soft);
+  font: var(--af-type-button-secondary);
+  text-align: left;
+  text-transform: none;
+  color: var(--af-text-primary);
+  transition:
+    background var(--af-dur-tile) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out);
+}
+
+/* The label. 10.11.11's .detailButton has no text element at all — the
+ * template is one .detailButton-content holding a .material-icons and
+ * nothing else, and the words live in the `title` attribute (there is a
+ * .detailButton-text *rule* in the stock sheet, but no such element on this
+ * page). So the label is `content: attr(title)` on a pseudo-element of the
+ * button itself, which is the one element attr() can read it from.
+ * ::before rather than ::after, with explicit `order`s, because the
+ * remaining time has to come last and a pseudo-element cannot be inserted
+ * between .detailButton-content and ::after any other way. */
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton::before {
+  content: attr(title);
+  order: 2;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton > .detailButton-content {
+  order: 1;
+  flex: none;
+  flex-direction: row;
+}
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton .detailButton-icon {
+  width: 20px;
+  height: 20px;
+  /* Stock is `font-size:1.6em!important`. */
+  font-size: 20px !important;
+  line-height: 20px;
+}
+
+/* Resume / Play is the one primary. `.btnPlay` is a class in 10.11.11, not
+ * an id — the whole button set is classes on `button.button-flat`. */
+html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay {
+  border-color: var(--af-accent-primary);
+  background: var(--af-accent-primary);
+  font: var(--af-type-button);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-primary-glow);
+}
+
+/* "1h 32m left", written to data-af-left by astrofin-theme.js only when the
+ * item JSON carries a resume position. An attribute rather than a child
+ * element: attribute writes are invisible to the childList observer that
+ * drives refresh(), so this cannot feed the repaint loop. */
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton[data-af-left]::after {
+  content: attr(data-af-left);
+  order: 3;
+  flex: none;
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  opacity: .8;
+}
+
+/* Deviation 2: the five secondary actions as 56px glass discs on their own
+ * line. `order: 2` is what puts them after every pill regardless of where
+ * the template happens to place them (btnDownload, for one, is third in the
+ * markup). Their ::before label is dropped — a disc has no room for it, and
+ * the `title` still reads out as the tooltip and to a screen reader. */
+html.af-detail .itemDetailPage .mainDetailButtons > .btnDownload,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnInstantMix,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnUserRating,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnSplitVersions,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnMoreCommands {
+  order: 2;
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  padding: 0 !important;
+  gap: 0;
+  justify-content: center;
+  border-radius: 50%;
+  border-color: var(--af-edge-soft);
+  color: var(--af-text-muted);
+}
+html.af-detail .itemDetailPage .mainDetailButtons > .btnDownload::before,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnInstantMix::before,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnUserRating::before,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnSplitVersions::before,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnMoreCommands::before {
+  content: none;
+}
+
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton:focus {
+  outline: none;
+}
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton:focus-visible,
+html.af-detail .itemDetailPage .mainDetailButtons > .detailButton.show-focus:focus {
+  outline: none;
+  background: var(--af-glass-fill);
+  box-shadow: var(--af-focus-ring);
+  transition-duration: var(--af-dur-tile), var(--af-dur-ring-in);
+}
+html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay:focus-visible,
+html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay.show-focus:focus {
+  background: var(--af-accent-primary);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  html.af-detail .itemDetailPage .mainDetailButtons > .detailButton:hover {
+    border-color: var(--af-accent-primary);
+    background: var(--af-glass-fill);
+    color: var(--af-text-primary);
+  }
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay:hover {
+    background: var(--af-accent-primary);
+    color: var(--af-on-accent);
+  }
+}
+
+/* --- Right column: the shelves --------------------------------------- */
+
+/* Stock is `[dir=ltr] .detailPageContent{padding-left:32.45vw;
+ * padding-right:2%}` (0,2,0) plus `.layout-desktop
+ * .detailPageSecondaryContainer{flex-grow:1}`; both are cleared at (0,3,1).
+ * The `padding-bottom:5em!important` .padded-bottom-page brings is left
+ * alone — it is the page's bottom breathing room and the design wants it. */
+html.af-detail .itemDetailPage .detailPageSecondaryContainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-8);
+  min-width: 0;
+  padding-top: 0;
+  flex-grow: 0;
+}
+html.af-detail .itemDetailPage .detailPageContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-8);
+  min-width: 0;
+  padding: 0;
+}
+
+/* Both columns carry shelves: the right one has cast / similar / specials,
+ * and .detailPagePrimaryContent has Next Up and, on a season page, the
+ * episode list. */
+html.af-detail .detailPageContent .verticalSection,
+html.af-detail .detailPagePrimaryContent .verticalSection {
+  margin: 0;
+}
+html.af-detail .detailPageContent .sectionTitle,
+html.af-detail .detailPagePrimaryContent .sectionTitle {
+  margin: 0 0 14px;
+  padding: 0;
+}
+html.af-detail .detailPageContent .sectionTitleContainer,
+html.af-detail .detailPagePrimaryContent .sectionTitleContainer {
+  margin: 0 0 14px;
+}
+html.af-detail .detailPagePrimaryContent .verticalSection + .verticalSection {
+  margin-top: var(--af-space-8);
+}
+
+/* The horizontal scrollers keep their scrolling; only the 3.3% inset goes,
+ * so a shelf starts on the column's own left edge. */
+html.af-detail .detailPageContent .emby-scroller {
+  padding-left: 0;
+  padding-right: 0;
+  margin: 0;
+}
+
+/* 130px portrait tiles at a 20px gap: six per row in the 1048px column at
+ * 1920. The 6px inset is the artboard's, and it is what keeps the first
+ * tile's 1.06 focus scale and its 3px ring off the column edge. Stock sizes
+ * these cards through the nine-step `.overflowPortraitCard` vw ladder at
+ * (0,1,0); this is (0,4,1), so one rule replaces the ladder. */
+/* Both columns, because **10.11.11 renders a series' seasons and a season's
+ * episodes into `#listChildrenCollapsible`, which is in
+ * `.detailPagePrimaryContent` — the left column** — and leaves
+ * `#childrenCollapsible` in the right column `.hide`. Verified live on a
+ * series page: left `#listChildrenCollapsible` "Seasons" with 8 cards, right
+ * `#childrenCollapsible` hidden and empty. */
+html.af-detail .detailPageContent .itemsContainer,
+html.af-detail .detailPagePrimaryContent .itemsContainer {
+  gap: 20px;
+  margin: 0;
+  padding: 6px 0 6px 6px;
+}
+/* In the right column every card is a portrait tile. In the left one the Next
+ * Up shelf is a wide backdrop card, which keeps its stock width — 130px
+ * would crop a 16:9 still to a poster. */
+html.af-detail .detailPageContent .itemsContainer > .card,
+html.af-detail .detailPagePrimaryContent .itemsContainer > .card.overflowPortraitCard,
+html.af-detail .detailPagePrimaryContent .itemsContainer > .card.portraitCard {
+  width: 130px;
+}
+/* `[dir=ltr] .itemsContainer>.card>.cardBox{margin-right:1.2em}` (0,4,0) and
+ * `.cardBox-bottompadded{margin-bottom:1.8em!important}` are the same two
+ * stock margins section (l) answers on the library grid, for the same
+ * reason: the gap owns the rhythm now. */
+html.af-detail .detailPageContent .itemsContainer > .card > .cardBox,
+html.af-detail .detailPagePrimaryContent .itemsContainer > .card > .cardBox {
+  margin: 0 !important;
+}
+html.af-detail .detailPagePrimaryContent .emby-scroller {
+  padding-left: 0;
+  padding-right: 0;
+  margin: 0;
+}
+
+/* --- Right column: the facts panel ----------------------------------- */
+
+/* Built by astrofin-theme.js's detailFacts()/renderDetailPanel() and
+ * inserted as the first child of .detailPageSecondaryContainer, so
+ * `margin-left:auto` lands it on the page's right gutter at the artboard's
+ * 150px. Same glass as #af-server-panel in section (k). */
+#af-detail-panel {
+  box-sizing: border-box;
+  width: 300px;
+  margin-left: auto;
+  padding: 22px 26px;
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-panel);
+  background: var(--af-glass);
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+  backdrop-filter: blur(var(--af-glass-blur-panel));
+}
+#af-detail-panel[hidden] {
+  display: none !important;
+}
+.af-dp-eyebrow {
+  margin-bottom: 14px;
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+.af-dp-headline {
+  font: 500 18px/1.3 var(--af-font-body);
+  color: var(--af-text-primary);
+  overflow-wrap: anywhere;
+}
+.af-dp-sub {
+  margin-top: 6px;
+  font: 400 15px/1.5 var(--af-font-body);
+  color: var(--af-text-muted);
+}
+.af-dp-rule {
+  height: 1px;
+  margin: 14px 0;
+  background: var(--af-edge-soft);
+}
+.af-dp-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--af-space-4);
+  font: 400 15px/1.7 var(--af-font-body);
+  color: var(--af-text-muted);
+}
+.af-dp-row > span:last-child {
+  min-width: 0;
+  font-family: var(--af-font-mono);
+  letter-spacing: var(--af-tracking-meta);
+  text-align: right;
+  color: var(--af-text-primary);
+  overflow-wrap: anywhere;
+}
+/* The video mode is app state, not file metadata — the one accent value. */
+.af-dp-row > span.af-dp-accent {
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+
+/* Stacked layout: the panel is no longer beside anything, so it spans. */
+@media (max-width: 1599px) {
+  #af-detail-panel {
+    width: 100%;
+    max-width: 420px;
+    margin-left: 0;
+  }
+}
+
+/* --- Season pages: the episode rows ---------------------------------- */
+
+/* jf-web renders a season's children as .listItem rows in a .vertical-list.
+ * Unfocused rows sit at .72 like the library grid's labels; the focus ring
+ * and the 1.04 scale live on the still, not on the row, so a row cannot
+ * paint a band across the column. */
+/* **The row is not `.listItem`.** Verified live: an episode row is
+ * `.listItem.listItem-largeImage.listItem-withContentWrapper`, which stock
+ * lays out as a *column* (`.listItem-withContentWrapper{flex-direction:
+ * column}`), wrapping the real row in a `.listItem-content`. The still, the
+ * body and the buttons are children of that, so everything about the row
+ * hangs off `.listItem-content`; the outer `.listItem` carries only the
+ * dim/un-dim and the hit area. Styling `.listItem` as the row put the title
+ * and the runtime *above* the still. */
+html.af-detail .itemDetailPage .itemsContainer.vertical-list {
+  gap: 10px;
+  padding-left: 0;
+  padding-right: 0;
+}
+html.af-detail .itemDetailPage .vertical-list .listItem {
+  align-items: center;
+  gap: 20px;
+  padding: 4px 6px;
+  border-radius: var(--af-radius-md);
+  opacity: .72;
+  transition: opacity var(--af-dur-tile) var(--af-ease-out);
+}
+html.af-detail .itemDetailPage .vertical-list .listItem-content {
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  min-width: 0;
+}
+/* Section (b) gives every .listItem a hover/focus fill for the action
+ * sheets; here the still carries the state instead. */
+html.af-detail .itemDetailPage .vertical-list .listItem:hover,
+html.af-detail .itemDetailPage .vertical-list .listItem:focus,
+html.af-detail .itemDetailPage .vertical-list .listItem:focus-within {
+  opacity: 1;
+  background: transparent;
+}
+html.af-detail .itemDetailPage .vertical-list .listItem:focus {
+  outline: none;
+}
+
+/* Stock is 19.5vw x 13vw — 374 x 250 at 1920, half the column. */
+html.af-detail .itemDetailPage .listItemImage-large {
+  width: 208px;
+  height: 117px;
+  margin: 0;
+  border-radius: 10px;
+  box-shadow: var(--af-focus-ring-rest);
+  transition:
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out),
+    transform var(--af-dur-tile) var(--af-ease-focus);
+}
+html.af-detail .itemDetailPage .listItem:hover .listItemImage-large,
+html.af-detail .itemDetailPage .listItem:focus .listItemImage-large,
+html.af-detail .itemDetailPage .listItem:focus-visible .listItemImage-large,
+html.af-detail .itemDetailPage .listItem.show-focus:focus .listItemImage-large {
+  transform: scale(1.04);
+  box-shadow: var(--af-focus-ring-tile);
+  transition-duration: var(--af-dur-ring-in), var(--af-dur-tile);
+}
+
+/* A 24px cyan disc with the on-accent tick. Stock is a 2em box at 80% font
+ * size carrying #00a4dc and three drop shadows. */
+html.af-detail .itemDetailPage .listItemIndicators {
+  top: 10px;
+  right: 10px;
+}
+html.af-detail .itemDetailPage .listItemIndicators .playedIndicator {
+  width: 24px;
+  height: 24px;
+  font-size: 100%;
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: none;
+}
+html.af-detail .itemDetailPage .listItemIndicators .playedIndicator .material-icons {
+  font-size: 15px;
+}
+
+/* The 3px track and its cyan fill, inset to match the still's radius.
+ *
+ * `position: absolute` is restated, not inherited from stock: the element
+ * carries BOTH `.itemProgressBar` (itemDetails.css, `position:relative`) and
+ * `.listItemProgressBar` (main.css, `position:absolute`) at (0,1,0), so which
+ * one wins is decided by the order two lazily loaded chunks happen to land
+ * in. Measured live with the relative one winning: the bar left the still
+ * entirely and rendered 0px wide, in flow, at x=296 beside a 208px image
+ * ending at x=286. */
+html.af-detail .itemDetailPage .listItem .listItemProgressBar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 9px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--af-progress-track);
+  overflow: hidden;
+}
+html.af-detail .itemDetailPage .listItem .itemProgressBarForeground {
+  background: var(--af-accent-primary);
+}
+
+/* "9. Aura the Guillotine" arrives as one string — jf-web puts the episode
+ * number inside the text — so it is styled as written rather than split. */
+/* Stock blockifies this: `.listItemBody,.listItemButton,…{display:inline-block}`
+ * comes after the flex rule, and as a flex item inline-block computes to
+ * block, so the `flex-direction:column` and `justify-content:center` stock
+ * also sets never take. Restated as a real flex column. */
+html.af-detail .itemDetailPage .listItem .listItemBody {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+}
+
+/* Deviation 4: no per-row overview. Both artboards draw an episode row as
+ * still + "E9 · Title" + "24m · Aired …" and nothing else, and this is why:
+ * jf-web puts the episode list in .detailPagePrimaryContent, i.e. in the
+ * 640px blurb column, where a paragraph between a 208px still and four
+ * 40px buttons measured 215px wide and 186px tall — six words a line. jf-web
+ * itself hides this below a 50em viewport for the same reason. Delete this
+ * rule to get it back. */
+html.af-detail .itemDetailPage .listItem .listItem-overview {
+  display: none;
+}
+html.af-detail .itemDetailPage .listItem .listItemBodyText {
+  padding: 0;
+  font: var(--af-type-tile);
+  color: var(--af-text-primary);
+  /* The artboard's row is one line with an ellipsis. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.af-detail .itemDetailPage .listItem .listItemBodyText.secondary,
+html.af-detail .itemDetailPage .listItem .listItemMediaInfo,
+html.af-detail .itemDetailPage .listItem .listItem-overview {
+  margin: 0;
+  font: var(--af-type-tile-sub);
+  color: var(--af-text-muted);
+}
+
+/* 40px icon discs, a quarter step down from the action stack's 56px. */
+html.af-detail .itemDetailPage .listViewUserDataButtons {
+  gap: var(--af-space-2);
+}
+html.af-detail .itemDetailPage .listViewUserDataButtons .paper-icon-button-light {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--af-edge-soft);
+  border-radius: 50%;
+  background: var(--af-glass-fill-soft);
+  color: var(--af-text-muted);
+}
+html.af-detail .itemDetailPage .listViewUserDataButtons .paper-icon-button-light > .material-icons {
+  font-size: 18px;
 }

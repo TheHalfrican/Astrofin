@@ -70,6 +70,107 @@ function onLibrary(overrides) {
     return { win, library, theme };
 }
 
+// The item detail page as jf-web 10.11.11 renders it, trimmed to the parts the
+// theme reaches:
+//   .mainAnimatedPages
+//     > #itemDetailPage.page.libraryPage.itemDetailPage.selfBackdropPage
+//       > .detailLogo
+//       > .detailPageWrapperContainer
+//         > .detailPagePrimaryContainer > .detailRibbon > .mainDetailButtons
+//         > .detailPageSecondaryContainer > .detailPageContent
+// The buttons are `button.button-flat.btnPlay.detailButton` with the label in
+// `title` and no text element, which is why the sheet draws it with attr().
+function buildDetail(win) {
+    const doc = win.document;
+    const pages = doc.createElement('div');
+    pages.className = 'mainAnimatedPages';
+    const page = doc.createElement('div');
+    page.id = 'itemDetailPage';
+    page.className = 'page libraryPage itemDetailPage selfBackdropPage';
+    const logo = doc.createElement('div');
+    logo.className = 'detailLogo hide';
+    const wrapper = doc.createElement('div');
+    wrapper.className = 'detailPageWrapperContainer';
+    const primary = doc.createElement('div');
+    primary.className = 'detailPagePrimaryContainer';
+    const ribbon = doc.createElement('div');
+    ribbon.className = 'detailRibbon padded-left padded-right';
+    const buttons = doc.createElement('div');
+    buttons.className = 'mainDetailButtons focuscontainer-x';
+    const play = doc.createElement('button');
+    play.className = 'button-flat btnPlay detailButton';
+    play.setAttribute('data-action', 'resume');
+    play.setAttribute('title', 'Resume');
+    buttons.appendChild(play);
+    ribbon.appendChild(buttons);
+    primary.appendChild(ribbon);
+    const secondary = doc.createElement('div');
+    secondary.className = 'detailPageSecondaryContainer padded-bottom-page';
+    const content = doc.createElement('div');
+    content.className = 'detailPageContent';
+    secondary.appendChild(content);
+    wrapper.appendChild(primary);
+    wrapper.appendChild(secondary);
+    page.appendChild(logo);
+    page.appendChild(wrapper);
+    pages.appendChild(page);
+    doc.body.appendChild(pages);
+    return { pages, page, logo, wrapper, primary, ribbon, buttons, play, secondary, content };
+}
+
+// A window with the theme installed and a details route in the address bar.
+// `api` is attached before the theme loads: start() calls refresh(), which is
+// what kicks the item fetch off, and a client attached afterwards would arrive
+// one route too late.
+function onDetail(opts = {}) {
+    const win = makeThemeWindow({
+        hash: opts.hash === undefined ? '#/details?id=item-1&serverId=srv' : opts.hash
+    });
+    if (opts.api) win.ApiClient = opts.api;
+    const detail = buildDetail(win);
+    const theme = loadTheme(win);
+    return { win, detail, theme };
+}
+
+// Let a fetchItem() chain and the render that follows it settle.
+async function settle(times = 6) {
+    for (let i = 0; i < times; i += 1) await Promise.resolve();
+}
+
+// A movie with everything the facts panel can read.
+function fullMovie() {
+    return {
+        Id: 'item-1',
+        Name: 'Blade Runner 2049',
+        Type: 'Movie',
+        RunTimeTicks: 98640000000,
+        UserData: { PlaybackPositionTicks: 43200000000 },
+        BackdropImageTags: ['bt'],
+        MediaSources: [{
+            Size: 41017541427,
+            MediaStreams: [
+                {
+                    Type: 'Video', Codec: 'hevc', Width: 3840,
+                    VideoRangeType: 'HDR10'
+                },
+                { Type: 'Audio', Codec: 'truehd', ChannelLayout: '7.1' },
+                { Type: 'Subtitle', Language: 'eng' },
+                { Type: 'Subtitle', Language: 'fra' },
+                { Type: 'Subtitle', Language: 'jpn' },
+                { Type: 'Subtitle', Language: 'deu' },
+                { Type: 'Subtitle', Language: 'eng' }
+            ]
+        }]
+    };
+}
+
+// The rows a rendered panel reads as, as [label, value] pairs.
+function panelRows(panel) {
+    return panel.children
+        .filter((el) => el.classList.contains('af-dp-row'))
+        .map((row) => row.children.map((span) => span.textContent));
+}
+
 // ---------------------------------------------------------------------------
 // Installation and idempotency
 // ---------------------------------------------------------------------------
@@ -1246,4 +1347,256 @@ test('hashchange, popstate, viewshow and the jellyfin-web buses all queue a refr
     }
     assert.strictEqual(theme.state().refreshQueued, false, 'every bus settled');
     assert.ok(win.document._callbacks.THEME_CHANGE.length >= 1);
+});
+
+// ---------------------------------------------------------------------------
+// Item detail
+// ---------------------------------------------------------------------------
+
+test('isDetailRoute claims the details view and nothing that merely starts like it', () => {
+    const { win, theme } = onDetail();
+    const yes = [
+        '#/details?id=1&serverId=s', '#!/details?id=1', '#/details',
+        '#/details/', '#/details?id=1&context=tvshows'
+    ];
+    for (const hash of yes) {
+        win.location.hash = hash;
+        assert.ok(theme.isDetailRoute(), hash);
+    }
+    const no = ['#/home.html', '#/movies.html', '#/detailsomething?id=1', '#/search', ''];
+    for (const hash of no) {
+        win.location.hash = hash;
+        assert.ok(!theme.isDetailRoute(), hash);
+    }
+});
+
+test('detailIdFromHash reads the id wherever the query puts it', () => {
+    const { win, theme } = onDetail();
+    win.location.hash = '#/details?id=abc123&serverId=s';
+    assert.strictEqual(theme.detailIdFromHash(), 'abc123');
+    // jf-web orders these differently depending on where the click came from.
+    win.location.hash = '#/details?serverId=s&id=def456&context=tvshows';
+    assert.strictEqual(theme.detailIdFromHash(), 'def456');
+    win.location.hash = '#/details';
+    assert.strictEqual(theme.detailIdFromHash(), null);
+});
+
+test('detailTypeFor names the four kinds the one template renders', () => {
+    const { theme } = onDetail();
+    assert.strictEqual(theme.detailTypeFor({ Type: 'Movie' }), 'movie');
+    assert.strictEqual(theme.detailTypeFor({ Type: 'Series' }), 'series');
+    assert.strictEqual(theme.detailTypeFor({ Type: 'Season' }), 'season');
+    assert.strictEqual(theme.detailTypeFor({ Type: 'Episode' }), 'episode');
+    // A details route can also be a box set, a person or a music album; the
+    // eyebrow has no label for those and the attribute must not invent one.
+    assert.strictEqual(theme.detailTypeFor({ Type: 'BoxSet' }), 'other');
+    assert.strictEqual(theme.detailTypeFor({}), 'other');
+    assert.strictEqual(theme.detailTypeFor(null), 'other');
+});
+
+test('refresh on a details route sets af-detail alone and drops it on the way out', () => {
+    const { win, theme } = onDetail();
+    const html = win.document.documentElement;
+    theme.refresh();
+    assert.ok(html.classList.contains('af-detail'));
+    assert.ok(!html.classList.contains('af-home'), 'never both');
+    assert.ok(!html.classList.contains('af-library'), 'never both');
+
+    win.location.hash = '#/movies.html?topParentId=lib1';
+    theme.refresh();
+    assert.ok(!html.classList.contains('af-detail'));
+    assert.ok(html.classList.contains('af-library'));
+});
+
+test('detailFacts reads a full movie file', () => {
+    const { theme } = onDetail();
+    const facts = theme.detailFacts(fullMovie(), { videoMode: 'live-action' });
+    assert.strictEqual(facts.eyebrow, 'File');
+    assert.strictEqual(facts.headline, null);
+    assert.deepStrictEqual(facts.rows.map((r) => [r.label, r.value]), [
+        ['Video', 'HEVC 4K · HDR10'],
+        ['Audio', 'TRUEHD 7.1'],
+        // Four distinct languages, one of them twice: three plus a count.
+        ['Subtitles', 'ENG · FRA · JPN +1'],
+        ['Mode', 'Live-Action'],
+        ['Size', '38.2 GB']
+    ]);
+    assert.strictEqual(facts.rows[3].tone, 'accent', 'the mode is app state, not file metadata');
+});
+
+test('detailFacts never throws on a movie with no media sources', () => {
+    const { theme } = onDetail();
+    const facts = theme.detailFacts({ Id: 'm', Name: 'Unscanned', Type: 'Movie' });
+    assert.strictEqual(facts.eyebrow, 'File');
+    // Every row would have been empty, so the panel renders as nothing at all
+    // rather than as a stack of dashes.
+    assert.deepStrictEqual(facts.rows, []);
+});
+
+test('detailFacts reads a series, with and without a next-up episode', () => {
+    const { theme } = onDetail();
+    const series = {
+        Id: 's1',
+        Name: "Frieren: Beyond Journey's End",
+        Type: 'Series',
+        Status: 'Continuing',
+        Studios: [{ Name: 'Nippon TV' }, { Name: 'Madhouse' }],
+        AirDays: ['Friday'],
+        AirTime: '11:00 PM'
+    };
+    const bare = theme.detailFacts(series, { videoMode: 'anime' });
+    assert.strictEqual(bare.eyebrow, 'Series');
+    assert.strictEqual(bare.headline, null);
+    assert.deepStrictEqual(bare.rows.map((r) => [r.label, r.value]), [
+        ['Network', 'Nippon TV'],
+        ['Status', 'Continuing'],
+        ['Airs', 'Friday 11:00 PM'],
+        ['Mode', 'Animation']
+    ]);
+
+    const withNext = theme.detailFacts(series, {
+        nextUp: {
+            Name: 'Aura the Guillotine', ParentIndexNumber: 1, IndexNumber: 9,
+            RunTimeTicks: 14400000000, UserData: { PlaybackPositionTicks: 7800000000 }
+        }
+    });
+    assert.strictEqual(withNext.eyebrow, 'Next up');
+    assert.strictEqual(withNext.headline, 'S1 E9 · Aura the Guillotine');
+    assert.strictEqual(withNext.sub, '11m left');
+});
+
+test('detailFacts counts a season', () => {
+    const { theme } = onDetail();
+    const facts = theme.detailFacts({
+        Id: 'se1', Name: 'Season 1', Type: 'Season',
+        ChildCount: 28, UserData: { UnplayedItemCount: 20 }
+    }, {});
+    assert.strictEqual(facts.eyebrow, 'Season');
+    assert.deepStrictEqual(facts.rows.map((r) => [r.label, r.value]), [
+        ['Episodes', '28'],
+        ['Watched', '8 of 28']
+    ]);
+
+    // A season the server has not counted yields no rows rather than "NaN".
+    const empty = theme.detailFacts({ Id: 'se2', Type: 'Season' }, {});
+    assert.deepStrictEqual(empty.rows, []);
+});
+
+test('the facts panel is inserted once at the head of the right column and updated in place', () => {
+    const { win, detail, theme } = onDetail();
+    const first = theme.renderDetailPanel(fullMovie());
+    assert.strictEqual(first.id, 'af-detail-panel');
+    assert.strictEqual(detail.secondary.children[0], first, 'first child of the right column');
+    assert.strictEqual(win.document.querySelectorAll('#af-detail-panel').length, 1);
+    assert.deepStrictEqual(panelRows(first)[0], ['Video', 'HEVC 4K · HDR10']);
+
+    const second = theme.renderDetailPanel({
+        Id: 'item-2', Name: 'Dune', Type: 'Movie',
+        MediaSources: [{ MediaStreams: [{ Type: 'Video', Codec: 'av1', Width: 1920 }] }]
+    });
+    assert.strictEqual(second, first, 'the same node, rewritten');
+    assert.strictEqual(win.document.querySelectorAll('#af-detail-panel').length, 1);
+    assert.deepStrictEqual(panelRows(second), [['Video', 'AV1 1080p']]);
+    assert.strictEqual(second.hidden, false);
+
+    // Nothing to say: the panel stays in place but paints nothing.
+    theme.renderDetailPanel({ Id: 'item-3', Type: 'Movie' });
+    assert.strictEqual(first.hidden, true);
+    assert.deepStrictEqual(panelRows(first), []);
+});
+
+test('resumeLabel only speaks when there is a resume position to report', () => {
+    const { theme } = onDetail();
+    assert.strictEqual(theme.resumeLabel(fullMovie()), '1h 32m left');
+    assert.strictEqual(theme.resumeLabel({ RunTimeTicks: 98640000000 }), null);
+    // Watched to the end: jellyfin keeps the position, the pill must not.
+    assert.strictEqual(theme.resumeLabel({
+        RunTimeTicks: 100, UserData: { PlaybackPositionTicks: 100 }
+    }), null);
+});
+
+test('markResumeButton writes the remaining time as an attribute and clears it', () => {
+    const { detail, theme } = onDetail();
+    theme.markResumeButton(fullMovie());
+    assert.strictEqual(detail.play.getAttribute('data-af-left'), '1h 32m left');
+
+    // A start-from-scratch play button says nothing, and the stale value goes.
+    detail.play.setAttribute('data-action', 'play');
+    theme.markResumeButton(fullMovie());
+    assert.strictEqual(detail.play.getAttribute('data-af-left'), null);
+});
+
+test('entering a details route stamps the type, paints the panel and drives the art', async () => {
+    const item = fullMovie();
+    const api = makeThemeApiClient({ items: new Map([['item-1', item]]) });
+    const { win, detail, theme } = onDetail({ api });
+    await settle();
+
+    const html = win.document.documentElement;
+    assert.strictEqual(html.getAttribute('data-af-detail-type'), 'movie');
+    assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
+    win.images[0].onload();
+    assert.ok(html.classList.contains('af-backdrop'));
+    assert.strictEqual(detail.secondary.children[0].id, 'af-detail-panel');
+    assert.strictEqual(detail.play.getAttribute('data-af-left'), '1h 32m left');
+
+    // Leaving takes all of it back down: a stale type would keep the eyebrow
+    // saying "Movie" over the next page's title.
+    win.location.hash = '#/home.html';
+    theme.leaveDetail();
+    assert.strictEqual(html.getAttribute('data-af-detail-type'), null);
+    assert.strictEqual(win.document.querySelector('#af-detail-panel'), null);
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+});
+
+test('a season page is a details route of its own, so the gate re-fetches', async () => {
+    const series = { Id: 'item-1', Name: 'Frieren', Type: 'Series', Status: 'Continuing' };
+    const season = { Id: 'season-2', Name: 'Season 1', Type: 'Season', ChildCount: 28 };
+    const api = makeThemeApiClient({
+        items: new Map([['item-1', series], ['season-2', season]])
+    });
+    const { win, theme } = onDetail({ api });
+    await settle();
+    assert.strictEqual(win.document.documentElement.getAttribute('data-af-detail-type'), 'series');
+
+    win.location.hash = '#/details?id=season-2&serverId=srv';
+    theme.refresh();
+    await settle();
+    assert.strictEqual(win.document.documentElement.getAttribute('data-af-detail-type'), 'season');
+    assert.strictEqual(theme.state().detailId, 'season-2');
+});
+
+test('backdropSourceFor names the branch of the fallback chain the item lands on', () => {
+    const { theme } = onDetail();
+    assert.strictEqual(theme.backdropSourceFor({ BackdropImageTags: ['t'] }), 'backdrop');
+    assert.strictEqual(theme.backdropSourceFor({
+        ParentBackdropItemId: 'p', ParentBackdropImageTags: ['t']
+    }), 'parent');
+    // A poster cropped to a 16:9 canvas; the sheet blurs this one back towards
+    // a wash rather than showing somebody's chin at 1708px wide.
+    assert.strictEqual(theme.backdropSourceFor({ ImageTags: { Primary: 't' } }), 'primary');
+    // An empty tag array is not art, and neither is a parent id on its own.
+    assert.strictEqual(theme.backdropSourceFor({ BackdropImageTags: [] }), null);
+    assert.strictEqual(theme.backdropSourceFor({ ParentBackdropItemId: 'p' }), null);
+    assert.strictEqual(theme.backdropSourceFor({}), null);
+    assert.strictEqual(theme.backdropSourceFor(null), null);
+});
+
+test('entering a details route stamps where the art came from, and leaving clears it', async () => {
+    const item = fullMovie();
+    const api = makeThemeApiClient({ items: new Map([['item-1', item]]) });
+    const { win, theme } = onDetail({ api });
+    await settle();
+    const html = win.document.documentElement;
+    assert.strictEqual(html.getAttribute('data-af-backdrop-src'), 'backdrop');
+    theme.leaveDetail();
+    assert.strictEqual(html.getAttribute('data-af-backdrop-src'), null);
+});
+
+test('the facts panel repainting itself does not queue a refresh', () => {
+    const { win, theme } = onDetail();
+    theme.renderDetailPanel(fullMovie());
+    win.timers.runAll();
+    theme.renderDetailPanel(fullMovie());
+    assert.strictEqual(theme.state().refreshQueued, false);
 });

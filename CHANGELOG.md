@@ -138,6 +138,23 @@ project uses semantic versioning.
   item's art bleeds in behind the grid through the same crossfade Home uses.
   Two stock `!important` card margins are overridden so rows and columns
   share the 24px gap.
+- Item detail pages restyled to the design canvas (docs/design/canvas/
+  MovieDetail.dc.html and SeriesDetail.dc.html, docs/design/theme-injection.md
+  "Item detail"): on `#/details` (`html.af-detail`, with the item type from
+  the server on `data-af-detail-type`) the page is the "game hub" layout:
+  the item's own backdrop full-bleed through Astrofin's crossfade at a
+  sharper, brighter treatment than Home (both scrims kept; muted text still
+  measures at least 4.5:1 over a white frame), no poster, the logo top-left
+  with the title in display type when there is none, an eyebrow naming the
+  type, metadata as mono chips, the vertical action stack directly under
+  them with Resume as the accent pill carrying the remaining time, the
+  secondary actions as glass discs, a two-column layout with Cast, More like
+  this and Seasons as 130px tile shelves on the right under a synthesized
+  glass facts panel (video, audio, subtitles, mode, size; next up, network
+  and status for a series; episode counts for a season), and season pages
+  as episode rows with 16:9 stills, played ticks, progress bars and the
+  focused row lifted. jellyfin-web's theme painted both column containers
+  opaque over the art; those are made transparent under the gate.
 
 ### Fixed
 - The workspace test suite now passes on the GitHub macOS and Linux CI
