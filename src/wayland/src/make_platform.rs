@@ -35,6 +35,35 @@ const BG_R: u8 = 0x10;
 const BG_G: u8 = 0x10;
 const BG_B: u8 = 0x10;
 
+/// Split a packed `0x00RRGGBB` theme colour into its channels. Anything above
+/// the blue byte's 24 bits is not colour and is discarded.
+fn rgb_channels(rgb: u32) -> [u8; 3] {
+    [
+        ((rgb >> 16) & 0xFF) as u8,
+        ((rgb >> 8) & 0xFF) as u8,
+        (rgb & 0xFF) as u8,
+    ]
+}
+
+/// A colour as the NUL-terminated `#rrggbb` byte string KWin's palette file is
+/// named after. Fixed width and lowercase: the name doubles as the cache key
+/// that decides whether the scheme has to be rewritten, so its spelling is a
+/// contract with [`crate::kde_palette::set_color`].
+#[cfg(feature = "kde-palette")]
+fn hex_color_bytes(rgb: [u8; 3]) -> [u8; 8] {
+    let digit = |c: u8| if c < 10 { b'0' + c } else { b'a' + (c - 10) };
+    [
+        b'#',
+        digit((rgb[0] >> 4) & 0xF),
+        digit(rgb[0] & 0xF),
+        digit((rgb[1] >> 4) & 0xF),
+        digit(rgb[1] & 0xF),
+        digit((rgb[2] >> 4) & 0xF),
+        digit(rgb[2] & 0xF),
+        0,
+    ]
+}
+
 /// A skip is not a failure: only a real error maps to `false`.
 fn present_ok(result: Result<Present, PresentError>) -> bool {
     match result {
@@ -247,25 +276,14 @@ impl Platform for WaylandPlatform {
     }
 
     fn set_theme_color(&self, rgb: u32) {
-        let r = ((rgb >> 16) & 0xFF) as u8;
-        let g = ((rgb >> 8) & 0xFF) as u8;
-        let b = (rgb & 0xFF) as u8;
+        let channels = rgb_channels(rgb);
+        let [r, g, b] = channels;
 
         self.rt().root().set_background_color(r, g, b);
 
         #[cfg(feature = "kde-palette")]
         {
-            // hex string "#RRGGBB\0".
-            let mut hex: [u8; 8] = [0; 8];
-            hex[0] = b'#';
-            let hexdigit = |c: u8| if c < 10 { b'0' + c } else { b'a' + (c - 10) };
-            hex[1] = hexdigit((r >> 4) & 0xF);
-            hex[2] = hexdigit(r & 0xF);
-            hex[3] = hexdigit((g >> 4) & 0xF);
-            hex[4] = hexdigit(g & 0xF);
-            hex[5] = hexdigit((b >> 4) & 0xF);
-            hex[6] = hexdigit(b & 0xF);
-            hex[7] = 0;
+            let hex = hex_color_bytes(channels);
             if let Ok(hex) = std::ffi::CStr::from_bytes_with_nul(&hex) {
                 crate::kde_palette::set_color(self.rt(), r, g, b, hex);
             }
@@ -317,4 +335,51 @@ impl Platform for WaylandPlatform {
 /// the selected backend is Wayland.
 pub fn make_wayland_platform(paint_request: Option<WlPaintOverride>) -> Box<dyn Platform> {
     Box::new(WaylandPlatform::new(paint_request))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_packed_colour_splits_into_red_green_blue() {
+        assert_eq!(rgb_channels(0x0010_2030), [0x10, 0x20, 0x30]);
+        assert_eq!(rgb_channels(0x00FF_FFFF), [0xFF, 0xFF, 0xFF]);
+        assert_eq!(rgb_channels(0), [0, 0, 0]);
+    }
+
+    #[test]
+    fn bits_above_the_red_byte_are_not_colour() {
+        // An alpha byte (or any other high garbage) must not bleed into red.
+        assert_eq!(rgb_channels(0xFF00_0000), [0, 0, 0]);
+        assert_eq!(rgb_channels(0xABCD_EF12), [0xCD, 0xEF, 0x12]);
+    }
+
+    #[cfg(feature = "kde-palette")]
+    #[test]
+    fn a_colour_renders_as_a_nul_terminated_lowercase_hex_string() {
+        assert_eq!(&hex_color_bytes([0xAB, 0xCD, 0xEF]), b"#abcdef\0");
+        assert_eq!(&hex_color_bytes([0x10, 0x10, 0x10]), b"#101010\0");
+    }
+
+    #[cfg(feature = "kde-palette")]
+    #[test]
+    fn every_channel_keeps_both_of_its_digits() {
+        // Zero-padding is what keeps the palette file name a fixed-width key.
+        assert_eq!(&hex_color_bytes([0, 0, 0]), b"#000000\0");
+        assert_eq!(&hex_color_bytes([1, 0, 0]), b"#010000\0");
+        assert_eq!(&hex_color_bytes([0xFF, 0xFF, 0xFF]), b"#ffffff\0");
+    }
+
+    #[cfg(feature = "kde-palette")]
+    #[test]
+    fn the_rendered_hex_string_is_a_valid_c_string_of_the_expected_shape() {
+        let bytes = hex_color_bytes([0x12, 0x34, 0x56]);
+        let c = std::ffi::CStr::from_bytes_with_nul(&bytes).unwrap();
+        let s = c.to_str().unwrap();
+        // kde_palette::set_color rejects anything that is not exactly this.
+        assert_eq!(s.len(), 7);
+        assert!(s.starts_with('#'));
+        assert_eq!(s, "#123456");
+    }
 }

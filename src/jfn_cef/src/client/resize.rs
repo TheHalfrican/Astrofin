@@ -3,11 +3,15 @@ use std::sync::atomic::Ordering;
 
 use jfn_playback::ingest_driver::jfn_playback_display_hz;
 
+use crate::client_logic::{
+    ResizeAction, frame_period_ns, frame_rate_usable, refresh_target, resize_action,
+};
+
 use super::{Inner, now_ns, platform_ops, tasks};
 
 impl Inner {
     pub(crate) fn set_frame_rate(&self, hz: i32) {
-        if hz <= 0 || !self.browser_alive() {
+        if !frame_rate_usable(hz) || !self.browser_alive() {
             return;
         }
         self.cef_set_windowless_frame_rate(hz);
@@ -55,36 +59,31 @@ impl Inner {
         }
 
         let now = now_ns();
-        let hz = jfn_playback_display_hz();
-        let period_ns = if hz > 0.0 {
-            (1e9 / hz) as i64
-        } else {
-            16_666_667
-        };
+        let period_ns = frame_period_ns(jfn_playback_display_hz());
         let last = self.last_was_resized_ns.load(Ordering::Acquire);
-        self.paint_scheduler.during_resize(self, || {
-            if now - last >= period_ns {
+        let action = resize_action(now, last, period_ns);
+        self.paint_scheduler.during_resize(self, || match action {
+            ResizeAction::Now => {
                 self.last_was_resized_ns.store(now, Ordering::Release);
                 self.notify_screen_info_changed();
                 self.cef_was_resized();
-                return;
             }
-            if self
-                .resize_scheduled
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let delay_ms = ((period_ns - (now - last)) / 1_000_000).max(1);
-                tasks::post_apply_resize(Arc::clone(self), delay_ms);
+            ResizeAction::After(delay_ms) => {
+                if self
+                    .resize_scheduled
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    tasks::post_apply_resize(Arc::clone(self), delay_ms);
+                }
             }
         });
     }
 
     pub(super) fn set_refresh_rate(self: &Arc<Self>, hz: f64) {
-        if hz <= 0.0 {
+        let Some(target) = refresh_target(hz) else {
             return;
-        }
-        let target = hz.ceil() as i32;
+        };
         tasks::post_set_refresh(Arc::clone(self), target);
     }
 

@@ -16,7 +16,7 @@ use crate::runtime::WlRuntime;
 use crate::wl_ops::dmabuf_pool_key;
 use crate::wl_state::{
     AttachedBuffer, DispatchState, DmabufBuf, DmabufBuffer, DmabufPlane, FrameBuffer, ShmGlobal,
-    create_dmabuf_buffer, draw_argb8888, draw_from_pixels, new_slot_pool,
+    argb8888_opaque, create_dmabuf_buffer, draw_argb8888, draw_from_pixels, new_slot_pool,
 };
 
 const DMABUF_POOL_CAP: usize = 16;
@@ -196,6 +196,16 @@ fn validate_present_dims(width: i32, height: i32) -> Result<(), PresentError> {
     Ok(())
 }
 
+/// Row stride and total byte length of a `width`x`height` BGRA frame, or
+/// `None` when the product does not fit a `usize`. The dimensions are meant to
+/// have passed [`validate_present_dims`] already; a non-positive one still
+/// yields `None` rather than a bogus length.
+fn frame_span(width: i32, height: i32) -> Option<(usize, usize)> {
+    let stride = (width as usize).saturating_mul(4);
+    let len = (height as usize).checked_mul(stride)?;
+    Some((stride, len))
+}
+
 pub(crate) struct LayerActor {
     kind: Kind,
     mailbox: Mailbox<LayerState>,
@@ -259,8 +269,7 @@ impl LayerActor {
         dirty: &[JfnRect],
     ) -> Result<Present, PresentError> {
         validate_present_dims(width, height)?;
-        let stride = (width as usize).saturating_mul(4);
-        let Some(len) = (height as usize).checked_mul(stride) else {
+        let Some((stride, len)) = frame_span(width, height) else {
             return Err(PresentError::BadDimensions(width, height));
         };
         if pixels.len() < len {
@@ -631,8 +640,7 @@ impl Runner {
             return Err(PresentError::ShmAlloc);
         };
         let Some(buf) = draw_argb8888(pool, 1, 1, |dst| {
-            // ARGB8888 little-endian byte order = [B, G, R, A].
-            dst.copy_from_slice(&[b, g, r, 0xFF]);
+            dst.copy_from_slice(&argb8888_opaque([r, g, b]));
             true
         }) else {
             return Err(PresentError::ShmAlloc);
@@ -861,8 +869,7 @@ enum DmabufLease {
 fn compose_shm_shadow(shadow: &mut ShmShadow, payload: &ShmPayload) -> Result<(), PresentError> {
     let (width, height) = (payload.width, payload.height);
     if shadow.size != (width, height) {
-        let stride = (width as usize).saturating_mul(4);
-        let Some(size) = (height as usize).checked_mul(stride) else {
+        let Some((_, size)) = frame_span(width, height) else {
             return Err(PresentError::BadDimensions(width, height));
         };
         shadow.pixels.clear();
@@ -1223,6 +1230,27 @@ mod tests {
         assert!(old.is_none());
         assert!(matches!(backend, Backend::Shm { .. }));
         assert!(flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_frame_span_is_four_bytes_per_pixel_per_row() {
+        assert_eq!(frame_span(1, 1), Some((4, 4)));
+        assert_eq!(frame_span(1920, 1080), Some((7680, 7680 * 1080)));
+    }
+
+    #[test]
+    fn a_frame_span_that_cannot_be_addressed_is_rejected() {
+        // A negative extent sign-extends to an enormous stride, which must not
+        // come back as a plausible length.
+        assert_eq!(frame_span(-1, 4), None);
+        assert_eq!(frame_span(4, -1), None);
+        assert_eq!(frame_span(-1, -1), None);
+    }
+
+    #[test]
+    fn a_zero_extent_frame_spans_nothing() {
+        assert_eq!(frame_span(0, 100), Some((0, 0)));
+        assert_eq!(frame_span(100, 0), Some((400, 0)));
     }
 
     #[test]

@@ -97,6 +97,17 @@ pub struct LogMessage {
 /// Reply identifier carried by async command/property events.
 pub type ReplyUserdata = u64;
 
+/// What the drain thread does with one event — see [`Event::disposition`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Disposition {
+    /// Drop it; no consumer ever sees it.
+    Ignore,
+    /// Forward it to tracing rather than to the consumer.
+    Log,
+    /// Send it to the consumer. `last` ends the loop afterwards.
+    Forward { last: bool },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// `MPV_EVENT_NONE` — emitted on timeout from `wait_event`.
@@ -139,6 +150,21 @@ pub enum Event {
 }
 
 impl Event {
+    /// What the event-loop drain thread does with this event.
+    ///
+    /// `MPV_EVENT_NONE` is libmpv's timeout/spurious-wakeup sentinel and
+    /// never reaches a consumer; log messages go straight to tracing;
+    /// `Shutdown` is forwarded and then ends the loop. Everything else is
+    /// forwarded and the loop continues.
+    pub fn disposition(&self) -> Disposition {
+        match self {
+            Event::None => Disposition::Ignore,
+            Event::LogMessage(_) => Disposition::Log,
+            Event::Shutdown => Disposition::Forward { last: true },
+            _ => Disposition::Forward { last: false },
+        }
+    }
+
     /// Decode a raw `mpv_event` borrowed from libmpv into an owned `Event`.
     ///
     /// # Safety
@@ -701,5 +727,40 @@ mod tests {
                 name: "on_load".into(),
             }
         );
+    }
+    #[test]
+    fn the_timeout_sentinel_never_reaches_a_consumer() {
+        assert_eq!(Event::None.disposition(), Disposition::Ignore);
+    }
+
+    #[test]
+    fn a_log_message_goes_to_tracing_rather_than_the_consumer() {
+        let m = LogMessage {
+            prefix: "cplayer".to_string(),
+            level: LogLevel::Info,
+            text: "hello".to_string(),
+        };
+        assert_eq!(Event::LogMessage(m).disposition(), Disposition::Log);
+    }
+
+    #[test]
+    fn shutdown_is_forwarded_and_then_ends_the_loop() {
+        assert_eq!(
+            Event::Shutdown.disposition(),
+            Disposition::Forward { last: true }
+        );
+    }
+
+    #[test]
+    fn every_other_event_is_forwarded_and_the_loop_continues() {
+        for ev in [
+            Event::FileLoaded,
+            Event::Seek,
+            Event::PlaybackRestart,
+            Event::QueueOverflow,
+            Event::Other(99),
+        ] {
+            assert_eq!(ev.disposition(), Disposition::Forward { last: false });
+        }
     }
 }

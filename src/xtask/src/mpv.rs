@@ -1,3 +1,4 @@
+use crate::naming::{self, HOST_OS};
 use crate::paths;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -6,22 +7,6 @@ use std::process::Command;
 pub struct Mpv {
     pub build_dir: PathBuf,
 }
-
-const LINK_NAME: &str = if cfg!(target_os = "macos") {
-    "libmpv.dylib"
-} else if cfg!(target_os = "windows") {
-    "mpv.lib"
-} else {
-    "libmpv.so"
-};
-
-const RUNTIME_NAME: &str = if cfg!(target_os = "macos") {
-    "libmpv.2.dylib"
-} else if cfg!(target_os = "windows") {
-    "libmpv-2.dll"
-} else {
-    "libmpv.so.2"
-};
 
 pub fn build(out: &Path, cplayer: bool) -> Result<Mpv> {
     let src = paths::mpv_source_dir();
@@ -75,7 +60,7 @@ pub fn build(out: &Path, cplayer: bool) -> Result<Mpv> {
 }
 
 pub fn external(dir: &Path) -> Result<Mpv> {
-    let library = dir.join("lib").join(LINK_NAME);
+    let library = dir.join("lib").join(naming::mpv_link_name(HOST_OS));
     if !library.exists() {
         bail!("mpv library not found at {}", library.display());
     }
@@ -85,10 +70,10 @@ pub fn external(dir: &Path) -> Result<Mpv> {
 }
 
 pub fn library_path(build_dir: &Path) -> PathBuf {
-    build_dir.join(LINK_NAME)
+    build_dir.join(naming::mpv_link_name(HOST_OS))
 }
 
 /// The shared library filename used at runtime (with SONAME).
 pub fn runtime_library_name() -> &'static str {
-    RUNTIME_NAME
+    naming::mpv_runtime_name(HOST_OS)
 }

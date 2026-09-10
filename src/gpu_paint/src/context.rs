@@ -2,6 +2,7 @@
 
 use crate::error::{Kind, SurfaceLost};
 use crate::painter::{AlphaSource, Surface};
+use crate::select;
 use crate::shared;
 use crate::types::WindowTarget;
 use crate::{FrameSize, ProducerId, SharedTexture};
@@ -108,10 +109,7 @@ impl Surfaces {
             tracing::error!("gpu_paint: wgpu error: {e}");
         }));
 
-        // Importing needs both halves: this device's import path must be live,
-        // and it must be the same device CEF allocates on — an import from a
-        // different GPU fails at bind time.
-        let can_import_shared = import_capable && device_matched;
+        let can_import_shared = select::can_import(import_capable, device_matched);
 
         tracing::info!(
             "gpu_paint: device created on {} ({:?}), can_import_shared={can_import_shared} (device_matched={device_matched})",
@@ -326,12 +324,7 @@ fn enumerated() -> &'static Enumerated {
         let instance = build_instance();
         let adapters = pollster::block_on(instance.enumerate_adapters(native_backends()))
             .into_iter()
-            .filter(|a| {
-                !matches!(
-                    a.get_info().device_type,
-                    wgpu::DeviceType::Cpu | wgpu::DeviceType::Other
-                )
-            })
+            .filter(|a| select::is_usable(a.get_info().device_type))
             .collect();
         Enumerated { instance, adapters }
     })
@@ -350,13 +343,9 @@ fn pick_adapter(producer: Option<shared::ProducerId>) -> Option<(wgpu::Adapter, 
 
     let chosen = adapters
         .iter()
-        .max_by_key(|a| match a.get_info().device_type {
-            wgpu::DeviceType::DiscreteGpu => 3,
-            wgpu::DeviceType::IntegratedGpu => 2,
-            wgpu::DeviceType::VirtualGpu => 1,
-            _ => 0,
-        })?;
-    // With no device to match against, the best adapter is as good as it gets
-    // and counts as matched; a device we asked for and missed does not.
-    Some((chosen.clone(), producer.is_none()))
+        .max_by_key(|a| select::rank(a.get_info().device_type))?;
+    Some((
+        chosen.clone(),
+        select::matched_without_producer(producer.is_some()),
+    ))
 }

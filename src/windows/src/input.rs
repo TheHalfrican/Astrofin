@@ -14,47 +14,26 @@ use std::ffi::c_int;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemServices::{
-    APPCOMMAND_BROWSER_BACKWARD, APPCOMMAND_BROWSER_FORWARD, MK_CONTROL, MK_LBUTTON, MK_MBUTTON,
-    MK_RBUTTON, MK_SHIFT,
-};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::HiDpi::{
     GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, SetFocus, VK_ADD, VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_CAPITAL, VK_CLEAR,
-    VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT,
-    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
-    VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
-    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SHIFT, VK_SUBTRACT, VK_UP,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowThreadProcessId, HCURSOR, HICON, HMENU, HTCLIENT, IDC_APPSTARTING, IDC_ARROW,
-    IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, KF_EXTENDED, LoadCursorW, MSG, PostMessageW,
+    GetWindowThreadProcessId, HCURSOR, HICON, HMENU, HTCLIENT, LoadCursorW, MSG, PostMessageW,
     PostThreadMessageW, RegisterClassExW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOZORDER, SetCursor, SetWindowPos, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
-    WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE, XBUTTON2,
+    WINDOW_STYLE, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
-use jfn_input::buttons::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 use jfn_platform_abi::cursor::CursorShape;
-use jfn_platform_abi::event_flags::{
-    EVENTFLAG_ALT_DOWN, EVENTFLAG_CAPS_LOCK_ON, EVENTFLAG_CONTROL_DOWN, EVENTFLAG_IS_KEY_PAD,
-    EVENTFLAG_IS_LEFT, EVENTFLAG_IS_RIGHT, EVENTFLAG_LEFT_MOUSE_BUTTON,
-    EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_NUM_LOCK_ON, EVENTFLAG_RIGHT_MOUSE_BUTTON,
-    EVENTFLAG_SHIFT_DOWN,
-};
 use jfn_platform_abi::{LogicalPoint, PhysicalPoint};
 
 use jfn_input::{
@@ -64,6 +43,7 @@ use jfn_input::{
 };
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
+use crate::input_logic::{self, KeyAction, Keyboard};
 use crate::menu::{WM_JFN_MENU_END, WM_JFN_MENU_TRACK};
 
 struct State {
@@ -86,181 +66,34 @@ pub(crate) fn input_hwnd() -> Option<HWND> {
 }
 
 #[inline]
-fn loword_u32(v: u32) -> u16 {
-    (v & 0xFFFF) as u16
-}
-
-#[inline]
-fn hiword_i16(v: u32) -> i16 {
-    ((v >> 16) & 0xFFFF) as i16
-}
-
-#[inline]
-fn get_x_lparam(lp: LPARAM) -> i32 {
-    (lp.0 as i16) as i32
-}
-#[inline]
-fn get_y_lparam(lp: LPARAM) -> i32 {
-    ((lp.0 >> 16) as i16) as i32
-}
-
-#[inline]
-fn get_xbutton_wparam(wp: WPARAM) -> u16 {
-    hiword_i16(wp.0 as u32) as u16
-}
-
-#[inline]
-fn get_appcommand_lparam(lp: LPARAM) -> u16 {
-    (hiword_i16(lp.0 as u32) as u16) & 0x7FFF
-}
-
-#[inline]
 fn is_key_down(vk: u16) -> bool {
     let s = unsafe { GetKeyState(vk as i32) };
     (s as u16 & 0x8000) != 0
 }
 
+/// True when the lock light for `vk` is lit.
+#[inline]
+fn is_key_toggled(vk: u16) -> bool {
+    (unsafe { GetKeyState(vk as i32) } & 1) != 0
+}
+
+/// Run `f` against the live keyboard, which is what the pure modifier tables
+/// in [`crate::input_logic`] read their key state through.
+fn with_keyboard<R>(f: impl FnOnce(&Keyboard<'_>) -> R) -> R {
+    let down = |vk: u16| is_key_down(vk);
+    let toggled = |vk: u16| is_key_toggled(vk);
+    f(&Keyboard {
+        down: &down,
+        toggled: &toggled,
+    })
+}
+
 fn mouse_modifiers(wp: WPARAM) -> u32 {
-    let mut m = 0u32;
-    let w = wp.0 as u32;
-    if w & MK_CONTROL.0 != 0 {
-        m |= EVENTFLAG_CONTROL_DOWN;
-    }
-    if w & MK_SHIFT.0 != 0 {
-        m |= EVENTFLAG_SHIFT_DOWN;
-    }
-    if is_key_down(VK_MENU.0) {
-        m |= EVENTFLAG_ALT_DOWN;
-    }
-    if w & MK_LBUTTON.0 != 0 {
-        m |= EVENTFLAG_LEFT_MOUSE_BUTTON;
-    }
-    if w & MK_RBUTTON.0 != 0 {
-        m |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
-    }
-    if w & MK_MBUTTON.0 != 0 {
-        m |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
-    }
-    m
+    with_keyboard(|kb| input_logic::mouse_modifier_flags(wp.0, kb))
 }
 
 fn keyboard_modifiers(wp: WPARAM, lp: LPARAM) -> u32 {
-    let mut m = 0u32;
-    if is_key_down(VK_SHIFT.0) {
-        m |= EVENTFLAG_SHIFT_DOWN;
-    }
-    if is_key_down(VK_CONTROL.0) {
-        m |= EVENTFLAG_CONTROL_DOWN;
-    }
-    if is_key_down(VK_MENU.0) {
-        m |= EVENTFLAG_ALT_DOWN;
-    }
-    if (unsafe { GetKeyState(VK_NUMLOCK.0 as i32) } & 1) != 0 {
-        m |= EVENTFLAG_NUM_LOCK_ON;
-    }
-    if (unsafe { GetKeyState(VK_CAPITAL.0 as i32) } & 1) != 0 {
-        m |= EVENTFLAG_CAPS_LOCK_ON;
-    }
-
-    let extended = ((lp.0 >> 16) as u32 & KF_EXTENDED) != 0;
-    let vk = wp.0 as u16;
-    match vk {
-        v if v == VK_RETURN.0 && extended => {
-            m |= EVENTFLAG_IS_KEY_PAD;
-        }
-        v if !extended
-            && (v == VK_INSERT.0
-                || v == VK_DELETE.0
-                || v == VK_HOME.0
-                || v == VK_END.0
-                || v == VK_PRIOR.0
-                || v == VK_NEXT.0
-                || v == VK_UP.0
-                || v == VK_DOWN.0
-                || v == VK_LEFT.0
-                || v == VK_RIGHT.0) =>
-        {
-            m |= EVENTFLAG_IS_KEY_PAD;
-        }
-        v if v == VK_NUMLOCK.0
-            || v == VK_NUMPAD0.0
-            || v == VK_NUMPAD1.0
-            || v == VK_NUMPAD2.0
-            || v == VK_NUMPAD3.0
-            || v == VK_NUMPAD4.0
-            || v == VK_NUMPAD5.0
-            || v == VK_NUMPAD6.0
-            || v == VK_NUMPAD7.0
-            || v == VK_NUMPAD8.0
-            || v == VK_NUMPAD9.0
-            || v == VK_DIVIDE.0
-            || v == VK_MULTIPLY.0
-            || v == VK_SUBTRACT.0
-            || v == VK_ADD.0
-            || v == VK_DECIMAL.0
-            || v == VK_CLEAR.0 =>
-        {
-            m |= EVENTFLAG_IS_KEY_PAD;
-        }
-        v if v == VK_SHIFT.0 => {
-            if is_key_down(VK_LSHIFT.0) {
-                m |= EVENTFLAG_IS_LEFT;
-            } else if is_key_down(VK_RSHIFT.0) {
-                m |= EVENTFLAG_IS_RIGHT;
-            }
-        }
-        v if v == VK_CONTROL.0 => {
-            if is_key_down(VK_LCONTROL.0) {
-                m |= EVENTFLAG_IS_LEFT;
-            } else if is_key_down(VK_RCONTROL.0) {
-                m |= EVENTFLAG_IS_RIGHT;
-            }
-        }
-        v if v == VK_MENU.0 => {
-            if is_key_down(VK_LMENU.0) {
-                m |= EVENTFLAG_IS_LEFT;
-            } else if is_key_down(VK_RMENU.0) {
-                m |= EVENTFLAG_IS_RIGHT;
-            }
-        }
-        v if v == VK_LWIN.0 => m |= EVENTFLAG_IS_LEFT,
-        v if v == VK_RWIN.0 => m |= EVENTFLAG_IS_RIGHT,
-        _ => {}
-    }
-    m
-}
-
-fn cef_cursor_to_win(shape: CursorShape) -> PCWSTR {
-    use CursorShape::*;
-    match shape {
-        Cross => IDC_CROSS,
-        Hand | Grab | Grabbing => IDC_HAND,
-        IBeam => IDC_IBEAM,
-        Wait => IDC_WAIT,
-        Help => IDC_HELP,
-        EastResize | WestResize | EastWestResize | ColumnResize => IDC_SIZEWE,
-        NorthResize | SouthResize | NorthSouthResize | RowResize => IDC_SIZENS,
-        NorthEastResize | SouthWestResize | NorthEastSouthWestResize => IDC_SIZENESW,
-        NorthWestResize | SouthEastResize | NorthWestSouthEastResize => IDC_SIZENWSE,
-        Move | MiddlePanning | MiddlePanningVertical | MiddlePanningHorizontal => IDC_SIZEALL,
-        Progress => IDC_APPSTARTING,
-        NoDrop | NotAllowed => IDC_NO,
-        _ => IDC_ARROW,
-    }
-}
-
-fn msg_to_button_code(msg: u32) -> u32 {
-    match msg {
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => BTN_LEFT,
-        WM_RBUTTONDOWN | WM_RBUTTONUP | WM_RBUTTONDBLCLK => BTN_RIGHT,
-        WM_MBUTTONDOWN | WM_MBUTTONUP | WM_MBUTTONDBLCLK => BTN_MIDDLE,
-        _ => BTN_LEFT,
-    }
-}
-
-#[inline]
-fn is_button_down(msg: u32) -> bool {
-    matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN)
+    with_keyboard(|kb| input_logic::keyboard_modifier_flags(wp.0 as u16, lp.0, kb))
 }
 
 /// The pointer position in the space CEF's view was sized in, mapped through
@@ -290,20 +123,20 @@ fn log_press(msg: u32, physical: PhysicalPoint, logical: LogicalPoint) {
 
 unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_SETCURSOR if u32::from(loword_u32(lp.0 as u32)) == HTCLIENT => {
+        WM_SETCURSOR if u32::from(input_logic::loword(lp.0 as u32)) == HTCLIENT => {
             let shape =
                 CursorShape::from_cef(STATE.lock().cursor_type).unwrap_or(CursorShape::Pointer);
             if shape == CursorShape::None {
                 unsafe { SetCursor(None) };
             } else {
-                let cur = unsafe { LoadCursorW(None, cef_cursor_to_win(shape)).ok() };
+                let cur = unsafe { LoadCursorW(None, input_logic::cursor_to_win(shape)).ok() };
                 unsafe { SetCursor(cur) };
             }
             return LRESULT(1);
         }
 
         WM_MOUSEMOVE => {
-            let p = view_point(get_x_lparam(lp), get_y_lparam(lp));
+            let p = view_point(input_logic::x_lparam(lp.0), input_logic::y_lparam(lp.0));
             jfn_input_dispatch_mouse_move(p.x, p.y, mouse_modifiers(wp), 0);
             return LRESULT(0);
         }
@@ -315,20 +148,20 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
 
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP
         | WM_MBUTTONUP => {
-            let down = is_button_down(msg);
+            let down = input_logic::is_button_down(msg);
             if down {
                 let _ = unsafe { SetFocus(Some(hwnd)) };
             }
             let physical = PhysicalPoint {
-                x: get_x_lparam(lp),
-                y: get_y_lparam(lp),
+                x: input_logic::x_lparam(lp.0),
+                y: input_logic::y_lparam(lp.0),
             };
             let p = view_point(physical.x, physical.y);
             if down {
                 log_press(msg, physical, p);
             }
             jfn_input_dispatch_mouse_button(
-                msg_to_button_code(msg),
+                input_logic::msg_to_button_code(msg),
                 if down { 1 } else { 0 },
                 p.x,
                 p.y,
@@ -338,35 +171,30 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
         }
 
         WM_XBUTTONDOWN | WM_XBUTTONUP => {
-            let btn = get_xbutton_wparam(wp);
-            if msg == WM_XBUTTONDOWN {
-                let fwd = if btn == XBUTTON2 { 1 } else { 0 };
+            let btn = input_logic::xbutton_wparam(wp.0);
+            if let Some(fwd) = input_logic::xbutton_nav(msg, btn) {
                 jfn_input_dispatch_history_nav(fwd);
             }
             return LRESULT(1);
         }
 
         WM_APPCOMMAND => {
-            let cmd = get_appcommand_lparam(lp) as u32;
-            if cmd == APPCOMMAND_BROWSER_BACKWARD.0 {
-                jfn_input_dispatch_history_nav(0);
-                return LRESULT(1);
-            }
-            if cmd == APPCOMMAND_BROWSER_FORWARD.0 {
-                jfn_input_dispatch_history_nav(1);
+            let cmd = u32::from(input_logic::appcommand_lparam(lp.0));
+            if let Some(fwd) = input_logic::appcommand_nav(cmd) {
+                jfn_input_dispatch_history_nav(fwd);
                 return LRESULT(1);
             }
         }
 
         WM_MOUSEWHEEL => {
             let mut pt = POINT {
-                x: get_x_lparam(lp),
-                y: get_y_lparam(lp),
+                x: input_logic::x_lparam(lp.0),
+                y: input_logic::y_lparam(lp.0),
             };
             unsafe {
                 let _ = ScreenToClient(hwnd, &mut pt);
             }
-            let delta = hiword_i16(wp.0 as u32) as i32;
+            let delta = i32::from(input_logic::hiword_i16(wp.0 as u32));
             let p = view_point(pt.x, pt.y);
             jfn_input_dispatch_scroll(p.x, p.y, 0, delta, mouse_modifiers(wp));
             return LRESULT(0);
@@ -374,13 +202,13 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
 
         WM_MOUSEHWHEEL => {
             let mut pt = POINT {
-                x: get_x_lparam(lp),
-                y: get_y_lparam(lp),
+                x: input_logic::x_lparam(lp.0),
+                y: input_logic::y_lparam(lp.0),
             };
             unsafe {
                 let _ = ScreenToClient(hwnd, &mut pt);
             }
-            let delta = hiword_i16(wp.0 as u32) as i32;
+            let delta = i32::from(input_logic::hiword_i16(wp.0 as u32));
             let p = view_point(pt.x, pt.y);
             jfn_input_dispatch_scroll(p.x, p.y, delta, 0, mouse_modifiers(wp));
             return LRESULT(0);
@@ -388,28 +216,20 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
 
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
             let vk = wp.0 as u16;
-            if vk == VK_F4.0 && msg == WM_SYSKEYDOWN && is_key_down(VK_MENU.0) {
-                jfn_shutdown_initiate();
-                return LRESULT(0);
+            match input_logic::key_action(msg, vk, is_key_down(VK_MENU.0)) {
+                KeyAction::Shutdown => jfn_shutdown_initiate(),
+                KeyAction::HistoryNav(Some(fwd)) => jfn_input_dispatch_history_nav(fwd),
+                KeyAction::HistoryNav(None) => {}
+                KeyAction::Dispatch { pressed, is_sys } => jfn_input_dispatch_key_full(
+                    if pressed { 1 } else { 0 },
+                    vk as i32,
+                    lp.0 as i32,
+                    keyboard_modifiers(wp, lp),
+                    0,
+                    0,
+                    if is_sys { 1 } else { 0 },
+                ),
             }
-            if vk == VK_BROWSER_BACK.0 || vk == VK_BROWSER_FORWARD.0 {
-                if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                    let fwd = if vk == VK_BROWSER_FORWARD.0 { 1 } else { 0 };
-                    jfn_input_dispatch_history_nav(fwd);
-                }
-                return LRESULT(0);
-            }
-            let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            let is_sys = msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
-            jfn_input_dispatch_key_full(
-                if pressed { 1 } else { 0 },
-                vk as i32,
-                lp.0 as i32,
-                keyboard_modifiers(wp, lp),
-                0,
-                0,
-                if is_sys { 1 } else { 0 },
-            );
             return LRESULT(0);
         }
 

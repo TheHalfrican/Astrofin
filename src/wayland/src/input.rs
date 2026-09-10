@@ -14,7 +14,6 @@ use std::ffi::{c_int, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use jfn_linux_util::menu::MenuPoint;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
@@ -35,23 +34,14 @@ use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_s
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use xkbcommon::xkb;
 
-use jfn_input::buttons::{
-    BTN_BACK, BTN_EXTRA, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE,
-};
-use jfn_platform_abi::event_flags::{
-    EVENTFLAG_ALT_DOWN, EVENTFLAG_CONTROL_DOWN, EVENTFLAG_LEFT_MOUSE_BUTTON,
-    EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_RIGHT_MOUSE_BUTTON, EVENTFLAG_SHIFT_DOWN,
-};
+use jfn_input::buttons::{BTN_LEFT, BTN_RIGHT};
 
+use crate::input_logic::{
+    axis_accumulate, cef_modifier_flags, history_nav_forward, is_context_menu_key,
+    mouse_button_flag, repeat_timings, scroll_steps,
+};
 use crate::runtime::WlRuntime;
 use jfn_platform_abi::cursor::CursorShape;
-
-const XK_MENU: u32 = 0xff67;
-const XK_F10: u32 = 0xffc7;
-
-fn is_context_menu_key(sym: u32, mods: u32) -> bool {
-    sym == XK_MENU || (sym == XK_F10 && mods & EVENTFLAG_SHIFT_DOWN != 0)
-}
 
 fn cef_to_cursor_icon(shape: CursorShape) -> CursorIcon {
     use CursorShape::*;
@@ -227,15 +217,6 @@ impl State {
         self.modifiers | self.mouse_button_modifiers
     }
 
-    fn mouse_button_flag(button: u32) -> Option<u32> {
-        match button {
-            BTN_LEFT => Some(EVENTFLAG_LEFT_MOUSE_BUTTON),
-            BTN_RIGHT => Some(EVENTFLAG_RIGHT_MOUSE_BUTTON),
-            BTN_MIDDLE => Some(EVENTFLAG_MIDDLE_MOUSE_BUTTON),
-            _ => None,
-        }
-    }
-
     fn key_repeats(&self, raw_code: u32) -> bool {
         self.xkb_kmap
             .as_ref()
@@ -259,17 +240,13 @@ impl State {
     }
 
     fn arm_repeat(&mut self, key: KeyEvent) {
-        if self.repeat_rate <= 0 {
+        let Some((delay, period)) = repeat_timings(self.repeat_rate, self.repeat_delay) else {
             self.disarm_repeat();
             return;
-        }
+        };
         self.disarm_repeat();
         self.repeat_key = Some(key);
         let generation = self.repeat_generation;
-        // A zero delay would fire the first repeat in the same breath as the
-        // press, so a reported delay/rate of 0 must not reach 0ms.
-        let period = Duration::from_millis(u64::from((1000u32 / self.repeat_rate as u32).max(1)));
-        let delay = Duration::from_millis(self.repeat_delay.max(1) as u64);
         let Some(handle) = self.loop_handle.clone() else {
             return;
         };
@@ -557,7 +534,7 @@ impl State {
                         .last_input_serial
                         .store(serial, Ordering::Release);
                 }
-                let flag = Self::mouse_button_flag(button);
+                let flag = mouse_button_flag(button);
                 if self.rt.menu().is_active() {
                     if pressed {
                         if let Some(flag) = flag {
@@ -603,16 +580,9 @@ impl State {
                     self.popup_swallowed_buttons &= !flag;
                     return;
                 }
-                if button == BTN_SIDE
-                    || button == BTN_EXTRA
-                    || button == BTN_BACK
-                    || button == BTN_FORWARD
-                {
-                    if pressed {
-                        let forward = button == BTN_EXTRA || button == BTN_FORWARD;
-                        if let Some(f) = self.cb.history_nav {
-                            f(if forward { 1 } else { 0 });
-                        }
+                if let Some(forward) = history_nav_forward(button) {
+                    if pressed && let Some(f) = self.cb.history_nav {
+                        f(if forward { 1 } else { 0 });
                     }
                     return;
                 }
@@ -651,16 +621,9 @@ impl State {
                 vertical,
                 ..
             } => {
-                if vertical.stop {
-                    self.scroll_dy = 0.0;
-                } else {
-                    self.scroll_dy += vertical.absolute;
-                }
-                if horizontal.stop {
-                    self.scroll_dx = 0.0;
-                } else {
-                    self.scroll_dx += horizontal.absolute;
-                }
+                self.scroll_dy = axis_accumulate(self.scroll_dy, vertical.stop, vertical.absolute);
+                self.scroll_dx =
+                    axis_accumulate(self.scroll_dx, horizontal.stop, horizontal.absolute);
                 if vertical.value120 != 0 || horizontal.value120 != 0 {
                     self.scroll_have_v120 = true;
                     self.scroll_v120_y += vertical.value120;
@@ -671,28 +634,21 @@ impl State {
     }
 
     fn flush_scroll(&mut self) {
-        let (mut dx, mut dy) = (0i32, 0i32);
-        if self.scroll_have_v120 {
-            dx = -self.scroll_v120_x;
-            dy = -self.scroll_v120_y;
-            self.scroll_dx = 0.0;
-            self.scroll_dy = 0.0;
-        } else if self.scroll_dx != 0.0 || self.scroll_dy != 0.0 {
-            let scaled_x = -self.scroll_dx * 12.0;
-            let scaled_y = -self.scroll_dy * 12.0;
-            dx = scaled_x as i32;
-            dy = scaled_y as i32;
-            // Carry the sub-step remainder into the next frame; zeroing it
-            // rounds slow continuous scrolling away to nothing.
-            self.scroll_dx = -(scaled_x - dx as f64) / 12.0;
-            self.scroll_dy = -(scaled_y - dy as f64) / 12.0;
-        } else {
-            self.scroll_dx = 0.0;
-            self.scroll_dy = 0.0;
-        }
+        let steps = scroll_steps(
+            self.scroll_have_v120,
+            self.scroll_v120_x,
+            self.scroll_v120_y,
+            self.scroll_dx,
+            self.scroll_dy,
+        );
+        // The remainder rides into the next frame; zeroing it rounds slow
+        // continuous scrolling away to nothing.
+        self.scroll_dx = steps.carry_x;
+        self.scroll_dy = steps.carry_y;
         self.scroll_v120_x = 0;
         self.scroll_v120_y = 0;
         self.scroll_have_v120 = false;
+        let (dx, dy) = (steps.dx, steps.dy);
         if dx == 0 && dy == 0 {
             return;
         }
@@ -845,17 +801,7 @@ impl KeyboardHandler for State {
         _: RawModifiers,
         _: u32,
     ) {
-        let mut m = 0u32;
-        if modifiers.shift {
-            m |= EVENTFLAG_SHIFT_DOWN;
-        }
-        if modifiers.ctrl {
-            m |= EVENTFLAG_CONTROL_DOWN;
-        }
-        if modifiers.alt {
-            m |= EVENTFLAG_ALT_DOWN;
-        }
-        self.modifiers = m;
+        self.modifiers = cef_modifier_flags(modifiers.shift, modifiers.ctrl, modifiers.alt);
     }
 
     fn update_repeat_info(
@@ -1054,5 +1000,80 @@ impl InputThread {
         if let Some(w) = self.worker.lock().take() {
             let _ = w.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_arrow_maps_to_the_themes_default_cursor() {
+        assert_eq!(
+            cef_to_cursor_icon(CursorShape::Pointer),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn each_named_shape_maps_to_its_css_counterpart() {
+        // CEF's names are Blink's; the cursor-icon crate's are CSS's, so the
+        // table is the only place the two vocabularies meet.
+        assert_eq!(cef_to_cursor_icon(CursorShape::Hand), CursorIcon::Pointer);
+        assert_eq!(cef_to_cursor_icon(CursorShape::IBeam), CursorIcon::Text);
+        assert_eq!(
+            cef_to_cursor_icon(CursorShape::Cross),
+            CursorIcon::Crosshair
+        );
+        assert_eq!(
+            cef_to_cursor_icon(CursorShape::ColumnResize),
+            CursorIcon::ColResize
+        );
+    }
+
+    #[test]
+    fn every_resize_shape_maps_to_a_distinct_resize_cursor() {
+        let resizes = [
+            cef_to_cursor_icon(CursorShape::EastResize),
+            cef_to_cursor_icon(CursorShape::NorthResize),
+            cef_to_cursor_icon(CursorShape::NorthEastResize),
+            cef_to_cursor_icon(CursorShape::NorthWestResize),
+            cef_to_cursor_icon(CursorShape::SouthResize),
+            cef_to_cursor_icon(CursorShape::SouthEastResize),
+            cef_to_cursor_icon(CursorShape::SouthWestResize),
+            cef_to_cursor_icon(CursorShape::WestResize),
+            cef_to_cursor_icon(CursorShape::NorthSouthResize),
+            cef_to_cursor_icon(CursorShape::EastWestResize),
+            cef_to_cursor_icon(CursorShape::NorthEastSouthWestResize),
+            cef_to_cursor_icon(CursorShape::NorthWestSouthEastResize),
+        ];
+        for (i, a) in resizes.iter().enumerate() {
+            assert_ne!(*a, CursorIcon::Default, "resize shape {i} fell through");
+            for b in &resizes[i + 1..] {
+                assert_ne!(a, b, "two resize shapes collapsed onto {a:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn all_three_middle_panning_shapes_share_the_scroll_cursor() {
+        for shape in [
+            CursorShape::MiddlePanning,
+            CursorShape::MiddlePanningVertical,
+            CursorShape::MiddlePanningHorizontal,
+        ] {
+            assert_eq!(cef_to_cursor_icon(shape), CursorIcon::AllScroll);
+        }
+    }
+
+    #[test]
+    fn an_unmapped_shape_falls_back_to_the_default_cursor() {
+        // The directional panning cursors have no CSS equivalent, and `None`
+        // is handled by hiding the pointer rather than by this table.
+        assert_eq!(
+            cef_to_cursor_icon(CursorShape::EastPanning),
+            CursorIcon::Default
+        );
+        assert_eq!(cef_to_cursor_icon(CursorShape::None), CursorIcon::Default);
     }
 }

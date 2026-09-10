@@ -6,22 +6,25 @@ use std::sync::atomic::Ordering;
 
 use jfn_playback::shutdown::jfn_shutting_down;
 
+use crate::client_logic::after_created;
+
 use super::{Inner, STATE_NORMAL, STATE_PENDING_RESET, STATE_RECREATING, platform_ops, tasks};
 
 impl Inner {
-    fn on_after_created(&self) -> i32 {
+    /// True when the browser that just arrived has to be closed again rather
+    /// than published — see [`after_created`].
+    fn on_after_created(&self) -> bool {
         self.has_browser.store(true, Ordering::Release);
-        match self.state.load(Ordering::Acquire) {
-            STATE_PENDING_RESET => {
-                self.state.store(STATE_RECREATING, Ordering::Release);
-                1
-            }
-            STATE_RECREATING => {
-                self.state.store(STATE_NORMAL, Ordering::Release);
-                0
-            }
-            _ => 0,
+        let action = after_created(
+            self.state.load(Ordering::Acquire),
+            STATE_NORMAL,
+            STATE_PENDING_RESET,
+            STATE_RECREATING,
+        );
+        if let Some(next) = action.next_state {
+            self.state.store(next, Ordering::Release);
         }
+        action.close_again
     }
 
     fn on_before_close(self: &Arc<Self>) {
@@ -100,8 +103,7 @@ impl Inner {
             }
         });
 
-        let action = self.on_after_created();
-        if action == 1 {
+        if self.on_after_created() {
             if let Some(h) = browser.host() {
                 h.close_browser(1);
             }

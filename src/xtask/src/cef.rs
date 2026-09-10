@@ -1,4 +1,4 @@
-use crate::{paths, version};
+use crate::{naming, paths, version};
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::{Path, PathBuf};
 
@@ -13,9 +13,7 @@ fn resolve(root: &Path) -> Result<(PathBuf, PathBuf)> {
     let target = download_cef::DEFAULT_TARGET;
     let cef_version = download_cef::default_version(&version::cef_package_version()?);
     let os_arch = download_cef::OsAndArch::try_from(target).map_err(|e| anyhow!("{e}"))?;
-    let versioned = root.join(&cef_version);
-    let cef_dir = versioned.join(os_arch.to_string());
-    Ok((versioned, cef_dir))
+    Ok(naming::cef_layout(root, &cef_version, &os_arch.to_string()))
 }
 
 pub fn ensure(root: &Path) -> Result<PathBuf> {
@@ -94,7 +92,7 @@ pub fn sdk_proxy(real_dir: &Path) -> Result<(tempfile::TempDir, PathBuf)> {
     let cef_version = download_cef::default_version(&version::cef_package_version()?);
     std::fs::write(
         proxy.join("archive.json"),
-        format!(r#"{{"type":"minimal","name":"cef_binary_{cef_version}","sha1":""}}"#),
+        naming::cef_proxy_archive_json(&cef_version),
     )?;
 
     Ok((tmp, proxy))

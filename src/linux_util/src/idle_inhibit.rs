@@ -72,3 +72,27 @@ pub fn cleanup() {
     state.fd = None;
     state.bus = None;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_level_inhibits_sleep_only() {
+        assert_eq!(what_for(LEVEL_SYSTEM), Some("sleep"));
+    }
+
+    #[test]
+    fn the_display_level_inhibits_idle_as_well_as_sleep() {
+        assert_eq!(what_for(LEVEL_DISPLAY), Some("idle:sleep"));
+    }
+
+    #[test]
+    fn every_other_level_inhibits_nothing() {
+        // Level 0 is "none", which is how `set` is told to release the
+        // inhibitor; anything unrecognised is treated the same way.
+        assert_eq!(what_for(0), None);
+        assert_eq!(what_for(3), None);
+        assert_eq!(what_for(u32::MAX), None);
+    }
+}

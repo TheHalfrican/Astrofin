@@ -5,28 +5,10 @@ use cef::{
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::platform_ops::{MenuDelivery, MenuItem, MenuRequest, MenuSelection};
+use crate::client_logic::{PopupReplay, VK_ESCAPE, VK_RETURN, options_as_items, popup_replay};
+use crate::platform_ops::{MenuDelivery, MenuRequest, MenuSelection};
 
 use super::{Inner, PopupState};
-
-fn options_as_items(options: &[String]) -> Vec<MenuItem> {
-    options
-        .iter()
-        .enumerate()
-        .map(|(i, label)| MenuItem {
-            id: i as i32,
-            label: label.clone(),
-            enabled: true,
-            separator: false,
-        })
-        .collect()
-}
-
-// Windows virtual-key codes CEF expects in KeyEvent::windows_key_code.
-const VK_RETURN: i32 = 0x0D;
-const VK_ESCAPE: i32 = 0x1B;
-const VK_UP: i32 = 0x26;
-const VK_DOWN: i32 = 0x28;
 
 impl Inner {
     fn reset_popup_state(p: &mut PopupState) {
@@ -199,27 +181,15 @@ impl Inner {
             host.send_key_event(Some(&up));
         };
 
-        if idx < 0 {
-            send_key(VK_ESCAPE);
-            return;
+        match popup_replay(idx, current, selectable) {
+            PopupReplay::Cancel => send_key(VK_ESCAPE),
+            PopupReplay::Pick { key, repeats } => {
+                for _ in 0..repeats {
+                    send_key(key);
+                }
+                send_key(VK_RETURN);
+            }
         }
-
-        // Arrow stepping is in selectable-option space (Blink skips disabled
-        // rows), so map both the popup's current highlight and the target into
-        // that space and step by the difference.
-        let pos = |opt: i32| selectable.iter().position(|&v| v == opt);
-        let from = pos(current).unwrap_or(0) as i32;
-        let Some(to) = pos(idx) else {
-            // Target isn't selectable (shouldn't happen) — just cancel cleanly.
-            send_key(VK_ESCAPE);
-            return;
-        };
-        let delta = to as i32 - from;
-        let step = if delta >= 0 { VK_DOWN } else { VK_UP };
-        for _ in 0..delta.abs() {
-            send_key(step);
-        }
-        send_key(VK_RETURN);
     }
 }
 

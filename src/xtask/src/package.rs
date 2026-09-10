@@ -1,3 +1,4 @@
+use crate::naming::{self, HOST_OS};
 use crate::{PackageArgs, install, version};
 use anyhow::{Context, Result};
 use flate2::Compression;
@@ -6,28 +7,6 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Seek, Write};
 use std::path::Path;
 
-struct Target {
-    os_slug: &'static str,
-    ext: &'static str,
-}
-
-const TARGET: Target = if cfg!(target_os = "windows") {
-    Target {
-        os_slug: "windows",
-        ext: "zip",
-    }
-} else if cfg!(target_os = "macos") {
-    Target {
-        os_slug: "macos",
-        ext: "zip",
-    }
-} else {
-    Target {
-        os_slug: "linux",
-        ext: "tar.gz",
-    }
-};
-
 pub fn run(args: &PackageArgs) -> Result<()> {
     let ver = version::read()?;
     let dist = std::path::absolute(&args.dist)?;
@@ -35,9 +14,11 @@ pub fn run(args: &PackageArgs) -> Result<()> {
 
     let prefix = install::run(&args.install)?;
 
-    let arch = current_arch();
-    let name = format!("Astrofin-{}-{}-{}", ver.full, TARGET.os_slug, arch);
-    let out = dist.join(format!("{name}.{}", TARGET.ext));
+    let out = dist.join(naming::archive_file_name(
+        &ver.full,
+        HOST_OS,
+        std::env::consts::ARCH,
+    ));
     let _ = std::fs::remove_file(&out);
     write_archive(&prefix, &out)?;
     println!("Wrote {}", out.display());
@@ -61,24 +42,6 @@ fn write_archive(prefix: &Path, out: &Path) -> Result<()> {
         zip_dir(prefix, out)
     } else {
         tar_gz_dir(prefix, out)
-    }
-}
-
-fn current_arch() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        if cfg!(target_os = "windows") {
-            "arm64"
-        } else {
-            "aarch64"
-        }
-    } else if cfg!(target_arch = "x86_64") {
-        if cfg!(target_os = "windows") {
-            "x64"
-        } else {
-            "x86_64"
-        }
-    } else {
-        std::env::consts::ARCH
     }
 }
 

@@ -94,3 +94,26 @@ impl Frame<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_frame_is_in_shared_mode() {
+        let tex = crate::shared_texture::test_texture();
+        assert_eq!(Frame::Shared(&tex).mode(), PaintMode::Shared);
+    }
+
+    #[test]
+    fn a_cpu_frame_is_in_copied_mode() {
+        let pixels = [0u8; 4];
+        let frame = Frame::Copied(Pixels {
+            size: FrameSize { w: 1, h: 1 },
+            stride: 4,
+            bgra: &pixels,
+            dirty: &[],
+        });
+        assert_eq!(frame.mode(), PaintMode::Copied);
+    }
+}

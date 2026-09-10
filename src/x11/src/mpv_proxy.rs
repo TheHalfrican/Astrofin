@@ -34,6 +34,9 @@
 //!   top-level, fullscreen `SendEvent` client messages), so fullscreen flows
 //!   only through the app's toplevel path.
 //!
+//! The address, framing and auth-file arithmetic all of this rests on lives in
+//! [`crate::mpv_proxy_logic`].
+//!
 //! Server→client ([`EventFramer`]) — coalescing: drop a video-host
 //! `ConfigureNotify` whose size differs from the geometry the app last
 //! published ([`publish_host_geometry`]). Every reconcile publishes and then
@@ -60,9 +63,7 @@ use nix::sys::socket::{
 use parking_lot::Mutex;
 use x11rb::connection::Connection as _;
 use x11rb::reexports::x11rb_protocol::errors::ParseError;
-use x11rb::reexports::x11rb_protocol::parse_display::{
-    ConnectAddress, ParsedDisplay, parse_display,
-};
+use x11rb::reexports::x11rb_protocol::parse_display::parse_display;
 use x11rb::reexports::x11rb_protocol::protocol::xfixes::{
     HIDE_CURSOR_REQUEST, SHOW_CURSOR_REQUEST,
 };
@@ -70,13 +71,18 @@ use x11rb::reexports::x11rb_protocol::protocol::xproto::{
     CHANGE_PROPERTY_REQUEST, CHANGE_WINDOW_ATTRIBUTES_REQUEST, CIRCULATE_WINDOW_REQUEST,
     CLIENT_MESSAGE_EVENT, CONFIGURE_NOTIFY_EVENT, CONFIGURE_WINDOW_REQUEST, CREATE_WINDOW_REQUEST,
     ChangePropertyRequest, ChangeWindowAttributesRequest, ConfigureNotifyEvent,
-    ConfigureWindowRequest, CreateWindowRequest, GE_GENERIC_EVENT, NO_OPERATION_REQUEST,
-    SEND_EVENT_REQUEST, SET_INPUT_FOCUS_REQUEST, SendEventRequest, SetupRequest,
+    ConfigureWindowRequest, CreateWindowRequest, GE_GENERIC_EVENT, SEND_EVENT_REQUEST,
+    SET_INPUT_FOCUS_REQUEST, SendEventRequest, SetupRequest,
 };
 use x11rb::reexports::x11rb_protocol::x11_utils::{
     BigRequests, RequestHeader, TryParse, parse_request_header,
 };
 use x11rb::reexports::x11rb_protocol::xauth::{Family, get_auth};
+
+use crate::mpv_proxy_logic::{
+    DISPLAY_NUMBERS, UpstreamAddr, emit_noop, native_byte_order, proxy_display, request_total_len,
+    setup_reply_len, unit_total_len, upstream_addresses, write_xauth_entry, x_socket_name,
+};
 
 /// The kernel caps `SCM_RIGHTS` at this many fds per message; a cmsg buffer
 /// sized for it can never truncate fds.
@@ -85,13 +91,6 @@ const CHUNK: usize = 64 * 1024;
 /// `FamilyLocal` in the `.Xauthority` on-wire format (a `u16`, unlike the
 /// core-protocol `Family` which is a `u8`).
 const FAMILY_LOCAL: u16 = 256;
-
-#[derive(Clone)]
-enum UpstreamAddr {
-    Abstract(u16),
-    Path(String),
-    Tcp(String, u16),
-}
 
 /// Which server `DISPLAY`/`XAUTHORITY` currently point at. The proxy repoints
 /// the environment to itself only for mpv's connect; app connections made in
@@ -261,11 +260,7 @@ pub fn start() -> bool {
         return false;
     };
 
-    let new_display = if parsed.screen == 0 {
-        format!(":{number}")
-    } else {
-        format!(":{number}.{}", parsed.screen)
-    };
+    let new_display = proxy_display(number, parsed.screen);
     unsafe { std::env::set_var("DISPLAY", &new_display) };
     if let Some(p) = &xauth_temp {
         unsafe { std::env::set_var("XAUTHORITY", p) };
@@ -340,8 +335,8 @@ struct BoundListeners {
 /// Find a display number free on both the abstract and filesystem X sockets and
 /// bind both, so libxcb (abstract-first on Linux) and legacy path clients agree.
 fn bind_listeners() -> Option<BoundListeners> {
-    for number in 64u32..1024 {
-        let name = format!("/tmp/.X11-unix/X{number}");
+    for number in DISPLAY_NUMBERS {
+        let name = x_socket_name(number);
         let Ok(addr) = SocketAddr::from_abstract_name(name.as_bytes()) else {
             continue;
         };
@@ -440,36 +435,12 @@ fn handle_conn(client: UnixStream, upstream: Vec<UpstreamAddr>, roots: Arc<[u32]
     });
 }
 
-/// Build the ordered upstream-address candidates from a parsed `DISPLAY`,
-/// reusing x11rb's resolution and prepending the Linux abstract socket (which
-/// x11rb does not try) for local servers.
-fn upstream_addresses(parsed: &ParsedDisplay) -> Vec<UpstreamAddr> {
-    let candidates: Vec<ConnectAddress<'_>> = parsed.connect_instruction().collect();
-    let mut addrs = Vec::new();
-    if candidates
-        .iter()
-        .any(|c| matches!(c, ConnectAddress::Socket(_)))
-    {
-        addrs.push(UpstreamAddr::Abstract(parsed.display));
-    }
-    for c in candidates {
-        match c {
-            ConnectAddress::Socket(path) => addrs.push(UpstreamAddr::Path(path)),
-            ConnectAddress::Hostname(host, port) => {
-                addrs.push(UpstreamAddr::Tcp(host.to_string(), port));
-            }
-            _ => {}
-        }
-    }
-    addrs
-}
-
 fn connect_upstream(upstream: &[UpstreamAddr]) -> io::Result<OwnedFd> {
     let mut last = None;
     for addr in upstream {
         let result = match addr {
             UpstreamAddr::Abstract(number) => {
-                let name = format!("/tmp/.X11-unix/X{number}");
+                let name = x_socket_name(u32::from(*number));
                 SocketAddr::from_abstract_name(name.as_bytes())
                     .and_then(|a| UnixStream::connect_addr(&a))
                     .map(OwnedFd::from)
@@ -573,18 +544,6 @@ fn pump_replies(from: RawFd, to: RawFd, blind: Arc<AtomicBool>) {
     let _ = shutdown(to, Shutdown::Both);
 }
 
-/// Ceiling on a single request's or reply's byte length; past it we assume a
-/// parse desync and fall back to a verbatim relay rather than buffer unbounded.
-const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
-
-/// Same-length rewrite to `NoOperation`, which accepts any request length and
-/// has no reply, so sequence numbers stay intact.
-fn emit_noop(raw: &[u8], out: &mut Vec<u8>) {
-    let start = out.len();
-    out.extend_from_slice(raw);
-    out[start] = NO_OPERATION_REQUEST;
-}
-
 struct ReqParser<'a> {
     setup_done: bool,
     /// Root window IDs of the real server, one per screen.
@@ -629,12 +588,7 @@ impl<'a> ReqParser<'a> {
         let mut off = 0;
         if !self.setup_done {
             // x11rb-protocol silently misparses non-native byte order.
-            let native = if cfg!(target_endian = "little") {
-                b'l'
-            } else {
-                b'B'
-            };
-            if input.first() != Some(&native) {
+            if input.first() != Some(&native_byte_order()) {
                 self.go_blind();
                 out.extend_from_slice(input);
                 return input.len();
@@ -669,11 +623,7 @@ impl<'a> ReqParser<'a> {
                 }
             };
             let header_len = avail.len() - body.len();
-            let Some(total) = (header.remaining_length as usize)
-                .checked_mul(4)
-                .map(|b| b + header_len)
-                .filter(|&t| t <= MAX_REQUEST_BYTES)
-            else {
+            let Some(total) = request_total_len(header.remaining_length, header_len) else {
                 self.go_blind();
                 out.extend_from_slice(avail);
                 return input.len();
@@ -836,15 +786,12 @@ impl<'a> EventFramer<'a> {
             if input.len() < 8 {
                 return 0;
             }
-            // Setup replies (failed=0, success=1, authenticate=2) all carry an
-            // additional-data length in 4-byte units at offset 6.
-            if input[0] > 2 {
+            let words = u16::from_ne_bytes([input[6], input[7]]);
+            let Some(total) = setup_reply_len(input[0], words) else {
                 self.go_blind();
                 out.extend_from_slice(input);
                 return input.len();
-            }
-            let words = u16::from_ne_bytes([input[6], input[7]]) as usize;
-            let total = 8 + 4 * words;
+            };
             if input.len() < total {
                 return 0;
             }
@@ -862,12 +809,8 @@ impl<'a> EventFramer<'a> {
             // Replies (byte 0 == 1) and GenericEvents carry extra length in
             // 4-byte units at offset 4; errors and core events are 32 bytes.
             let total = if avail[0] == 1 || code == GE_GENERIC_EVENT {
-                let words = u32::from_ne_bytes([avail[4], avail[5], avail[6], avail[7]]) as usize;
-                let Some(total) = words
-                    .checked_mul(4)
-                    .map(|b| b + 32)
-                    .filter(|&t| t <= MAX_REQUEST_BYTES)
-                else {
+                let words = u32::from_ne_bytes([avail[4], avail[5], avail[6], avail[7]]);
+                let Some(total) = unit_total_len(words) else {
                     self.go_blind();
                     out.extend_from_slice(avail);
                     return input.len();
@@ -998,31 +941,12 @@ fn provision_auth(display: u16, proxy_number: u32) -> io::Result<Option<PathBuf>
     Ok(Some(path))
 }
 
-fn write_xauth_entry(
-    out: &mut Vec<u8>,
-    family: u16,
-    address: &[u8],
-    number: &[u8],
-    name: &[u8],
-    data: &[u8],
-) {
-    fn block(out: &mut Vec<u8>, b: &[u8]) {
-        out.extend_from_slice(&(b.len() as u16).to_be_bytes());
-        out.extend_from_slice(b);
-    }
-    out.extend_from_slice(&family.to_be_bytes());
-    block(out, address);
-    block(out, number);
-    block(out, name);
-    block(out, data);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use x11rb::reexports::x11rb_protocol::protocol::xproto::{
         ChangeWindowAttributesAux, Circulate, CirculateWindowRequest, ConfigureWindowAux,
-        CreateWindowAux, EventMask, PropMode, WindowClass,
+        CreateWindowAux, EventMask, NO_OPERATION_REQUEST, PropMode, WindowClass,
     };
     use x11rb::reexports::x11rb_protocol::x11_utils::Serialize;
 

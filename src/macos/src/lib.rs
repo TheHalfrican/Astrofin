@@ -15,7 +15,7 @@ use objc2_io_kit::{
     kIOReturnSuccess,
 };
 
-use jfn_platform_abi::geometry::{Bounds, clamp_to_bounds};
+use jfn_platform_abi::geometry::clamp_to_bounds;
 pub use jfn_platform_abi::{DisplayBackend, JfnRect, PaintFrame, Platform, WindowDecorations};
 
 // =====================================================================
@@ -67,11 +67,10 @@ pub fn macos_set_idle_inhibit(level: c_int) {
 
     // Levels: None=0, System=1, Display=2. kIOPMAssertionTypePrevent* are
     // CFSTR() macros with no linker symbol, so build the CFStrings here.
-    let assertion_type = match level {
-        2 => CFString::from_str("PreventUserIdleDisplaySleep"),
-        1 => CFString::from_str("PreventUserIdleSystemSleep"),
-        _ => return,
+    let Some(assertion_type) = window_logic::idle_assertion_type(level) else {
+        return;
     };
+    let assertion_type = CFString::from_str(assertion_type);
     let name = CFString::from_str("Astrofin media playback");
 
     let mut id: IOPMAssertionID = K_IOPM_NULL_ASSERTION_ID;
@@ -129,10 +128,9 @@ pub fn macos_query_window_position(x: &mut c_int, y: &mut c_int) -> bool {
         let frame: objc2_foundation::NSRect = objc2::msg_send![win, frame];
         let visible: objc2_foundation::NSRect = objc2::msg_send![screen, visibleFrame];
         let scale: f64 = objc2::msg_send![screen, backingScaleFactor];
-        let lx = frame.origin.x - visible.origin.x;
-        let ly = (visible.origin.y + visible.size.height) - (frame.origin.y + frame.size.height);
-        *x = (lx * scale) as c_int;
-        *y = (ly * scale) as c_int;
+        let pos = window_logic::window_position_in_backing(frame, visible, scale);
+        *x = pos.x;
+        *y = pos.y;
         true
     }
 }
@@ -177,10 +175,11 @@ pub fn macos_clamp_window_geometry(w: &mut c_int, h: &mut c_int, x: &mut c_int, 
     };
     let visible = screen.visibleFrame();
     let scale = screen.backingScaleFactor();
-    let vw = (visible.size.width * scale) as c_int;
-    let vh = (visible.size.height * scale) as c_int;
     let mut g = WindowGeometry::from_raw(*w, *h, *x, *y);
-    clamp_to_bounds(&mut g, Bounds { w: vw, h: vh });
+    clamp_to_bounds(
+        &mut g,
+        window_logic::visible_bounds_in_backing(visible, scale),
+    );
     *w = g.w;
     *h = g.h;
     let (nx, ny) = g.raw_position();
@@ -417,13 +416,16 @@ pub fn macos_open_external_url(url: &str) {
 mod cef_host;
 mod cef_pump;
 mod compositor;
+mod compositor_logic;
 mod dispatch;
 mod file_dialog;
 mod init;
 mod input;
+mod input_logic;
 mod menu;
 mod mpv_host;
 mod ns_menu;
+mod window_logic;
 use compositor::{
     macos_alloc_surface, macos_free_surface, macos_restack, macos_set_expected_size,
     macos_surface_present, macos_surface_present_software, macos_surface_resize,
@@ -537,12 +539,8 @@ impl Platform for MacosPlatform {
         let exe = std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .unwrap_or_default();
-        let app_contents = exe.parent().and_then(|p| p.parent()).unwrap_or(&exe);
-        let framework = app_contents
-            .join("Frameworks")
-            .join("Chromium Embedded Framework.framework");
         jfn_platform_abi::CefPaths {
-            framework_dir_path: Some(framework),
+            framework_dir_path: Some(window_logic::cef_framework_dir(&exe)),
             browser_subprocess_path: Some(exe),
             ..Default::default()
         }

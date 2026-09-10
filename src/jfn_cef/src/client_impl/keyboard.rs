@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crate::client::Inner;
 use crate::client_impl::os_ffi::OsKeyEvent;
-use jfn_platform_abi::event_flags::{EVENTFLAG_ALT_DOWN, EVENTFLAG_CONTROL_DOWN};
+use crate::client_logic;
+use jfn_platform_abi::event_flags::EVENTFLAG_CONTROL_DOWN;
 
 fn action_modifier() -> u32 {
     jfn_platform_abi::try_get()
@@ -17,13 +18,7 @@ fn is_paste_shortcut(e: &KeyEvent) -> bool {
     if kt != sys::cef_key_event_type_t::KEYEVENT_RAWKEYDOWN {
         return false;
     }
-    if (e.modifiers & action_modifier()) == 0 {
-        return false;
-    }
-    if (e.modifiers & EVENTFLAG_ALT_DOWN) != 0 {
-        return false;
-    }
-    e.windows_key_code == b'V' as i32
+    client_logic::is_paste_shortcut(true, e.modifiers, e.windows_key_code, action_modifier())
 }
 
 wrap_keyboard_handler! {

@@ -45,3 +45,40 @@ impl<E: Into<Kind>> From<E> for SurfaceLost {
         Self(e.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kind_becomes_a_surface_lost_that_displays_its_detail() {
+        let lost: SurfaceLost = Kind::NoAdapter.into();
+        assert_eq!(lost.to_string(), "no usable adapter available");
+    }
+
+    #[test]
+    fn the_dimension_error_names_the_frame_it_refused() {
+        let lost: SurfaceLost = Kind::BadDimensions(FrameSize { w: 0, h: 720 }).into();
+        assert_eq!(lost.to_string(), "invalid frame dimensions: 0x720");
+    }
+
+    #[test]
+    fn the_buffer_error_names_the_size_stride_and_length() {
+        let lost: SurfaceLost = Kind::BadPixelBuffer {
+            size: FrameSize { w: 4, h: 4 },
+            stride: 16,
+            len: 12,
+        }
+        .into();
+        assert_eq!(
+            lost.to_string(),
+            "frame buffer does not cover 4x4 at stride 16: 12 bytes"
+        );
+    }
+
+    #[test]
+    fn an_acquire_failure_carries_the_reason_through() {
+        let lost: SurfaceLost = Kind::Acquire("Outdated").into();
+        assert_eq!(lost.to_string(), "swapchain acquire failed: Outdated");
+    }
+}

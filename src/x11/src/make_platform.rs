@@ -1,10 +1,13 @@
-//! X11 backend impl of [`jfn_platform_abi::Platform`].
+//! X11 backend impl of [`jfn_platform_abi::Platform`]. The decisions it makes
+//! before touching the server live in [`crate::make_platform_logic`].
 
 #![allow(non_snake_case)]
 
 use std::ffi::{c_int, c_void};
 
+use crate::make_platform_logic::resolve_decorations;
 use crate::registry::SurfaceId;
+use crate::scale_logic::positive_scale_or_one;
 use crate::surface;
 
 use jfn_platform_abi::cursor::CursorShape;
@@ -28,10 +31,7 @@ impl Platform for X11Platform {
         &self,
         configured: Option<WindowDecorations>,
     ) -> WindowDecorations {
-        match configured.unwrap_or_else(|| self.default_window_decorations()) {
-            WindowDecorations::Csd => WindowDecorations::Server,
-            other => other,
-        }
+        resolve_decorations(configured, || self.default_window_decorations())
     }
 
     fn init(&self, _mpv: *mut c_void) -> bool {
@@ -145,8 +145,7 @@ impl Platform for X11Platform {
     fn get_scale(&self) -> f32 {
         // App-owned scale (Xft.dpi probe), seeded at host-window creation and
         // refreshed by the geometry thread on RESOURCE_MANAGER changes.
-        let scale = crate::x11_state::parent_snapshot().scale;
-        if scale > 0.0 { scale } else { 1.0 }
+        positive_scale_or_one(crate::x11_state::parent_snapshot().scale)
     }
 
     // The app owns the toplevel and the display scale; mpv's

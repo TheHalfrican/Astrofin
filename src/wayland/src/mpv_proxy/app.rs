@@ -407,10 +407,24 @@ fn ensure_root(ctx: &AppCtx) {
     }
 }
 
+/// Whether mpv's surface can be spliced under the host root yet: the registry
+/// roundtrip must have finished, the host's toplevel must exist, and the
+/// splice must not already have happened — it is done once and never redone.
+fn ready_to_splice(globals_ready: bool, spliced: bool, have_host_root: bool) -> bool {
+    globals_ready && !spliced && have_host_root
+}
+
+/// Whether the roundtrip found every global the splice needs. Missing any one
+/// of them means the video layer can never be parented, which is worth saying
+/// once rather than failing silently on every tick.
+fn splice_globals_complete(compositor: bool, subcompositor: bool, wm_base: bool) -> bool {
+    compositor && subcompositor && wm_base
+}
+
 fn maybe_build_root(ctx: &AppCtx) {
     let (ready, spliced, have_host_root) =
         ctx.with_shell(|sh| (sh.globals_ready, sh.spliced, sh.host_root_surface.is_some()));
-    if !ready || spliced || !have_host_root {
+    if !ready_to_splice(ready, spliced, have_host_root) {
         return;
     }
     if let Some(mpv) = find_mpv_surface(ctx) {
@@ -547,7 +561,11 @@ impl WlCallbackHandler for RoundtripCb {
     fn handle_done(&mut self, _slf: &Rc<WlCallback>, _data: u32) {
         let ok = self.ctx.with_shell(|sh| {
             sh.globals_ready = true;
-            sh.compositor.is_some() && sh.subcompositor.is_some() && sh.wm_base.is_some()
+            splice_globals_complete(
+                sh.compositor.is_some(),
+                sh.subcompositor.is_some(),
+                sh.wm_base.is_some(),
+            )
         });
         if !ok {
             eprintln!(
@@ -568,5 +586,41 @@ impl WlSurfaceHandler for ChildPresentH {
     fn handle_commit(&mut self, slf: &Rc<WlSurface>) {
         log_send("wl_surface.commit", slf.try_send_commit());
         self.rt.root().request_present();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ready_to_splice, splice_globals_complete};
+
+    #[test]
+    fn the_splice_runs_once_everything_it_needs_exists() {
+        assert!(ready_to_splice(true, false, true));
+    }
+
+    #[test]
+    fn an_already_spliced_video_layer_is_never_respliced() {
+        assert!(!ready_to_splice(true, true, true));
+    }
+
+    #[test]
+    fn the_splice_waits_for_the_registry_roundtrip() {
+        assert!(!ready_to_splice(false, false, true));
+    }
+
+    #[test]
+    fn the_splice_waits_for_the_host_toplevel() {
+        // mpv can connect before the app has created its own toplevel; there
+        // is nothing to parent under until it has.
+        assert!(!ready_to_splice(true, false, false));
+    }
+
+    #[test]
+    fn every_splice_global_is_required() {
+        assert!(splice_globals_complete(true, true, true));
+        assert!(!splice_globals_complete(false, true, true));
+        assert!(!splice_globals_complete(true, false, true));
+        assert!(!splice_globals_complete(true, true, false));
+        assert!(!splice_globals_complete(false, false, false));
     }
 }

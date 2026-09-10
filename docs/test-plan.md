@@ -1,6 +1,6 @@
 # Test-suite plan
 
-Status: phases 0-4 done 2026-09-09; phase 5 (platform glue) in progress. Owner decisions are recorded in §1;
+Status: phases 0-5 done 2026-09-09. Owner decisions are recorded in §1;
 agents executing a phase read §3 for the working rules and §4 for the phase
 they are on. Update the status line and the phase table as work lands.
 
@@ -55,8 +55,14 @@ module comment of `src/xtask/src/test_ratio.rs`. The exemption file format
 Baseline before this plan (survey 2026-09-09): 241 Rust source files, 52 with
 a test, 503 test functions; 20 JS files, 4 with a test, 113 test cases. As the
 tool measures it (2026-09-09, 133 files exempt): **514 tests / 713 public
-functions = 0.72** over 136 files, which is the floor in
+functions = 0.72** over 136 files, which was the first floor in
 `dev/test-ratio-floor.txt`.
+
+After phase 5 (2026-09-09, 112 files exempt): **2485 tests / 1116 public
+functions = 2.23** over 188 files; the floor is 2.20. The headline number is
+*lower* than phase 3's 2.32 even though phase 5 added ~560 tests, because
+phase 5 also pulled 24 platform files out of the exemption list and their
+~290 public functions now count. No non-exempt file is below 1.0.
 
 ## 3. Working rules for every phase
 
@@ -88,7 +94,7 @@ functions = 0.72** over 136 files, which is the floor in
 | 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend` | done 2026-09-09: every non-exempt Rust file at or above 1.0 |
 | 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | done 2026-09-09: 20 JS files all tested, 605 JS cases, total ratio 2.32 |
 | 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | done 2026-09-09: 10 scenarios in ~20 s, muted by default, CI job manual-only (`docs/e2e.md`) |
-| 5 | Platform glue: pure extractions in `windows`, `macos`, `wayland`, `x11`, `gpu_paint`, `jfn_cef`; finalise exemptions | `test/phase-5-platform` | planned |
+| 5 | Platform glue: pure extractions in `windows`, `macos`, `wayland`, `x11`, `gpu_paint`, `jfn_cef`; finalise exemptions | `test/phase-5-platform` | done 2026-09-09: 24 files left the exemption list (136 -> 112), total 2485/1116 = 2.23, floor 2.20 |
 
 ### Phase 1: security audit surfaces
 
@@ -147,10 +153,36 @@ without `just`); the self-hosted runner has a desktop session, so
 because the suite takes the developer's screen. Details, the pinned
 jellyfin-web build and the known gaps: `docs/e2e.md`.
 
+### Phase 5: platform glue
+
+Every line of `dev/test-exempt.txt` was walked and the pure logic hiding
+behind the glue extracted into a testable function — a sibling `*_logic.rs`
+module where there was enough of it, a private helper tested in place where
+there was not — without changing behaviour. The files that came out are the
+`!` lines in `dev/test-exempt.txt`; what is left is code whose every public
+function needs a display server, a GPU, a live CEF/mpv process, a session bus
+or a real syscall.
+
+Windows is the only machine that builds and runs everything, so what was
+verified where matters:
+
+| Verified how | Crates |
+|---|---|
+| `cargo test` on this machine | `windows`, `windows_sink`, `gpu_paint`, `jfn_cef`, `mpv`, `xtask`, the non-Unix half of `platform_abi` |
+| `cargo check` + `clippy --target x86_64-unknown-linux-gnu --all-targets` here; run by Linux CI | `x11`, `linux_util`, `wake_event`, `mpris`, and the Linux halves of `gpu_paint`, `mpv`, `platform_abi` |
+| Logic compiled and run in a scratch crate, call sites reviewed; first compiled by CI | `wayland` (a proc-macro dependency cannot cross-build from Windows), `macos`, `macos_sink` (cef-dll-sys needs a real cross toolchain) |
+
+The cross-check recipe, for a later pass: from `src/`, with
+`dev/windows/env.ps1` sourced, `CC_x86_64_unknown_linux_gnu=clang`,
+`CFLAGS_x86_64_unknown_linux_gnu=--target=x86_64-unknown-linux-gnu` and a
+scratch `CARGO_TARGET_DIR`, run
+`cargo check --target x86_64-unknown-linux-gnu -p <crate> --all-targets`.
+`--all-targets` is what type-checks the `#[cfg(test)]` modules.
+
 ## 5. Out of scope for now
 
 Fuzzing, property-testing crates, line-coverage gates, jellyfin-web itself,
-tvOS. Revisit after phase 5.
+tvOS.
 
 ## 6. Phase 1 findings left as recommendations
 
@@ -200,3 +232,35 @@ Found during phase 2 (also design calls):
   public surface; kept, since each impl is a behaviour worth a test.
 - `Platform::install_shutdown_handler`'s Unix default installs real signal
   handlers and is not exercised in tests.
+
+Found during phase 5 (also design calls):
+
+- A build script cannot link the crate it builds, so the pure rules inside
+  `jfn_cef/build.rs` (`version_full`) and `jfn_rust/build.rs` (rc template
+  expansion) cannot move into a tested module without a shared
+  build-dependency crate. `**/build.rs` stays exempt for that reason, not
+  because those rules are untestable.
+- macOS CI (`.github/workflows/build-macos.yml`) runs neither `cargo test`
+  nor `cargo clippy`, so every `#[cfg(test)]` module in `src/macos` and
+  `src/macos_sink` is compiled for the first time only when someone runs
+  `cargo test` on the Mac. Adding those two steps is the cheapest way to
+  close the gap.
+- `src/wayland/src/root_window.rs` (0.90) and `scale_probe.rs` (0.89) are the
+  two files whose decision cores are extracted and tested in place but whose
+  ratio still sits below 1.0, because the SCTK `Dispatch`/`*Handler` impls
+  that dominate their public surface exist only to satisfy trait bounds. They
+  stay exempt; the counting rule that trait-impl methods are public surface
+  is what makes them look untested.
+- `src/x11/src/shm.rs`'s `shm_alloc` computes its segment size as `w * h * 4`
+  with no guard of its own; the `> 0` checks that make it safe live two
+  modules away, in `overlay_actor` and `menu`. `x11::mpv_proxy_logic`'s
+  `emit_noop` indexes `out[start]` after appending, which would panic on an
+  empty request.
+- `src/macos/src/input.rs` reads `clickCount` off the `NSEvent` and drops it,
+  and `jfn_input_dispatch_mouse_button` has no click-count parameter, so CEF
+  never sees a double-click on macOS.
+- `X11Platform::clipboard_read_text_async` invokes its callback synchronously
+  on the caller's thread despite the name.
+- `x11::geometry`'s `ResizeSync` never disarms: `sync_armed` is cleared only
+  by the next `latch`, never by a commit, so every later reconcile writes the
+  latched value whether or not its configures correspond to it.

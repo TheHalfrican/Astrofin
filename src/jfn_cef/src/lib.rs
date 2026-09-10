@@ -11,6 +11,7 @@ pub mod business_web;
 mod cef_string;
 pub mod client;
 mod client_impl;
+mod client_logic;
 mod embedded_css;
 mod embedded_js;
 pub mod ffi;
@@ -22,6 +23,7 @@ pub mod platform_ops;
 mod resource;
 pub mod sink_routing;
 mod state;
+mod switches;
 #[cfg(test)]
 mod test_support;
 mod v8_handler;

@@ -34,19 +34,11 @@ pub fn install_early() {
 pub fn install_from_cli(cli: &crate::cli::Cli) {
     #[cfg(target_os = "linux")]
     {
-        let backend = match cli.linux.platform {
-            Some(jfn_linux_util::cli::PlatformArg::Wayland) => DisplayBackend::Wayland,
-            Some(jfn_linux_util::cli::PlatformArg::X11) => DisplayBackend::X11,
-            None => {
-                let has_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-                let has_display = std::env::var_os("DISPLAY").is_some();
-                if has_wayland || !has_display {
-                    DisplayBackend::Wayland
-                } else {
-                    DisplayBackend::X11
-                }
-            }
-        };
+        let backend = jfn_linux_util::cli::choose_backend(
+            cli.linux.platform,
+            std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            std::env::var_os("DISPLAY").is_some(),
+        );
         if backend == DisplayBackend::X11
             && let Some(p) = cli.linux.platform_paint
         {

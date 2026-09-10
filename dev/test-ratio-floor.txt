@@ -3,5 +3,8 @@
 # Baseline measured 2026-09-09: 514 tests / 713 public functions = 0.72.
 # Raised to 1.00 after phase 1 (748 / 726 = 1.03, 2026-09-09).
 # Raised to 1.50 after phase 2 (1430 / 720 = 1.99, 2026-09-09).
+# Raised to 2.20 after phase 5 (2485 / 1116 = 2.23, 2026-09-09): the total
+# fell from 2.32 because phase 5 pulled 24 platform files out of the
+# exemption list, adding ~290 public functions along with their tests.
 # This number only ever moves up.
-1.50
+2.20

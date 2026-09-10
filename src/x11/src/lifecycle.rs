@@ -1,19 +1,26 @@
 //! X11 host-window creation, init/cleanup/clamp, and helpers for atom
 //! interning, ARGB visual discovery, parent geometry queries, and overlay
-//! repositioning.
+//! repositioning. The decisions that are pure arithmetic or selection rules —
+//! boot placement, the screen clamp, the `WM_PROTOCOLS` list, the ARGB visual
+//! pick, the MIT-SHM floor — live in [`crate::lifecycle_logic`].
 
 use parking_lot::Mutex;
 use x11rb::connection::Connection as X11rbConnection;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::shm::ConnectionExt as X11rbShmConnection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt as X11rbXprotoConnection, CreateWindowAux, EventMask, PropMode, Screen,
-    VisualClass, WindowClass,
+    AtomEnum, ConnectionExt as X11rbXprotoConnection, CreateWindowAux, EventMask, PropMode,
+    WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as X11rbWrapperConnection;
 
 use jfn_platform_abi::BootGeometry;
+
+use crate::lifecycle_logic::{
+    boot_placement, clamp_to_screen, compositor_owner_present, find_argb_visual,
+    shm_version_supported, wm_protocols,
+};
 
 use crate::x11_state::{
     Atoms, HostServices, PaintServices, ParentSnapshot, X11RB_CONN, host, set_host_services,
@@ -52,12 +59,7 @@ fn set_toplevel_identity(conn: &RustConnection, win: u32, atoms: &Atoms) -> u32 
 
     let sync_counter = setup_sync_counter(conn, win, atoms);
 
-    // Keep WM_DELETE_WINDOW; add _NET_WM_SYNC_REQUEST only when the counter is
-    // real (all-or-nothing).
-    let mut protocols = vec![atoms.wm_delete_window];
-    if sync_counter != 0 && atoms.net_wm_sync_request != 0 {
-        protocols.push(atoms.net_wm_sync_request);
-    }
+    let protocols = wm_protocols(atoms, sync_counter);
     let _ = conn.change_property32(
         PropMode::REPLACE,
         win,
@@ -120,17 +122,6 @@ fn setup_sync_counter(conn: &RustConnection, win: u32, atoms: &Atoms) -> u32 {
         return 0;
     }
     counter
-}
-
-/// Find a 32-bit TrueColor visual.
-fn find_argb_visual(screen: &Screen) -> Option<u32> {
-    screen
-        .allowed_depths
-        .iter()
-        .filter(|d| d.depth == 32)
-        .flat_map(|d| d.visuals.iter())
-        .find(|v| v.class == VisualClass::TRUE_COLOR)
-        .map(|v| v.visual_id)
 }
 
 fn intern_atom(conn: &RustConnection, name: &[u8]) -> u32 {
@@ -198,16 +189,11 @@ pub(crate) fn ensure_host_window() -> bool {
     let net_wm_state = atoms.net_wm_state;
     let scale = crate::scale::query_display_scale().unwrap_or(1.0);
 
-    let (boot_w, boot_h) = boot.map_or_else(
-        || {
-            let s = f64::from(scale);
-            ((1600.0 * s) as i32, (900.0 * s) as i32)
-        },
-        |b| (b.physical().w.max(1), b.physical().h.max(1)),
-    );
-    let position = boot.and_then(|b| b.position());
-    let maximized = boot.is_some_and(|b| b.maximized());
-    let (boot_x, boot_y) = position.map_or((0, 0), |p| (p.x, p.y));
+    let placement = boot_placement(boot, scale);
+    let (boot_w, boot_h) = (placement.w, placement.h);
+    let position = placement.position;
+    let maximized = placement.maximized;
+    let (boot_x, boot_y) = placement.origin();
 
     let Ok(toplevel) = geo_conn.generate_id() else {
         eprintln!("[x11] failed to allocate top-level window id");
@@ -335,16 +321,15 @@ pub(crate) const COMPOSITOR_NOT_DETECTED_MSG: &str =
     "X11 compositing manager not detected. CEF overlays will not be transparent";
 pub(crate) const COMPOSITOR_DETECTED_MSG: &str = "X11 compositing manager detected";
 
-pub(crate) fn cm_atom_name(screen_num: i32) -> String {
-    format!("_NET_WM_CM_S{screen_num}")
-}
+pub(crate) use crate::lifecycle_logic::cm_atom_name;
 
 fn compositor_present(conn: &RustConnection, screen_num: i32) -> bool {
     let atom = intern_atom(conn, cm_atom_name(screen_num).as_bytes());
-    match conn.get_selection_owner(atom).map(|c| c.reply()) {
-        Ok(Ok(reply)) => reply.owner != x11rb::NONE,
-        _ => true,
-    }
+    let owner = match conn.get_selection_owner(atom).map(|c| c.reply()) {
+        Ok(Ok(reply)) => Some(reply.owner),
+        _ => None,
+    };
+    compositor_owner_present(owner)
 }
 
 pub(crate) fn query_parent_geometry_x11rb(
@@ -431,7 +416,7 @@ pub fn init() -> bool {
         .shm_query_version()
         .ok()
         .and_then(|cookie| cookie.reply().ok())
-        .is_some_and(|v| (v.major_version, v.minor_version) >= (1, 2));
+        .is_some_and(|v| shm_version_supported(v.major_version, v.minor_version));
     if !shm_ok {
         tracing::error!("MIT-SHM 1.2 not available");
         return false;
@@ -500,12 +485,10 @@ pub fn clamp_window_geometry(w: &mut i32, h: &mut i32) {
     let Some(root) = conn.setup().roots.get(screen_num) else {
         return;
     };
-    let sw = root.width_in_pixels as i32;
-    let sh = root.height_in_pixels as i32;
-    if sw > 0 && *w > sw {
-        *w = sw;
-    }
-    if sh > 0 && *h > sh {
-        *h = sh;
-    }
+    clamp_to_screen(
+        w,
+        h,
+        i32::from(root.width_in_pixels),
+        i32::from(root.height_in_pixels),
+    );
 }

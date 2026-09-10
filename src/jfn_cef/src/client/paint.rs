@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::{Inner, platform_ops};
+use crate::client_logic::{screen_scale, software_buffer_len};
 use crate::platform_ops::{PaintFrame, PhysicalSize};
 
 /// Borrow CEF's `OnPaint` buffer as pixels. `None` when the frame is unusable.
@@ -14,10 +15,7 @@ fn software_frame<'a>(
     h: i32,
     dirty: &'a [platform_ops::JfnRect],
 ) -> Option<PaintFrame<'a>> {
-    if buffer.is_null() || w <= 0 || h <= 0 {
-        return None;
-    }
-    let len = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    let len = software_buffer_len(!buffer.is_null(), w, h)?;
     // SAFETY: CEF guarantees `buffer` covers `w * h * 4` bytes for the
     // duration of this callback.
     let pixels = unsafe { std::slice::from_raw_parts(buffer, len) };
@@ -40,12 +38,7 @@ impl Inner {
         let w = self.width.load(Ordering::Acquire);
         let h = self.height.load(Ordering::Acquire);
         let pw = self.physical_w.load(Ordering::Acquire);
-        let scale = if pw > 0 && w > 0 {
-            pw as f32 / w as f32
-        } else {
-            1.0
-        };
-        (scale, w, h)
+        (screen_scale(pw, w), w, h)
     }
 
     pub(crate) fn on_paint(

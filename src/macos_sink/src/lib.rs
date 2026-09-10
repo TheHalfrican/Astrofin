@@ -13,13 +13,20 @@ use std::ffi::{c_int, c_void};
 use std::sync::OnceLock;
 use std::time::Instant;
 
+mod logic;
+
 use libloading::Library;
 use libloading::os::unix::Library as ProgramImage;
 
 use jfn_playback::sink_core::{
     self, MediaCommand, Phase, PositionThrottle, QueuedSink, map_kind_to_phase,
 };
-use jfn_playback::{MediaMetadata, MediaType as PbMediaType, PlaybackEvent, PlaybackEventKind};
+use jfn_playback::{MediaMetadata, PlaybackEvent, PlaybackEventKind};
+use logic::{
+    InfoValue, KEY_ARTWORK, KEY_ELAPSED, KEY_MEDIA_TYPE, KEY_RATE, data_uri_payload, is_same_item,
+    media_type_value, now_playing_entries, playback_state, seconds_to_ms, us_to_seconds,
+    visibility_for_phase,
+};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{ClassType, define_class, msg_send};
@@ -30,8 +37,8 @@ use objc2_foundation::{
 };
 use objc2_media_player::{
     MPChangePlaybackPositionCommandEvent, MPMediaItemArtwork, MPNowPlayingInfoCenter,
-    MPNowPlayingInfoMediaType, MPNowPlayingPlaybackState, MPRemoteCommand, MPRemoteCommandCenter,
-    MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
+    MPNowPlayingInfoMediaType, MPRemoteCommand, MPRemoteCommandCenter, MPRemoteCommandEvent,
+    MPRemoteCommandHandlerStatus,
 };
 use std::ptr::NonNull;
 
@@ -134,14 +141,14 @@ define_class!(
                 let center = MPNowPlayingInfoCenter::defaultCenter();
                 if let Some(existing) = center.nowPlayingInfo() {
                     let info = NSMutableDictionary::dictionaryWithDictionary(&existing);
-                    let elapsed_key = mp_const("MPNowPlayingInfoPropertyElapsedPlaybackTime");
-                    let rate_key = mp_const("MPNowPlayingInfoPropertyPlaybackRate");
+                    let elapsed_key = mp_const(KEY_ELAPSED);
+                    let rate_key = mp_const(KEY_RATE);
                     info.setObject_forKey(&*NSNumber::new_f64(pos) as &AnyObject, ns_key(&elapsed_key));
                     info.setObject_forKey(&*NSNumber::new_f64(0.0) as &AnyObject, ns_key(&rate_key));
                     center.setNowPlayingInfo(Some(&info));
                 }
             }
-            sink_core::seek_to_ms((pos * 1000.0) as i64);
+            sink_core::seek_to_ms(seconds_to_ms(pos));
             MPRemoteCommandHandlerStatus::Success
         }
     }
@@ -289,21 +296,13 @@ fn media_remote_set_can_be_now_playing(yes: bool) {
     }
 }
 
-const VISIBILITY_NEVER: c_int = 3;
-const VISIBILITY_ALWAYS: c_int = 1;
-
 fn media_remote_set_visibility_for_phase(phase: Phase) {
     if let Some(mr) = media_remote()
         && let (Some(set_vis), Some(get_origin)) = (mr.set_visibility, mr.get_local_origin)
     {
         unsafe {
             let origin = get_origin();
-            let vis = if phase == Phase::Stopped {
-                VISIBILITY_NEVER
-            } else {
-                VISIBILITY_ALWAYS
-            };
-            set_vis(origin, vis);
+            set_vis(origin, visibility_for_phase(phase));
         }
     }
 }
@@ -312,18 +311,10 @@ fn media_remote_set_visibility_for_phase(phase: Phase) {
 // Event delivery.
 // =====================================================================
 
-fn convert_state(phase: Phase) -> MPNowPlayingPlaybackState {
-    match phase {
-        Phase::Playing => MPNowPlayingPlaybackState::Playing,
-        Phase::Paused => MPNowPlayingPlaybackState::Paused,
-        Phase::Stopped => MPNowPlayingPlaybackState::Stopped,
-    }
-}
-
 fn deliver(state: &mut MacosSink, ev: &PlaybackEvent) {
     match ev.kind {
         PlaybackEventKind::MetadataChanged => {
-            if !ev.metadata.id.is_empty() && ev.metadata.id == state.metadata.id {
+            if is_same_item(&ev.metadata, &state.metadata) {
                 return;
             }
             state.metadata = ev.metadata.clone();
@@ -331,10 +322,9 @@ fn deliver(state: &mut MacosSink, ev: &PlaybackEvent) {
         }
         PlaybackEventKind::ArtworkChanged => {
             state.metadata.art_data_uri = ev.artwork_uri.clone();
-            let Some(comma) = ev.artwork_uri.find(',') else {
+            let Some(base64) = data_uri_payload(&ev.artwork_uri) else {
                 return;
             };
-            let base64 = &ev.artwork_uri[comma + 1..];
             unsafe {
                 let ns_b64 = NSString::from_str(base64);
                 let data: Allocated<NSData> = msg_send![NSData::class(), alloc];
@@ -362,7 +352,7 @@ fn deliver(state: &mut MacosSink, ev: &PlaybackEvent) {
                 let center = MPNowPlayingInfoCenter::defaultCenter();
                 if let Some(existing) = center.nowPlayingInfo() {
                     let info = NSMutableDictionary::dictionaryWithDictionary(&existing);
-                    let key = mp_const("MPMediaItemPropertyArtwork");
+                    let key = mp_const(KEY_ARTWORK);
                     info.setObject_forKey(&*artwork as &AnyObject, ns_key(&key));
                     center.setNowPlayingInfo(Some(&info));
                 }
@@ -397,7 +387,7 @@ fn deliver(state: &mut MacosSink, ev: &PlaybackEvent) {
             }
             unsafe {
                 let center = MPNowPlayingInfoCenter::defaultCenter();
-                center.setPlaybackState(convert_state(p));
+                center.setPlaybackState(playback_state(p));
             }
             media_remote_set_visibility_for_phase(p);
             if p != Phase::Stopped {
@@ -412,7 +402,7 @@ fn deliver(state: &mut MacosSink, ev: &PlaybackEvent) {
             let center = MPNowPlayingInfoCenter::defaultCenter();
             if let Some(existing) = center.nowPlayingInfo() {
                 let info = NSMutableDictionary::dictionaryWithDictionary(&existing);
-                let key = mp_const("MPNowPlayingInfoPropertyPlaybackRate");
+                let key = mp_const(KEY_RATE);
                 info.setObject_forKey(&*NSNumber::new_f64(state.rate) as &AnyObject, ns_key(&key));
                 center.setNowPlayingInfo(Some(&info));
             }
@@ -435,9 +425,9 @@ fn update_timeline_throttled(state: &mut MacosSink, position_us: i64, force: boo
             return;
         };
         let info = NSMutableDictionary::dictionaryWithDictionary(&existing);
-        let key = mp_const("MPNowPlayingInfoPropertyElapsedPlaybackTime");
+        let key = mp_const(KEY_ELAPSED);
         info.setObject_forKey(
-            &*NSNumber::new_f64(position_us as f64 / 1_000_000.0) as &AnyObject,
+            &*NSNumber::new_f64(us_to_seconds(position_us)) as &AnyObject,
             ns_key(&key),
         );
         center.setNowPlayingInfo(Some(&info));
@@ -447,44 +437,25 @@ fn update_timeline_throttled(state: &mut MacosSink, position_us: i64, force: boo
 fn update_now_playing_info(state: &mut MacosSink) {
     unsafe {
         let info = NSMutableDictionary::<NSString, AnyObject>::dictionary();
-        if !state.metadata.title.is_empty() {
-            let k = mp_const("MPMediaItemPropertyTitle");
-            let v = NSString::from_str(&state.metadata.title);
-            info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
+        for (key, value) in now_playing_entries(&state.metadata, state.position_us, state.rate) {
+            let k = mp_const(key);
+            match value {
+                InfoValue::Text(text) => {
+                    let v = NSString::from_str(&text);
+                    info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
+                }
+                InfoValue::Number(number) => {
+                    let v = NSNumber::new_f64(number);
+                    info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
+                }
+                InfoValue::Int(int) => {
+                    let v = NSNumber::new_i32(int);
+                    info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
+                }
+            }
         }
-        if !state.metadata.artist.is_empty() {
-            let k = mp_const("MPMediaItemPropertyArtist");
-            let v = NSString::from_str(&state.metadata.artist);
-            info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
-        }
-        if !state.metadata.album.is_empty() {
-            let k = mp_const("MPMediaItemPropertyAlbumTitle");
-            let v = NSString::from_str(&state.metadata.album);
-            info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
-        }
-        if state.metadata.duration_us > 0 {
-            let k = mp_const("MPMediaItemPropertyPlaybackDuration");
-            let v = NSNumber::new_f64(state.metadata.duration_us as f64 / 1_000_000.0);
-            info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
-        }
-        if state.metadata.track_number > 0 {
-            let k = mp_const("MPMediaItemPropertyAlbumTrackNumber");
-            let v = NSNumber::new_i32(state.metadata.track_number);
-            info.setObject_forKey(&*v as &AnyObject, ns_key(&k));
-        }
-        let elapsed_key = mp_const("MPNowPlayingInfoPropertyElapsedPlaybackTime");
-        let elapsed_v = NSNumber::new_f64(state.position_us as f64 / 1_000_000.0);
-        info.setObject_forKey(&*elapsed_v as &AnyObject, ns_key(&elapsed_key));
-        let rate_key = mp_const("MPNowPlayingInfoPropertyPlaybackRate");
-        let rate_v = NSNumber::new_f64(state.rate);
-        info.setObject_forKey(&*rate_v as &AnyObject, ns_key(&rate_key));
-        let media_type_key = mp_const("MPNowPlayingInfoPropertyMediaType");
-        let media_type_v: MPNowPlayingInfoMediaType =
-            if state.metadata.media_type == PbMediaType::Audio {
-                MPNowPlayingInfoMediaType::Audio
-            } else {
-                MPNowPlayingInfoMediaType::Video
-            };
+        let media_type_key = mp_const(KEY_MEDIA_TYPE);
+        let media_type_v: MPNowPlayingInfoMediaType = media_type_value(state.metadata.media_type);
         let media_type_num = NSNumber::new_u64(media_type_v.0 as u64);
         info.setObject_forKey(&*media_type_num as &AnyObject, ns_key(&media_type_key));
 

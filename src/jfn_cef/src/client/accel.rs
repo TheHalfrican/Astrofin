@@ -8,6 +8,9 @@
 
 use cef::AcceleratedPaintInfo;
 
+use crate::client_logic::accel_extents;
+#[cfg(target_os = "linux")]
+use crate::client_logic::plane_count;
 use crate::platform_ops::{FrameSize, SharedTexture};
 
 /// Take ownership of one accelerated-paint frame. `None` when it is unusable.
@@ -25,19 +28,8 @@ pub(crate) fn acquire(info: &AcceleratedPaintInfo) -> Option<SharedTexture> {
         cef::sys::cef_color_type_t::CEF_COLOR_TYPE_RGBA_8888 => DmabufFormat::Rgba8,
         _ => return None,
     };
-    let coded = FrameSize {
-        w: info.extra.coded_size.width,
-        h: info.extra.coded_size.height,
-    };
-    if coded.w <= 0 || coded.h <= 0 {
-        return None;
-    }
-    // Include every memory plane the modifier uses; DCC/CCS modifiers add an
-    // auxiliary plane beyond the color plane.
-    let n = info.plane_count.clamp(0, info.planes.len() as i32) as usize;
-    if n < 1 {
-        return None;
-    }
+    let (coded, visible_rect) = extents(info)?;
+    let n = plane_count(info.plane_count, info.planes.len())?;
     let mut planes = Vec::with_capacity(n);
     for p in &info.planes[..n] {
         // SAFETY: `p.fd` is a live dmabuf fd for the duration of this
@@ -51,10 +43,7 @@ pub(crate) fn acquire(info: &AcceleratedPaintInfo) -> Option<SharedTexture> {
     }
     Some(SharedTexture::new(
         coded,
-        FrameSize {
-            w: info.extra.visible_rect.width.max(0),
-            h: info.extra.visible_rect.height.max(0),
-        },
+        visible_rect,
         format,
         info.modifier,
         planes,
@@ -91,20 +80,13 @@ pub(crate) fn acquire(info: &AcceleratedPaintInfo) -> Option<SharedTexture> {
     ))
 }
 
-/// The pair CEF states about every frame, on the platforms whose payload does
-/// not carry its own size. `None` when the coded size is not presentable.
-#[cfg(not(target_os = "linux"))]
+/// The pair CEF states about every frame. `None` when the coded size is not
+/// presentable.
 fn extents(info: &AcceleratedPaintInfo) -> Option<(FrameSize, FrameSize)> {
-    let coded = FrameSize {
-        w: info.extra.coded_size.width,
-        h: info.extra.coded_size.height,
-    };
-    if coded.w <= 0 || coded.h <= 0 {
-        return None;
-    }
-    let visible_rect = FrameSize {
-        w: info.extra.visible_rect.width.max(0),
-        h: info.extra.visible_rect.height.max(0),
-    };
-    Some((coded, visible_rect))
+    accel_extents(
+        info.extra.coded_size.width,
+        info.extra.coded_size.height,
+        info.extra.visible_rect.width,
+        info.extra.visible_rect.height,
+    )
 }

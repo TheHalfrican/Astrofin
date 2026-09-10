@@ -1,4 +1,7 @@
 //! X11 input thread.
+//!
+//! The mapping tables it applies — button meanings, cursor names, keycode
+//! offsets, event masks — live in [`crate::input_logic`].
 
 use std::ffi::c_int;
 use std::sync::Arc;
@@ -27,17 +30,14 @@ use jfn_playback::shutdown::jfn_shutdown_register_waker;
 use jfn_wake_event::{Drain, WakeEvent, WakeSource};
 
 use crate::conn_source::XcbSource;
-
-use cursor_icon::CursorIcon;
-use jfn_input::buttons;
-use jfn_linux_util::xkb::to_cef_mods;
-use jfn_platform_abi::cursor::CursorShape;
-use jfn_platform_abi::event_flags::{
-    EVENTFLAG_LEFT_MOUSE_BUTTON, EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_RIGHT_MOUSE_BUTTON,
+use crate::input_logic::{
+    ButtonAction, apply_button_flag, cef_cursor_to_icon, cef_modifiers as combine_modifiers,
+    classify_button, cursor_shape_from_raw, history_nav_for_sym, native_key_code,
+    overlay_event_mask, overlay_grab_event_mask, toplevel_event_mask,
 };
 
-const XKB_KEY_XF86BACK: u32 = 0x1008ff26;
-const XKB_KEY_XF86FORWARD: u32 = 0x1008ff27;
+use jfn_linux_util::xkb::to_cef_mods;
+use jfn_platform_abi::cursor::CursorShape;
 
 #[derive(Clone)]
 pub(crate) struct CursorChannel {
@@ -61,8 +61,7 @@ impl CursorChannel {
     }
 
     fn resend_latest(&self) {
-        let shape = CursorShape::from_cef(self.latest.load(Ordering::Acquire) as i32)
-            .unwrap_or(CursorShape::Pointer);
+        let shape = cursor_shape_from_raw(self.latest.load(Ordering::Acquire));
         let _ = self.tx.send(shape);
     }
 }
@@ -167,46 +166,6 @@ struct State {
 
 unsafe impl Send for State {}
 
-fn cef_cursor_to_icon(shape: CursorShape) -> CursorIcon {
-    use CursorShape::*;
-    match shape {
-        Cross => CursorIcon::Crosshair,
-        Hand => CursorIcon::Pointer,
-        IBeam => CursorIcon::Text,
-        Wait => CursorIcon::Wait,
-        Help => CursorIcon::Help,
-        EastResize => CursorIcon::EResize,
-        NorthResize => CursorIcon::NResize,
-        NorthEastResize => CursorIcon::NeResize,
-        NorthWestResize => CursorIcon::NwResize,
-        SouthResize => CursorIcon::SResize,
-        SouthEastResize => CursorIcon::SeResize,
-        SouthWestResize => CursorIcon::SwResize,
-        WestResize => CursorIcon::WResize,
-        NorthSouthResize => CursorIcon::NsResize,
-        EastWestResize => CursorIcon::EwResize,
-        NorthEastSouthWestResize => CursorIcon::NeswResize,
-        NorthWestSouthEastResize => CursorIcon::NwseResize,
-        ColumnResize => CursorIcon::ColResize,
-        RowResize => CursorIcon::RowResize,
-        MiddlePanning | MiddlePanningVertical | MiddlePanningHorizontal => CursorIcon::AllScroll,
-        Move => CursorIcon::Move,
-        VerticalText => CursorIcon::VerticalText,
-        Cell => CursorIcon::Cell,
-        ContextMenu => CursorIcon::ContextMenu,
-        Alias => CursorIcon::Alias,
-        Progress => CursorIcon::Progress,
-        NoDrop => CursorIcon::NoDrop,
-        Copy => CursorIcon::Copy,
-        NotAllowed => CursorIcon::NotAllowed,
-        ZoomIn => CursorIcon::ZoomIn,
-        ZoomOut => CursorIcon::ZoomOut,
-        Grab => CursorIcon::Grab,
-        Grabbing => CursorIcon::Grabbing,
-        _ => CursorIcon::Default,
-    }
-}
-
 fn setup_xkb(conn: &xcb::Connection, st: &mut State) -> bool {
     let mut major = 0u16;
     let mut minor = 0u16;
@@ -286,13 +245,11 @@ fn update_keymap(conn: &xcb::Connection, st: &mut State) {
 }
 
 fn cef_modifiers(st: &State) -> u32 {
-    st.modifiers | st.mouse_button_modifiers
+    combine_modifiers(st.modifiers, st.mouse_button_modifiers)
 }
 
 fn to_logical(physical: i32) -> i32 {
-    let scale = crate::x11_state::parent_snapshot().scale;
-    let s = if scale > 0.0 { f64::from(scale) } else { 1.0 };
-    (physical as f64 / s) as i32
+    crate::scale_logic::logical_from_physical(physical, crate::x11_state::parent_snapshot().scale)
 }
 
 fn handle_key(st: &mut State, detail: u8, pressed: bool) {
@@ -303,10 +260,10 @@ fn handle_key(st: &mut State, detail: u8, pressed: bool) {
     let kc = xkb::Keycode::new(kc_raw);
     let sym: u32 = xst.key_get_one_sym(kc).raw();
 
-    if sym == XKB_KEY_XF86BACK || sym == XKB_KEY_XF86FORWARD {
+    if let Some(forward) = history_nav_for_sym(sym) {
         if pressed {
             let _ = st.dispatch.send(QueuedInputEvent::HistoryNav {
-                forward: (sym == XKB_KEY_XF86FORWARD) as c_int,
+                forward: c_int::from(forward),
             });
         }
         xst.update_key(
@@ -320,10 +277,10 @@ fn handle_key(st: &mut State, detail: u8, pressed: bool) {
         return;
     }
 
-    let native = (kc_raw as i32) - 8; // X keycode → linux input code
+    let native = native_key_code(kc_raw);
     let _ = st.dispatch.send(QueuedInputEvent::KeyRaw {
         sym,
-        native: native as u32,
+        native,
         modifiers: st.modifiers,
         pressed: pressed as c_int,
     });
@@ -334,7 +291,7 @@ fn handle_key(st: &mut State, detail: u8, pressed: bool) {
             let _ = st.dispatch.send(QueuedInputEvent::Char {
                 cp,
                 modifiers: st.modifiers,
-                native: native as u32,
+                native,
             });
         }
     }
@@ -351,69 +308,46 @@ fn handle_key(st: &mut State, detail: u8, pressed: bool) {
 }
 
 fn handle_button(st: &mut State, detail: u8, event_x: i16, event_y: i16, pressed: bool) {
-    let button = detail as u32;
     let x = to_logical(event_x as i32);
     let y = to_logical(event_y as i32);
 
-    if (4..=7).contains(&button) {
-        if !pressed {
-            return;
-        }
-        let (dx, dy) = match button {
-            4 => (0, 120),
-            5 => (0, -120),
-            6 => (120, 0),
-            7 => (-120, 0),
-            _ => (0, 0),
-        };
-        let _ = st.dispatch.send(QueuedInputEvent::Scroll {
-            x,
-            y,
-            dx,
-            dy,
-            modifiers: cef_modifiers(st),
-        });
-        return;
-    }
-
-    if button == 8 || button == 9 {
-        if pressed {
-            let _ = st.dispatch.send(QueuedInputEvent::HistoryNav {
-                forward: (button == 9) as c_int,
+    match classify_button(detail as u32) {
+        ButtonAction::Scroll { dx, dy } => {
+            if !pressed {
+                return;
+            }
+            let _ = st.dispatch.send(QueuedInputEvent::Scroll {
+                x,
+                y,
+                dx,
+                dy,
+                modifiers: cef_modifiers(st),
             });
         }
-        return;
+        ButtonAction::HistoryNav { forward } => {
+            if pressed {
+                let _ = st.dispatch.send(QueuedInputEvent::HistoryNav {
+                    forward: c_int::from(forward),
+                });
+            }
+        }
+        // `code` is a linux/input-event-codes.h button code: what the browser
+        // bridge speaks.
+        ButtonAction::Press { flag, code } => {
+            st.mouse_button_modifiers = apply_button_flag(st.mouse_button_modifiers, flag, pressed);
+            if pressed {
+                activate_parent(st);
+            }
+            let _ = st.dispatch.send(QueuedInputEvent::MouseButton {
+                code,
+                pressed: pressed as c_int,
+                x,
+                y,
+                modifiers: cef_modifiers(st),
+            });
+        }
+        ButtonAction::Ignore => {}
     }
-
-    let flag = match button {
-        1 => EVENTFLAG_LEFT_MOUSE_BUTTON,
-        2 => EVENTFLAG_MIDDLE_MOUSE_BUTTON,
-        3 => EVENTFLAG_RIGHT_MOUSE_BUTTON,
-        _ => return,
-    };
-    if pressed {
-        st.mouse_button_modifiers |= flag;
-    } else {
-        st.mouse_button_modifiers &= !flag;
-    }
-
-    // Browser bridge expects linux/input-event-codes.h button codes.
-    let code: u32 = match button {
-        1 => buttons::BTN_LEFT,
-        2 => buttons::BTN_MIDDLE,
-        3 => buttons::BTN_RIGHT,
-        _ => return,
-    };
-    if pressed {
-        activate_parent(st);
-    }
-    let _ = st.dispatch.send(QueuedInputEvent::MouseButton {
-        code,
-        pressed: pressed as c_int,
-        x,
-        y,
-        modifiers: cef_modifiers(st),
-    });
 }
 
 fn activate_parent(st: &State) {
@@ -562,16 +496,9 @@ fn input_thread_body(mut st: State) {
         eprintln!("[x11] xkb setup failed; key input disabled");
     }
 
-    // No STRUCTURE_NOTIFY here: window structure (geometry/map state) is watched
-    // on a separate connection by the geometry thread. Select these events on
-    // the same xcb connection this thread polls; event masks are per-client.
-    let mask = x::EventMask::KEY_PRESS
-        | x::EventMask::KEY_RELEASE
-        | x::EventMask::BUTTON_PRESS
-        | x::EventMask::BUTTON_RELEASE
-        | x::EventMask::POINTER_MOTION
-        | x::EventMask::ENTER_WINDOW
-        | x::EventMask::LEAVE_WINDOW;
+    // Selected on the same xcb connection this thread polls; event masks are
+    // per-client.
+    let mask = toplevel_event_mask();
     st.conn.send_request(&x::ChangeWindowAttributes {
         window: x::Window::new(st.window),
         value_list: &[x::Cw::EventMask(mask)],
@@ -830,18 +757,14 @@ pub fn grab_overlay_input(window: u32) {
         return;
     };
     let w = x::Window::new(window);
-    let mask =
-        x::EventMask::POINTER_MOTION | x::EventMask::ENTER_WINDOW | x::EventMask::LEAVE_WINDOW;
     let attr_cookie = conn.send_request_checked(&x::ChangeWindowAttributes {
         window: w,
-        value_list: &[x::Cw::EventMask(mask)],
+        value_list: &[x::Cw::EventMask(overlay_event_mask())],
     });
     let grab_cookie = conn.send_request_checked(&x::GrabButton {
         owner_events: true,
         grab_window: w,
-        event_mask: x::EventMask::BUTTON_PRESS
-            | x::EventMask::BUTTON_RELEASE
-            | x::EventMask::POINTER_MOTION,
+        event_mask: overlay_grab_event_mask(),
         pointer_mode: x::GrabMode::Async,
         keyboard_mode: x::GrabMode::Async,
         confine_to: x::Window::none(),

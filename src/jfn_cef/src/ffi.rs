@@ -13,6 +13,7 @@ use jfn_platform_abi::DisplayBackend;
 
 use crate::app::{JfnApp, JfnAppBuilder};
 use crate::state;
+use crate::switches::{self, MessageLoop};
 
 // jfn constructs Chromium's `MainArgs` itself. Two entry points:
 //
@@ -64,44 +65,14 @@ pub fn jfn_cef_set_remote_debugging_port(port: c_int) {
 }
 
 pub fn jfn_cef_set_disable_gpu_compositing(disable: bool) {
-    if disable {
-        state::with_config(|c| {
-            c.pending_switches.push(state::PendingSwitch {
-                name: "disable-gpu-compositing".to_string(),
-                value: None,
-            });
-        });
+    if let Some(sw) = switches::gpu_compositing_switch(disable) {
+        state::with_config(|c| c.pending_switches.push(sw));
     }
 }
 
 pub fn jfn_cef_set_platform_switches(backend: DisplayBackend) {
-    state::with_config(|c| match backend {
-        DisplayBackend::Wayland => {
-            c.pending_switches.push(state::PendingSwitch::with_value(
-                "ozone-platform",
-                "wayland",
-            ));
-            // OSR honors GetScreenInfo device_scale_factor only without the
-            // fractional-scale protocol.
-            c.pending_switches.push(state::PendingSwitch::with_value(
-                "disable-features",
-                "WaylandFractionalScaleV1",
-            ));
-        }
-        DisplayBackend::X11 => {
-            c.pending_switches
-                .push(state::PendingSwitch::with_value("ozone-platform", "x11"));
-        }
-        DisplayBackend::MacOS => {
-            c.pending_switches
-                .push(state::PendingSwitch::flag("single-process"));
-            c.pending_switches
-                .push(state::PendingSwitch::flag("use-mock-keychain"));
-            c.pending_switches
-                .push(state::PendingSwitch::with_value("password-store", "basic"));
-        }
-        DisplayBackend::Windows => {}
-    });
+    let mut pending = switches::platform_switches(backend);
+    state::with_config(|c| c.pending_switches.append(&mut pending));
 }
 
 /// Register the callback invoked from `BrowserProcessHandler::OnContextInitialized`.
@@ -132,10 +103,9 @@ pub fn jfn_cef_initialize() -> bool {
         ..Settings::default()
     };
     let cef_host = jfn_platform_abi::try_get().and_then(|p| p.cef_host());
-    if cef_host.is_some() {
-        settings.external_message_pump = 1;
-    } else {
-        settings.multi_threaded_message_loop = 1;
+    match switches::message_loop(cef_host.is_some()) {
+        MessageLoop::ExternalPump => settings.external_message_pump = 1,
+        MessageLoop::MultiThreaded => settings.multi_threaded_message_loop = 1,
     }
 
     fill_paths(&mut settings);
@@ -227,20 +197,7 @@ pub fn jfn_cef_shutdown() {
 // ---- helpers ---------------------------------------------------------------
 
 fn log_severity_from_int(v: c_int) -> LogSeverity {
-    // Integers passed through `jfn_cef_set_log_severity` and CEF console
-    // callbacks are `cef_log_severity_t` ABI values, not Chromium's older
-    // signed log levels (-1..2). Keep this table in sync with
-    // `client/events.rs` and the constants in `jfn_rust::app`:
-    //   0 DEFAULT, 1 VERBOSE, 2 INFO, 3 WARNING, 4 ERROR, 5 FATAL
-    let raw = match v {
-        1 => sys::cef_log_severity_t::LOGSEVERITY_VERBOSE,
-        2 => sys::cef_log_severity_t::LOGSEVERITY_INFO,
-        3 => sys::cef_log_severity_t::LOGSEVERITY_WARNING,
-        4 => sys::cef_log_severity_t::LOGSEVERITY_ERROR,
-        5 => sys::cef_log_severity_t::LOGSEVERITY_FATAL,
-        _ => sys::cef_log_severity_t::LOGSEVERITY_DEFAULT,
-    };
-    LogSeverity::from(raw)
+    LogSeverity::from(switches::log_severity_raw(v))
 }
 
 fn fill_paths(settings: &mut Settings) {

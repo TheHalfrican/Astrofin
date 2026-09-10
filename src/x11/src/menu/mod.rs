@@ -1,3 +1,9 @@
+//! X11 context-menu popup: an override-redirect window with a pointer and
+//! keyboard grab, driven by the shared [`SoftwareMenu`]. Placement and keysym
+//! lookup live in [`logic`].
+
+mod logic;
+
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -20,8 +26,10 @@ use jfn_platform_abi::{
 };
 
 use crate::conn_source::X11Source;
+use crate::menu::logic::{PopupBounds, keysym_for, place_popup};
+use crate::scale_logic::positive_scale_or_one;
 use crate::shm::{shm_alloc, shm_free};
-use crate::x11_state::ShmBuffer;
+use crate::shm_logic::ShmBuffer;
 
 const GRAB_RETRY: Duration = Duration::from_millis(5);
 const GRAB_ATTEMPTS: u32 = 40;
@@ -79,9 +87,8 @@ impl X11PopupSurface {
 
 impl PopupSurface for X11PopupSurface {
     fn metrics(&self) -> MenuMetrics {
-        let scale = crate::x11_state::parent_snapshot().scale;
         MenuMetrics {
-            scale: if scale > 0.0 { scale } else { 1.0 },
+            scale: positive_scale_or_one(crate::x11_state::parent_snapshot().scale),
             clamp_ph: None,
         }
     }
@@ -267,7 +274,7 @@ impl PopupLoop {
             tracing::warn!(target: "x11::menu", "build: no X11 state snapshot; dismissing");
             None
         })?;
-        let (wx, wy) = self.place(&snap, place);
+        let (wx, wy) = place_popup(&snap.bounds, place);
         let win = self.conn.generate_id().ok()?;
         let aux = CreateWindowAux::new()
             .background_pixel(0)
@@ -320,24 +327,6 @@ impl PopupLoop {
         })
     }
 
-    fn place(&self, snap: &Snap, place: MenuPlacement) -> (i32, i32) {
-        let (w, h) = (place.pw.max(1), place.ph.max(1));
-        let mut x = snap.parent_x + (place.x as f32 * snap.scale).round() as i32;
-        let mut y = snap.parent_y + (place.y as f32 * snap.scale).round() as i32;
-        if x + w > snap.root_w {
-            x = (snap.root_w - w).max(0);
-        }
-        if y + h > snap.root_h {
-            let above = y - h;
-            y = if above >= 0 {
-                above
-            } else {
-                (snap.root_h - h).max(0)
-            };
-        }
-        (x.max(0), y.max(0))
-    }
-
     fn reposition(&mut self, generation: Generation, place: MenuPlacement) {
         if !self.owns(generation) {
             return;
@@ -345,7 +334,7 @@ impl PopupLoop {
         let Some(snap) = snapshot(&self.conn) else {
             return;
         };
-        let (wx, wy) = self.place(&snap, place);
+        let (wx, wy) = place_popup(&snap.bounds, place);
         let Some(window) = self.phase.window() else {
             return;
         };
@@ -467,11 +456,7 @@ struct Snap {
     depth: u8,
     colormap: u32,
     root: u32,
-    parent_x: i32,
-    parent_y: i32,
-    scale: f32,
-    root_w: i32,
-    root_h: i32,
+    bounds: PopupBounds,
 }
 
 fn snapshot(conn: &RustConnection) -> Option<Snap> {
@@ -489,15 +474,13 @@ fn snapshot(conn: &RustConnection) -> Option<Snap> {
         depth: paint.argb_depth,
         colormap: paint.colormap,
         root: host.root,
-        parent_x: parent.origin_x,
-        parent_y: parent.origin_y,
-        scale: if parent.scale > 0.0 {
-            parent.scale
-        } else {
-            1.0
-        },
-        root_w: screen.width_in_pixels as i32,
-        root_h: screen.height_in_pixels as i32,
+        bounds: PopupBounds::new(
+            parent.origin_x,
+            parent.origin_y,
+            i32::from(screen.width_in_pixels),
+            i32::from(screen.height_in_pixels),
+            parent.scale,
+        ),
     })
 }
 
@@ -543,10 +526,6 @@ impl Keymap {
     }
 
     fn lookup(&self, keycode: u8) -> u32 {
-        if self.per == 0 || keycode < self.min_keycode {
-            return 0;
-        }
-        let idx = (keycode - self.min_keycode) as usize * self.per as usize;
-        self.syms.get(idx).copied().unwrap_or(0)
+        keysym_for(self.min_keycode, self.per, &self.syms, keycode)
     }
 }

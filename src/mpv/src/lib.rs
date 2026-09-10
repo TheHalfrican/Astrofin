@@ -11,6 +11,7 @@
 pub mod sys;
 
 mod command;
+mod cstr;
 mod error;
 mod event;
 mod event_loop;
@@ -30,7 +31,9 @@ pub mod video_mode;
 
 pub use command::Command;
 pub use error::{Error, Result};
-pub use event::{EndFileReason, Event, LogMessage, ObserveId, PropertyValue, ReplyUserdata};
+pub use event::{
+    Disposition, EndFileReason, Event, LogMessage, ObserveId, PropertyValue, ReplyUserdata,
+};
 pub use event_loop::EventLoop;
 pub use handle::{Handle, WakeupCallback};
 pub use log::{LogLevel, forward_to_tracing as forward_log_to_tracing};

@@ -23,6 +23,7 @@
 mod context;
 mod error;
 mod painter;
+mod select;
 mod shared;
 mod shared_texture;
 mod types;

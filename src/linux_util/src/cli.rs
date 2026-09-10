@@ -1,6 +1,7 @@
 //! Linux-only CLI arguments, flattened into the binary's top-level `Cli`.
 
 use clap::{Args, ValueEnum};
+use jfn_platform_abi::DisplayBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Paint {
@@ -19,6 +20,31 @@ pub enum Paint {
 pub enum PlatformArg {
     Wayland,
     X11,
+}
+
+/// Which display backend to install, from `--platform` and the session
+/// environment.
+///
+/// An explicit `--platform` always wins. With none, Wayland is chosen
+/// whenever the session offers it, and also when neither variable is set:
+/// a session with no `DISPLAY` at all has no X server to fall back to, so
+/// failing on the Wayland path gives the better diagnostic.
+pub fn choose_backend(
+    arg: Option<PlatformArg>,
+    has_wayland_display: bool,
+    has_x_display: bool,
+) -> DisplayBackend {
+    match arg {
+        Some(PlatformArg::Wayland) => DisplayBackend::Wayland,
+        Some(PlatformArg::X11) => DisplayBackend::X11,
+        None => {
+            if has_wayland_display || !has_x_display {
+                DisplayBackend::Wayland
+            } else {
+                DisplayBackend::X11
+            }
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -116,5 +142,33 @@ mod tests {
             err_kind(&["app", "--wid", "1234"]),
             ErrorKind::UnknownArgument
         );
+    }
+    #[test]
+    fn an_explicit_platform_flag_wins_over_the_session() {
+        assert_eq!(
+            choose_backend(Some(PlatformArg::X11), true, false),
+            DisplayBackend::X11
+        );
+        assert_eq!(
+            choose_backend(Some(PlatformArg::Wayland), false, true),
+            DisplayBackend::Wayland
+        );
+    }
+
+    #[test]
+    fn a_wayland_session_picks_wayland() {
+        assert_eq!(choose_backend(None, true, false), DisplayBackend::Wayland);
+        // XWayland sets DISPLAY too; WAYLAND_DISPLAY still decides.
+        assert_eq!(choose_backend(None, true, true), DisplayBackend::Wayland);
+    }
+
+    #[test]
+    fn an_x_only_session_picks_x11() {
+        assert_eq!(choose_backend(None, false, true), DisplayBackend::X11);
+    }
+
+    #[test]
+    fn a_session_with_neither_display_set_picks_wayland() {
+        assert_eq!(choose_backend(None, false, false), DisplayBackend::Wayland);
     }
 }

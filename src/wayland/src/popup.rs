@@ -63,5 +63,41 @@ pub(crate) fn surface_matches(rt: &'static WlRuntime, surface_id: u32) -> bool {
 /// Unlike [`surface_matches`], true also when no menu is shown: the teardown
 /// keyboard-leave arrives after the menu is already cleared.
 pub(crate) fn is_menu_surface(rt: &'static WlRuntime, surface_id: u32) -> bool {
-    surface_id != 0 && rt.root().menu_surface_id() == surface_id
+    surface_id != 0 && matches_menu_surface(surface_id, rt.root().menu_surface_id())
+}
+
+/// Whether a `wl_surface` protocol id names the menu popup. Zero is "no
+/// surface" on the wire, so it never matches — not even the initial menu id,
+/// which is also zero until the first popup is created.
+pub(crate) fn matches_menu_surface(surface_id: u32, menu_surface_id: u32) -> bool {
+    surface_id != 0 && menu_surface_id == surface_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_menu_surface;
+
+    #[test]
+    fn the_menus_own_surface_matches() {
+        assert!(matches_menu_surface(42, 42));
+    }
+
+    #[test]
+    fn another_surface_does_not_match() {
+        assert!(!matches_menu_surface(41, 42));
+        assert!(!matches_menu_surface(42, 41));
+    }
+
+    #[test]
+    fn a_null_surface_id_never_matches_even_before_any_menu_existed() {
+        // Both sides start at zero; an event naming no surface must not be
+        // mistaken for the menu.
+        assert!(!matches_menu_surface(0, 0));
+        assert!(!matches_menu_surface(0, 42));
+    }
+
+    #[test]
+    fn a_real_surface_does_not_match_an_unset_menu() {
+        assert!(!matches_menu_surface(42, 0));
+    }
 }

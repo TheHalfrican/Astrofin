@@ -25,6 +25,17 @@ impl OverlayState {
             unmanaged: parent_fullscreen,
         }
     }
+
+    /// A freshly-created overlay: the window exists but has never been mapped,
+    /// so the next [`step`] maps it and forces a placement. It is born
+    /// `override_redirect` when the parent is already fullscreen, which is the
+    /// only way the WM will not strut-clamp it.
+    pub fn new_unmapped(parent_fullscreen: bool) -> Self {
+        Self {
+            mapped: false,
+            unmanaged: parent_fullscreen,
+        }
+    }
 }
 
 /// Parent truth + this overlay's wants, snapshotted once per handler pass.
@@ -238,12 +249,35 @@ mod tests {
 
     #[test]
     fn remap_forces_placement() {
-        let mut s = OverlayState {
-            mapped: false,
-            unmanaged: false,
-        };
+        let mut s = OverlayState::new_unmapped(false);
         let e = step(&mut s, &inputs(WIN, false, Some(WIN)));
         assert!(e.contains(&Effect::MapAndRaise));
         assert!(place_pos(&e).is_some());
+    }
+
+    // A live overlay adopted at reconcile time: already on screen, and
+    // unmanaged exactly when the parent is fullscreen.
+    #[test]
+    fn an_adopted_overlay_starts_mapped() {
+        assert_eq!(OverlayState::new_mapped(false), managed());
+        assert_eq!(OverlayState::new_mapped(true), unmanaged());
+    }
+
+    // A newly created overlay is born unmapped, so the first step maps it —
+    // and never flips override_redirect a second time on the way.
+    #[test]
+    fn a_new_overlay_is_born_unmapped_in_the_parents_mode() {
+        let born = OverlayState::new_unmapped(true);
+        assert!(!born.mapped);
+        assert!(born.unmanaged);
+        assert!(!OverlayState::new_unmapped(false).unmanaged);
+
+        let mut s = OverlayState::new_unmapped(true);
+        let e = step(&mut s, &inputs(FS, true, None));
+        assert_eq!(e[0], Effect::MapAndRaise);
+        assert!(
+            !e.iter()
+                .any(|x| matches!(x, Effect::SetOverrideRedirect(_)))
+        );
     }
 }

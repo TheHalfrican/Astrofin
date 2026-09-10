@@ -31,7 +31,7 @@ impl WindowSize {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum WindowMode {
     Floating,
     /// Compositor-tiled (snapped). Like Maximized/Fullscreen the size is

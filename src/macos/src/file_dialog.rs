@@ -196,6 +196,27 @@ mod tests {
     }
 
     #[test]
+    fn dots_and_blanks_never_become_extensions() {
+        let filters = [filter(&[".", "  ", "", "..jpg"])];
+        assert_eq!(
+            allowed_extensions(FileDialogKind::OpenFile, &filters),
+            ["jpg"]
+        );
+    }
+
+    #[test]
+    fn a_filterless_request_has_no_type_filter() {
+        assert!(allowed_extensions(FileDialogKind::SaveFile, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_seed_that_is_only_a_file_name_has_no_folder() {
+        let (folder, name) = seed_from(Path::new("cover.jpg"));
+        assert!(folder.is_none());
+        assert_eq!(name.as_deref(), Some("cover.jpg"));
+    }
+
+    #[test]
     fn seed_of_an_existing_folder_is_the_folder() {
         let (folder, name) = seed_from(Path::new("/tmp"));
         assert_eq!(folder.as_deref(), Some(Path::new("/tmp")));

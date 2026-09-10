@@ -33,26 +33,14 @@ extern_class!(
 use jfn_input::buttons::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 use jfn_input::scroll::ScrollAccum;
 use jfn_platform_abi::cursor::CursorShape;
-use jfn_platform_abi::event_flags::{
-    EVENTFLAG_ALT_DOWN, EVENTFLAG_COMMAND_DOWN, EVENTFLAG_CONTROL_DOWN,
-    EVENTFLAG_LEFT_MOUSE_BUTTON, EVENTFLAG_MIDDLE_MOUSE_BUTTON, EVENTFLAG_RIGHT_MOUSE_BUTTON,
-    EVENTFLAG_SHIFT_DOWN,
+
+// The NSEvent translation tables live in `input_logic`; this module only
+// reads the values off the event and dispatches.
+use crate::input_logic::{
+    CursorPlan, NsCursor, button_event_flag, cursor_plan, event_type_carries_characters,
+    history_nav_for_button, modifier_key_pressed, mouse_buttons_after, ns_cursor_for,
+    ns_keycode_to_vkey, ns_to_cef_modifiers, point_is_in_titlebar, should_forward_char,
 };
-
-// NSEventModifierFlags (NSEvent.h).
-const NSEVENT_MOD_SHIFT: u64 = 1 << 17;
-const NSEVENT_MOD_CONTROL: u64 = 1 << 18;
-const NSEVENT_MOD_OPTION: u64 = 1 << 19;
-const NSEVENT_MOD_COMMAND: u64 = 1 << 20;
-const NSEVENT_MOD_CAPSLOCK: u64 = 1 << 16;
-
-// NSEventType values used.
-const NSEVENT_TYPE_KEYDOWN: u64 = 10;
-const NSEVENT_TYPE_KEYUP: u64 = 11;
-
-// NSEvent buttonNumber for "back"/"forward" side buttons.
-const NS_MOUSE_BUTTON_BACK: isize = 3;
-const NS_MOUSE_BUTTON_FORWARD: isize = 4;
 
 // NSTrackingArea options (NSTrackingArea.h).
 const NS_TRACKING_MOUSE_MOVED: u64 = 0x02;
@@ -73,120 +61,6 @@ use jfn_input::{
 use crate::dispatch::post_to_main;
 
 // =====================================================================
-// Modifier / key translation
-// =====================================================================
-
-fn ns_to_cef_modifiers(flags: u64) -> u32 {
-    let mut m = 0u32;
-    if flags & NSEVENT_MOD_SHIFT != 0 {
-        m |= EVENTFLAG_SHIFT_DOWN;
-    }
-    if flags & NSEVENT_MOD_CONTROL != 0 {
-        m |= EVENTFLAG_CONTROL_DOWN;
-    }
-    if flags & NSEVENT_MOD_OPTION != 0 {
-        m |= EVENTFLAG_ALT_DOWN;
-    }
-    if flags & NSEVENT_MOD_COMMAND != 0 {
-        m |= EVENTFLAG_COMMAND_DOWN;
-    }
-    m
-}
-
-/// Windows VK code for CefKeyEvent.windows_key_code.
-fn ns_keycode_to_vkey(kc: u16) -> i32 {
-    match kc {
-        // Letters (VK_A = 0x41 .. VK_Z = 0x5A)
-        0x00 => b'A' as i32,
-        0x0B => b'B' as i32,
-        0x08 => b'C' as i32,
-        0x02 => b'D' as i32,
-        0x0E => b'E' as i32,
-        0x03 => b'F' as i32,
-        0x05 => b'G' as i32,
-        0x04 => b'H' as i32,
-        0x22 => b'I' as i32,
-        0x26 => b'J' as i32,
-        0x28 => b'K' as i32,
-        0x25 => b'L' as i32,
-        0x2E => b'M' as i32,
-        0x2D => b'N' as i32,
-        0x1F => b'O' as i32,
-        0x23 => b'P' as i32,
-        0x0C => b'Q' as i32,
-        0x0F => b'R' as i32,
-        0x01 => b'S' as i32,
-        0x11 => b'T' as i32,
-        0x20 => b'U' as i32,
-        0x09 => b'V' as i32,
-        0x0D => b'W' as i32,
-        0x07 => b'X' as i32,
-        0x10 => b'Y' as i32,
-        0x06 => b'Z' as i32,
-        // Digits (VK_0 = 0x30 .. VK_9 = 0x39)
-        0x1D => b'0' as i32,
-        0x12 => b'1' as i32,
-        0x13 => b'2' as i32,
-        0x14 => b'3' as i32,
-        0x15 => b'4' as i32,
-        0x17 => b'5' as i32,
-        0x16 => b'6' as i32,
-        0x1A => b'7' as i32,
-        0x1C => b'8' as i32,
-        0x19 => b'9' as i32,
-        // Function keys (VK_F1 = 0x70 .. VK_F12 = 0x7B)
-        0x7A => 0x70,
-        0x78 => 0x71,
-        0x63 => 0x72,
-        0x76 => 0x73,
-        0x60 => 0x74,
-        0x61 => 0x75,
-        0x62 => 0x76,
-        0x64 => 0x77,
-        0x65 => 0x78,
-        0x6D => 0x79,
-        0x67 => 0x7A,
-        0x6F => 0x7B,
-        // Navigation
-        0x7B => 0x25,
-        0x7E => 0x26,
-        0x7C => 0x27,
-        0x7D => 0x28,
-        0x73 => 0x24,
-        0x77 => 0x23,
-        0x74 => 0x21,
-        0x79 => 0x22,
-        // Editing
-        0x30 => 0x09,
-        0x24 => 0x0D,
-        0x35 => 0x1B,
-        0x33 => 0x08,
-        0x75 => 0x2E,
-        0x31 => 0x20,
-        0x72 => 0x2D,
-        // Modifiers
-        0x38 | 0x3C => 0x10,
-        0x3B | 0x3E => 0x11,
-        0x3A | 0x3D => 0x12,
-        0x36 | 0x37 => 0x5B,
-        0x39 => 0x14,
-        // OEM punctuation
-        0x29 => 0xBA,
-        0x18 => 0xBB,
-        0x2B => 0xBC,
-        0x1B => 0xBD,
-        0x2F => 0xBE,
-        0x2C => 0xBF,
-        0x32 => 0xC0,
-        0x21 => 0xDB,
-        0x2A => 0xDC,
-        0x1E => 0xDD,
-        0x27 => 0xDE,
-        _ => 0,
-    }
-}
-
-// =====================================================================
 // Cursor state
 // =====================================================================
 
@@ -198,29 +72,28 @@ static G_PENDING_CURSOR: AtomicI32 = AtomicI32::new(CursorShape::Pointer.as_raw(
 /// held during drags). Touched only from the main thread.
 static G_MOUSE_BUTTON_MODIFIERS: AtomicU32 = AtomicU32::new(0);
 
-/// AppKit exposes no non-deprecated directional resize cursors; CEF's
-/// cursor set maps onto these.
+/// The stock `NSCursor` for one of the cursors `ns_cursor_for` names.
+/// AppKit exposes no non-deprecated directional resize cursors.
 #[allow(deprecated)]
-fn ns_cursor_for(shape: CursorShape) -> Retained<NSCursor> {
-    use CursorShape::*;
-    match shape {
-        Cross => NSCursor::crosshairCursor(),
-        Hand => NSCursor::pointingHandCursor(),
-        IBeam => NSCursor::IBeamCursor(),
-        VerticalText => NSCursor::IBeamCursorForVerticalLayout(),
-        EastResize => NSCursor::resizeRightCursor(),
-        WestResize => NSCursor::resizeLeftCursor(),
-        NorthResize => NSCursor::resizeUpCursor(),
-        SouthResize => NSCursor::resizeDownCursor(),
-        NorthSouthResize | RowResize => NSCursor::resizeUpDownCursor(),
-        EastWestResize | ColumnResize => NSCursor::resizeLeftRightCursor(),
-        Move | Grab => NSCursor::openHandCursor(),
-        Grabbing => NSCursor::closedHandCursor(),
-        NoDrop | NotAllowed => NSCursor::operationNotAllowedCursor(),
-        Copy => NSCursor::dragCopyCursor(),
-        Alias => NSCursor::dragLinkCursor(),
-        ContextMenu => NSCursor::contextualMenuCursor(),
-        _ => NSCursor::arrowCursor(),
+fn ns_cursor(cursor: NsCursor) -> Retained<NSCursor> {
+    match cursor {
+        NsCursor::Arrow => NSCursor::arrowCursor(),
+        NsCursor::Crosshair => NSCursor::crosshairCursor(),
+        NsCursor::PointingHand => NSCursor::pointingHandCursor(),
+        NsCursor::IBeam => NSCursor::IBeamCursor(),
+        NsCursor::IBeamVertical => NSCursor::IBeamCursorForVerticalLayout(),
+        NsCursor::ResizeRight => NSCursor::resizeRightCursor(),
+        NsCursor::ResizeLeft => NSCursor::resizeLeftCursor(),
+        NsCursor::ResizeUp => NSCursor::resizeUpCursor(),
+        NsCursor::ResizeDown => NSCursor::resizeDownCursor(),
+        NsCursor::ResizeUpDown => NSCursor::resizeUpDownCursor(),
+        NsCursor::ResizeLeftRight => NSCursor::resizeLeftRightCursor(),
+        NsCursor::OpenHand => NSCursor::openHandCursor(),
+        NsCursor::ClosedHand => NSCursor::closedHandCursor(),
+        NsCursor::OperationNotAllowed => NSCursor::operationNotAllowedCursor(),
+        NsCursor::DragCopy => NSCursor::dragCopyCursor(),
+        NsCursor::DragLink => NSCursor::dragLinkCursor(),
+        NsCursor::ContextualMenu => NSCursor::contextualMenuCursor(),
     }
 }
 
@@ -228,19 +101,18 @@ fn apply_cursor_state() {
     let pending = CursorShape::from_cef(G_PENDING_CURSOR.load(Ordering::SeqCst))
         .unwrap_or(CursorShape::Pointer);
     let inside = G_MOUSE_INSIDE.load(Ordering::SeqCst);
-    if pending == CursorShape::None && inside {
-        if !G_CURSOR_HIDDEN.load(Ordering::SeqCst) {
-            NSCursor::hide();
-            G_CURSOR_HIDDEN.store(true, Ordering::SeqCst);
-        }
-    } else {
-        if G_CURSOR_HIDDEN.load(Ordering::SeqCst) {
-            NSCursor::unhide();
-            G_CURSOR_HIDDEN.store(false, Ordering::SeqCst);
-        }
-        if inside && pending != CursorShape::None {
-            ns_cursor_for(pending).set();
-        }
+    let CursorPlan { hide, unhide, set } =
+        cursor_plan(pending, inside, G_CURSOR_HIDDEN.load(Ordering::SeqCst));
+    if hide {
+        NSCursor::hide();
+        G_CURSOR_HIDDEN.store(true, Ordering::SeqCst);
+    }
+    if unhide {
+        NSCursor::unhide();
+        G_CURSOR_HIDDEN.store(false, Ordering::SeqCst);
+    }
+    if let Some(shape) = set {
+        ns_cursor(ns_cursor_for(shape)).set();
     }
 }
 
@@ -302,8 +174,11 @@ define_class!(
             // clicks and natively handles window-drag and double-click-to-zoom.
             unsafe {
                 let window: *mut AnyObject = msg_send![self, window];
-                if !window.is_null() && point_is_in_titlebar(window, point_in_super) {
-                    return std::ptr::null_mut();
+                if !window.is_null() {
+                    let content_layout: NSRect = msg_send![window, contentLayoutRect];
+                    if point_is_in_titlebar(content_layout, point_in_super.y) {
+                        return std::ptr::null_mut();
+                    }
                 }
                 msg_send![super(self), hitTest: point_in_super]
             }
@@ -358,8 +233,8 @@ define_class!(
         #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &AnyObject) {
             let n: isize = unsafe { msg_send![event, buttonNumber] };
-            if n == NS_MOUSE_BUTTON_BACK || n == NS_MOUSE_BUTTON_FORWARD {
-                jfn_input_dispatch_history_nav(if n == NS_MOUSE_BUTTON_FORWARD { 1 } else { 0 });
+            if let Some(direction) = history_nav_for_button(n) {
+                jfn_input_dispatch_history_nav(direction);
                 return;
             }
             dispatch_mouse_button(self, event, BTN_MIDDLE, true);
@@ -367,7 +242,7 @@ define_class!(
         #[unsafe(method(otherMouseUp:))]
         fn other_mouse_up(&self, event: &AnyObject) {
             let n: isize = unsafe { msg_send![event, buttonNumber] };
-            if n == NS_MOUSE_BUTTON_BACK || n == NS_MOUSE_BUTTON_FORWARD {
+            if history_nav_for_button(n).is_some() {
                 return;
             }
             dispatch_mouse_button(self, event, BTN_MIDDLE, false);
@@ -433,13 +308,8 @@ define_class!(
             jfn_input_dispatch_key_full(1, vkey, kc as i32, mods, ch, ch_nomod, 0);
             // Forward typed characters for text input — paired CHAR event only
             // for printable chars + Return.
-            if ch != 0 {
-                let c = ch;
-                let forward = c == 0x0d
-                    || (c >= 0x20 && c != 0x7f && !((0xF700..=0xF7FF).contains(&c)));
-                if forward {
-                    jfn_input_dispatch_char_sys(c as u32, mods, kc as u32, 0);
-                }
+            if should_forward_char(ch) {
+                jfn_input_dispatch_char_sys(ch as u32, mods, kc as u32, 0);
             }
         }
 
@@ -453,18 +323,10 @@ define_class!(
         fn flags_changed(&self, event: &AnyObject) {
             let kc: u16 = unsafe { msg_send![event, keyCode] };
             let raw_flags: u64 = unsafe { msg_send![event, modifierFlags] };
-            // Match each modifier key code to its NS bit so we can derive
-            // pressed-vs-released. character/unmodified_character left at 0
-            // (correct for modifier-key NSEventTypeFlagsChanged path).
-            let flag: u64 = match kc {
-                56 | 60 => NSEVENT_MOD_SHIFT,
-                59 | 62 => NSEVENT_MOD_CONTROL,
-                58 | 61 => NSEVENT_MOD_OPTION,
-                54 | 55 => NSEVENT_MOD_COMMAND,
-                57 => NSEVENT_MOD_CAPSLOCK,
-                _ => 0,
-            };
-            let pressed = if flag != 0 { (raw_flags & flag) != 0 } else { false };
+            // The key code names the modifier, the post-event flags say
+            // whether it is still down. character/unmodified_character left
+            // at 0 (correct for the NSEventTypeFlagsChanged path).
+            let pressed = modifier_key_pressed(kc, raw_flags);
             let vkey = ns_keycode_to_vkey(kc);
             let mods = ns_to_cef_modifiers(raw_flags);
             jfn_input_dispatch_key_full(if pressed { 1 } else { 0 }, vkey, kc as i32, mods, 0, 0, 0);
@@ -531,22 +393,10 @@ fn mouse_loc_in_view(view: &InputView, event: &AnyObject) -> NSPoint {
     }
 }
 
-fn point_is_in_titlebar(window: *mut AnyObject, point_in_window: NSPoint) -> bool {
-    unsafe {
-        let content_layout: NSRect = msg_send![window, contentLayoutRect];
-        point_in_window.y > content_layout.origin.y + content_layout.size.height
-    }
-}
-
 fn dispatch_mouse_button(view: &InputView, event: &AnyObject, button_code: u32, pressed: bool) {
-    let flag = match button_code {
-        BTN_LEFT => EVENTFLAG_LEFT_MOUSE_BUTTON,
-        BTN_RIGHT => EVENTFLAG_RIGHT_MOUSE_BUTTON,
-        BTN_MIDDLE => EVENTFLAG_MIDDLE_MOUSE_BUTTON,
-        _ => 0,
-    };
+    let flag = button_event_flag(button_code);
     let prev = G_MOUSE_BUTTON_MODIFIERS.load(Ordering::SeqCst);
-    let next = if pressed { prev | flag } else { prev & !flag };
+    let next = mouse_buttons_after(prev, flag, pressed);
     G_MOUSE_BUTTON_MODIFIERS.store(next, Ordering::SeqCst);
 
     let loc = mouse_loc_in_view(view, event);
@@ -575,7 +425,7 @@ fn key_event_fields(event: &AnyObject) -> (i32, u32, u16, u16, u16) {
     let raw_flags: u64 = unsafe { msg_send![event, modifierFlags] };
     let etype: u64 = unsafe { msg_send![event, type] };
     let (mut ch, mut ch_nomod) = (0u16, 0u16);
-    if etype == NSEVENT_TYPE_KEYDOWN || etype == NSEVENT_TYPE_KEYUP {
+    if event_type_carries_characters(etype) {
         unsafe {
             let chars: *mut AnyObject = msg_send![event, characters];
             if !chars.is_null() {

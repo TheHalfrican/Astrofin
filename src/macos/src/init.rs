@@ -23,6 +23,9 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSRect};
 // The input NSView is created by the input module; we adopt the
 // +1-retained NSView returned here; ownership moves into INPUT_VIEW.
 use crate::input::jfn_input_macos_create_view;
+use crate::window_logic::{
+    content_size_in_points, menu_c_string, srgb_components, with_full_size_content_view,
+};
 
 use jfn_playback::shutdown::{jfn_shutdown_initiate, jfn_shutting_down};
 
@@ -97,9 +100,10 @@ pub fn jfn_macos_query_logical_content_size(w: *mut c_int, h: *mut c_int) -> boo
             return false;
         }
         let bounds: NSRect = msg_send![content_view, bounds];
-        *w = bounds.size.width as c_int;
-        *h = bounds.size.height as c_int;
-        *w > 0 && *h > 0
+        let (cw, ch) = content_size_in_points(bounds);
+        *w = cw;
+        *h = ch;
+        cw > 0 && ch > 0
     }
 }
 
@@ -120,9 +124,7 @@ unsafe fn apply_theme_color_to_window(win: *mut AnyObject, rgb: u32) {
         return;
     }
     unsafe {
-        let r = ((rgb >> 16) & 0xff) as f64 / 255.0;
-        let g = ((rgb >> 8) & 0xff) as f64 / 255.0;
-        let b = (rgb & 0xff) as f64 / 255.0;
+        let (r, g, b) = srgb_components(rgb);
         let nscolor_cls = class!(NSColor);
         let ns: *mut AnyObject = msg_send![
             nscolor_cls,
@@ -740,8 +742,7 @@ pub fn macos_init(_mpv: *mut c_void) -> bool {
         // NSWindowTitleHidden == 1.
         let _: () = msg_send![state.window, setTitleVisibility: 1isize];
         let mask: u64 = msg_send![state.window, styleMask];
-        // NSWindowStyleMaskFullSizeContentView == 1 << 15.
-        let _: () = msg_send![state.window, setStyleMask: (mask | (1u64 << 15))];
+        let _: () = msg_send![state.window, setStyleMask: with_full_size_content_view(mask)];
 
         let content_view: *mut AnyObject = msg_send![state.window, contentView];
         if !content_view.is_null() {
@@ -971,12 +972,12 @@ unsafe fn add_menu_item(
     modifier_mask: u64,
 ) {
     unsafe {
-        let title_c = std::ffi::CString::new(title).unwrap_or_default();
+        let title_c = menu_c_string(title);
         let title_ns: *mut AnyObject = msg_send![
             class!(NSString),
             stringWithUTF8String: title_c.as_ptr()
         ];
-        let ke_c = std::ffi::CString::new(key_equiv).unwrap_or_default();
+        let ke_c = menu_c_string(key_equiv);
         let ke_ns: *mut AnyObject = msg_send![
             class!(NSString),
             stringWithUTF8String: ke_c.as_ptr()

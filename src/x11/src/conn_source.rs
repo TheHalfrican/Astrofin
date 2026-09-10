@@ -1,4 +1,6 @@
 //! One calloop `EventSource` over an X connection, shared by x11rb and xcb.
+//! The error classification and the synthetic readiness are in
+//! [`crate::conn_source_logic`].
 
 use std::collections::VecDeque;
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
@@ -6,9 +8,11 @@ use std::sync::Arc;
 
 use calloop::{EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory};
 use x11rb::connection::Connection as _;
-use x11rb::errors::ConnectionError;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
+
+pub(crate) use crate::conn_source_logic::{X11SourceError, XcbSourceError};
+use crate::conn_source_logic::{classify_connection_error, queued_readiness};
 
 /// An X connection that owns one socket and a userspace event queue.
 pub(crate) trait PollConn: 'static {
@@ -91,10 +95,9 @@ impl<C: PollConn> EventSource for ConnSource<C> {
         poll.unregister(self.fd)
     }
 
-    /// Every X round trip drains the socket and parses whatever events it finds
-    /// into userspace, so the fd can look idle to `poll(2)` while events sit
-    /// unhandled. Returning synthetic readiness here is what gets those events
-    /// dispatched instead of blocking on socket traffic that may never come.
+    /// Drain whatever the last round trip parsed into userspace and report it
+    /// as readable — see [`queued_readiness`] for why the fd cannot be trusted
+    /// to say so itself.
     fn before_sleep(&mut self) -> calloop::Result<Option<(Readiness, Token)>> {
         while let Some(ev) = self.conn.next_queued_event() {
             self.pending.push_back(ev);
@@ -105,28 +108,13 @@ impl<C: PollConn> EventSource for ConnSource<C> {
         let Some(token) = self.token else {
             return Ok(None);
         };
-        Ok(Some((
-            Readiness {
-                readable: true,
-                writable: false,
-                error: false,
-            },
-            token,
-        )))
+        Ok(Some((queued_readiness(), token)))
     }
 }
 
 pub(crate) type X11Source = ConnSource<RustConnection>;
 
 pub(crate) type XcbSource = ConnSource<xcb::Connection>;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum X11SourceError {
-    #[error("x11 connection error: {0}")]
-    Connection(#[source] ConnectionError),
-    #[error("x11 socket i/o error: {0}")]
-    Io(#[source] std::io::Error),
-}
 
 impl PollConn for RustConnection {
     type Event = Event;
@@ -137,23 +125,13 @@ impl PollConn for RustConnection {
     }
 
     fn next_event(&self) -> Result<Option<Event>, X11SourceError> {
-        match self.poll_for_event() {
-            Ok(ev) => Ok(ev),
-            Err(ConnectionError::IoError(e)) => Err(X11SourceError::Io(e)),
-            Err(e) => Err(X11SourceError::Connection(e)),
-        }
+        self.poll_for_event().map_err(classify_connection_error)
     }
 
     fn next_queued_event(&self) -> Option<Event> {
         self.poll_for_event().ok().flatten()
     }
 }
-
-/// `xcb::Error`'s own `Display` names only the category, so the cause is
-/// formatted with `Debug` here and carried as `source()`.
-#[derive(Debug, thiserror::Error)]
-#[error("xcb connection error: {0:?}")]
-pub(crate) struct XcbSourceError(#[source] xcb::Error);
 
 impl PollConn for xcb::Connection {
     type Event = xcb::Event;

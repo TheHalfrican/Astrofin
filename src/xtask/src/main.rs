@@ -9,6 +9,7 @@ mod cef;
 mod fs;
 mod install;
 mod mpv;
+mod naming;
 mod package;
 mod paths;
 #[cfg_attr(target_os = "macos", path = "platform_macos.rs")]

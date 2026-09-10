@@ -37,9 +37,16 @@ struct Handle {
     thread: JoinHandle<()>,
 }
 
+/// A clipboard payload as text. A selection that is not valid UTF-8 reads as
+/// empty rather than being lossily transcoded: the requester's promise has to
+/// resolve either way, and half-decoded bytes would reach the page as real
+/// content.
+fn decode_text(bytes: &[u8]) -> &str {
+    std::str::from_utf8(bytes).unwrap_or("")
+}
+
 fn fire(pending: PendingCb, text: &[u8]) {
-    let s = std::str::from_utf8(text).unwrap_or("");
-    (pending.cb)(s);
+    (pending.cb)(decode_text(text));
 }
 
 fn start_receive() -> Option<OwnedFd> {
@@ -238,5 +245,68 @@ impl Clipboard {
         // The worker drains every still-queued callback after its loop returns,
         // so joining here is what guarantees each one ran exactly once.
         let _ = handle.thread.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_text_decodes_unchanged() {
+        assert_eq!(decode_text(b"hello"), "hello");
+        assert_eq!(
+            decode_text("caf\u{e9} \u{2014} ok".as_bytes()),
+            "caf\u{e9} \u{2014} ok"
+        );
+    }
+
+    #[test]
+    fn an_empty_selection_decodes_to_an_empty_string() {
+        assert_eq!(decode_text(b""), "");
+    }
+
+    #[test]
+    fn a_non_utf8_selection_reads_as_empty_rather_than_lossy() {
+        // Latin-1 bytes, a lone surrogate half, and a truncated code point.
+        assert_eq!(decode_text(&[0xFF, 0xFE]), "");
+        assert_eq!(decode_text(&[0xED, 0xA0, 0x80]), "");
+        assert_eq!(
+            decode_text("caf\u{e9}".as_bytes().split_last().unwrap().1),
+            ""
+        );
+    }
+
+    #[test]
+    fn an_embedded_nul_is_kept_because_it_is_valid_utf8() {
+        assert_eq!(decode_text(b"a\0b"), "a\0b");
+    }
+
+    #[test]
+    fn a_delivered_callback_sees_the_decoded_text() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        fire(
+            PendingCb {
+                cb: Box::new(move |s| {
+                    let _ = tx.send(s.to_owned());
+                }),
+            },
+            b"clipped",
+        );
+        assert_eq!(rx.try_recv().unwrap(), "clipped");
+    }
+
+    #[test]
+    fn an_undeliverable_request_still_resolves_with_an_empty_string() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        fire(
+            PendingCb {
+                cb: Box::new(move |s| {
+                    let _ = tx.send(s.to_owned());
+                }),
+            },
+            &[],
+        );
+        assert_eq!(rx.try_recv().unwrap(), "");
     }
 }

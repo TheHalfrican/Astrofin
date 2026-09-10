@@ -84,6 +84,28 @@ impl DecorationRequest {
             Self::ServerSide => sctk_window::WindowDecorations::RequestServer,
         }
     }
+
+    /// Decode the atomic representation. Anything unrecognised reads as
+    /// `Auto`, the only value that asks the compositor for nothing.
+    fn from_u8(v: u8) -> Self {
+        match v {
+            v if v == Self::ClientSide as u8 => Self::ClientSide,
+            v if v == Self::ServerSide as u8 => Self::ServerSide,
+            _ => Self::Auto,
+        }
+    }
+
+    /// The request a stored user preference makes. Both server-side modes
+    /// (plain and themed) ask for SSD — the tint is a separate KDE protocol,
+    /// not a different decoration mode — and no stored preference means no
+    /// `set_mode` at all.
+    fn for_configured(configured: Option<WindowDecorations>) -> Self {
+        match configured {
+            None => Self::Auto,
+            Some(WindowDecorations::Csd) => Self::ClientSide,
+            Some(_) => Self::ServerSide,
+        }
+    }
 }
 
 /// The root window's cross-thread surface: everything the dispatch thread
@@ -148,21 +170,14 @@ impl RootShared {
     }
 
     fn decoration_request(&self) -> DecorationRequest {
-        match self.decoration_request.load(Ordering::Acquire) {
-            v if v == DecorationRequest::ClientSide as u8 => DecorationRequest::ClientSide,
-            v if v == DecorationRequest::ServerSide as u8 => DecorationRequest::ServerSide,
-            _ => DecorationRequest::Auto,
-        }
+        DecorationRequest::from_u8(self.decoration_request.load(Ordering::Acquire))
     }
 
     pub(crate) fn set_decorations(&self, configured: Option<WindowDecorations>) {
-        let request = match configured {
-            None => DecorationRequest::Auto,
-            Some(WindowDecorations::Csd) => DecorationRequest::ClientSide,
-            Some(_) => DecorationRequest::ServerSide,
-        };
-        self.decoration_request
-            .store(request as u8, Ordering::Release);
+        self.decoration_request.store(
+            DecorationRequest::for_configured(configured) as u8,
+            Ordering::Release,
+        );
     }
 
     pub(crate) fn effective_decorations(&self) -> EffectiveDecorations {
@@ -247,14 +262,13 @@ impl RootShared {
     }
 
     pub(crate) fn set_background_color(&self, r: u8, g: u8, b: u8) {
-        let rgb = (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
-        self.pending_bg.store(BG_SET | rgb, Ordering::Release);
+        self.pending_bg
+            .store(encode_bg([r, g, b]), Ordering::Release);
         self.wake();
     }
 
     fn pending_bg(&self) -> Option<[u8; 3]> {
-        let v = self.pending_bg.load(Ordering::Acquire);
-        (v & BG_SET != 0).then_some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+        decode_bg(self.pending_bg.load(Ordering::Acquire))
     }
 
     pub(crate) fn request_present(&self) {
@@ -664,8 +678,7 @@ impl RootState {
     fn create_solid_buffer(&mut self) -> Option<SlotBuffer> {
         let bg = self.bg;
         crate::wl_state::draw_argb8888(self.shm_pool.as_mut()?, 1, 1, move |dst| {
-            // ARGB8888 little-endian byte order = [B, G, R, A].
-            dst.copy_from_slice(&[bg[2], bg[1], bg[0], 0xFF]);
+            dst.copy_from_slice(&crate::wl_state::argb8888_opaque(bg));
             true
         })
     }
@@ -793,6 +806,20 @@ const FS_NONE: u8 = 0;
 const FS_TOGGLE: u8 = 1;
 const FS_ON: u8 = 2;
 const FS_OFF: u8 = 3;
+
+/// The fullscreen state a queued request resolves to, or `None` when nothing
+/// was queued. A toggle can only be answered against the mode the root thread
+/// currently holds, which is why it is resolved here rather than at request
+/// time — a configure between the two would flip the wrong way.
+fn fullscreen_request(pending: u8, currently_fullscreen: bool) -> Option<bool> {
+    match pending {
+        FS_ON => Some(true),
+        FS_OFF => Some(false),
+        FS_TOGGLE => Some(!currently_fullscreen),
+        _ => None,
+    }
+}
+
 fn apply_fullscreen(state: &mut RootState, on: bool) {
     if on {
         // A fullscreen-enter received while already fullscreen must not overwrite
@@ -1095,6 +1122,17 @@ pub(crate) fn popup(rt: &WlRuntime, cmd: PopupCommand) {
 // which owns the surface, so commits don't race the configure handler.
 const BG_SET: u32 = 1 << 24;
 
+/// Pack an RGB triple into the pending-background word. The marker bit is
+/// what separates "black was requested" from "nothing was requested".
+fn encode_bg(rgb: [u8; 3]) -> u32 {
+    BG_SET | (u32::from(rgb[0]) << 16) | (u32::from(rgb[1]) << 8) | u32::from(rgb[2])
+}
+
+/// Unpack a pending-background word; `None` while no colour has been stored.
+fn decode_bg(v: u32) -> Option<[u8; 3]> {
+    (v & BG_SET != 0).then_some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+}
+
 // The root `wl_surface.commit` is issued by exactly one owner — this dispatch
 // thread. Every other producer (CEF paint paths, mpv) that needs to present
 // requests it here, so geometry, overlay and video always land in one
@@ -1334,21 +1372,13 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
 // the wake fd could ring is still serviced without waiting for another event.
 fn service_root_requests(state: &mut RootState) -> bool {
     let mut applied = false;
-    match state.rt.root().pending_fs.swap(FS_NONE, Ordering::Acquire) {
-        FS_ON => {
-            apply_fullscreen(state, true);
-            applied = true;
-        }
-        FS_OFF => {
-            apply_fullscreen(state, false);
-            applied = true;
-        }
-        FS_TOGGLE => {
-            let on = !matches!(state.mode, crate::window_state::WindowMode::Fullscreen);
-            apply_fullscreen(state, on);
-            applied = true;
-        }
-        _ => {}
+    let pending_fs = state.rt.root().pending_fs.swap(FS_NONE, Ordering::Acquire);
+    if let Some(on) = fullscreen_request(
+        pending_fs,
+        matches!(state.mode, crate::window_state::WindowMode::Fullscreen),
+    ) {
+        apply_fullscreen(state, on);
+        applied = true;
     }
     // Drained without a lock, so a command queued by an applied command's own
     // effects is serviced in this same pass.
@@ -1551,17 +1581,13 @@ impl WindowHandler for RootState {
         self.pending_w = w.and_then(logical_extent);
         self.pending_h = h.and_then(logical_extent);
 
-        self.mode = if configure.is_fullscreen() {
-            crate::window_state::WindowMode::Fullscreen
-        } else if configure.is_maximized() {
-            crate::window_state::WindowMode::Maximized
-        } else if configure.state.intersects(WindowState::TILED) {
-            // Any single tiled edge means compositor-tiled; `is_tiled` demands
-            // all four.
-            crate::window_state::WindowMode::Tiled
-        } else {
-            crate::window_state::WindowMode::Floating
-        };
+        // Any single tiled edge means compositor-tiled; `is_tiled` demands
+        // all four.
+        self.mode = window_mode(
+            configure.is_fullscreen(),
+            configure.is_maximized(),
+            configure.state.intersects(WindowState::TILED),
+        );
 
         let suspended = configure.state.contains(WindowState::SUSPENDED);
         if suspended != self.suspended {
@@ -1587,6 +1613,25 @@ impl WindowHandler for RootState {
     }
 }
 
+/// The window mode a toplevel configure's state flags describe, in order of
+/// authority: fullscreen and maximized both mean a compositor-dictated size,
+/// and tiling only decides the mode once neither of those holds.
+fn window_mode(fullscreen: bool, maximized: bool, tiled: bool) -> crate::window_state::WindowMode {
+    use crate::window_state::WindowMode;
+    if fullscreen {
+        WindowMode::Fullscreen
+    } else if maximized {
+        WindowMode::Maximized
+    } else if tiled {
+        WindowMode::Tiled
+    } else {
+        WindowMode::Floating
+    }
+}
+
+/// A configure's `new_size` axis as a window extent. The wire carries `u32`
+/// but every downstream consumer is `i32`, so a width the compositor could
+/// name but we cannot represent is dropped rather than wrapped.
 fn logical_extent(v: std::num::NonZeroU32) -> Option<NonZeroI32> {
     NonZeroI32::new(i32::try_from(v.get()).ok()?)
 }
@@ -1941,10 +1986,14 @@ mod model_tests {
 mod tests {
     use super::popup_place::Placed;
     use super::presentation::{Inputs, ScaleDiscovery, Step, plan};
-    use super::resolve_logical_size;
+    use super::{
+        BG, BG_SET, DecorationRequest, EffectiveState, FS_NONE, FS_OFF, FS_ON, FS_TOGGLE,
+        decode_bg, encode_bg, fullscreen_request, logical_extent, resolve_logical_size,
+        window_mode,
+    };
     use crate::window_state::{WindowMode, WindowSize};
-    use jfn_platform_abi::MenuPlacement;
-    use std::num::NonZeroI32;
+    use jfn_platform_abi::{EffectiveDecorations, MenuPlacement, WindowDecorations};
+    use std::num::{NonZeroI32, NonZeroU32};
 
     fn place(x: i32) -> MenuPlacement {
         MenuPlacement {
@@ -2146,5 +2195,152 @@ mod tests {
             ),
             size(2560, 1440)
         );
+    }
+
+    #[test]
+    fn an_unset_decoration_preference_asks_the_compositor_for_nothing() {
+        assert_eq!(
+            DecorationRequest::for_configured(None),
+            DecorationRequest::Auto
+        );
+    }
+
+    #[test]
+    fn both_server_side_preferences_request_server_side_decorations() {
+        // The KDE tint is a separate protocol, not a third decoration mode.
+        assert_eq!(
+            DecorationRequest::for_configured(Some(WindowDecorations::Server)),
+            DecorationRequest::ServerSide
+        );
+        assert_eq!(
+            DecorationRequest::for_configured(Some(WindowDecorations::ServerThemed)),
+            DecorationRequest::ServerSide
+        );
+        assert_eq!(
+            DecorationRequest::for_configured(Some(WindowDecorations::Csd)),
+            DecorationRequest::ClientSide
+        );
+    }
+
+    #[test]
+    fn a_decoration_request_survives_the_atomic_round_trip() {
+        for request in [
+            DecorationRequest::Auto,
+            DecorationRequest::ClientSide,
+            DecorationRequest::ServerSide,
+        ] {
+            assert_eq!(DecorationRequest::from_u8(request as u8), request);
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_decoration_byte_decodes_as_auto() {
+        assert_eq!(DecorationRequest::from_u8(200), DecorationRequest::Auto);
+        assert_eq!(DecorationRequest::from_u8(u8::MAX), DecorationRequest::Auto);
+    }
+
+    #[test]
+    fn decorations_start_client_side_and_only_a_change_reports_true() {
+        let state = EffectiveState(std::sync::atomic::AtomicU8::new(0));
+        assert_eq!(state.load(), EffectiveDecorations::ClientSide);
+        // Storing the value already held is not a change to notify about.
+        assert!(!state.store(EffectiveDecorations::ClientSide));
+        assert!(state.store(EffectiveDecorations::ServerSide));
+        assert_eq!(state.load(), EffectiveDecorations::ServerSide);
+        assert!(!state.store(EffectiveDecorations::ServerSide));
+        assert!(state.store(EffectiveDecorations::ClientSide));
+    }
+
+    #[test]
+    fn a_background_colour_survives_the_atomic_round_trip() {
+        for rgb in [[0, 0, 0], [0x10, 0x10, 0x10], [0xFF, 0xFF, 0xFF], BG] {
+            assert_eq!(decode_bg(encode_bg(rgb)), Some(rgb));
+        }
+    }
+
+    #[test]
+    fn black_is_distinguishable_from_no_colour_requested() {
+        assert_eq!(decode_bg(0), None);
+        assert_eq!(decode_bg(encode_bg([0, 0, 0])), Some([0, 0, 0]));
+    }
+
+    #[test]
+    fn the_marker_bit_sits_above_the_colour_channels() {
+        assert_eq!(encode_bg([0xFF, 0xFF, 0xFF]) & !BG_SET, 0x00FF_FFFF);
+        assert_eq!(encode_bg([0x12, 0x34, 0x56]) & !BG_SET, 0x0012_3456);
+    }
+
+    #[test]
+    fn an_empty_fullscreen_slot_requests_nothing() {
+        assert_eq!(fullscreen_request(FS_NONE, false), None);
+        assert_eq!(fullscreen_request(FS_NONE, true), None);
+        assert_eq!(fullscreen_request(99, true), None);
+    }
+
+    #[test]
+    fn an_explicit_fullscreen_request_ignores_the_current_mode() {
+        assert_eq!(fullscreen_request(FS_ON, true), Some(true));
+        assert_eq!(fullscreen_request(FS_ON, false), Some(true));
+        assert_eq!(fullscreen_request(FS_OFF, true), Some(false));
+        assert_eq!(fullscreen_request(FS_OFF, false), Some(false));
+    }
+
+    #[test]
+    fn a_toggle_resolves_against_the_mode_the_root_thread_holds() {
+        assert_eq!(fullscreen_request(FS_TOGGLE, false), Some(true));
+        assert_eq!(fullscreen_request(FS_TOGGLE, true), Some(false));
+    }
+
+    #[test]
+    fn fullscreen_outranks_every_other_configure_state() {
+        for maximized in [false, true] {
+            for tiled in [false, true] {
+                assert_eq!(
+                    window_mode(true, maximized, tiled),
+                    WindowMode::Fullscreen,
+                    "maximized={maximized} tiled={tiled}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn maximized_outranks_tiled() {
+        assert_eq!(window_mode(false, true, true), WindowMode::Maximized);
+        assert_eq!(window_mode(false, true, false), WindowMode::Maximized);
+    }
+
+    #[test]
+    fn a_single_tiled_edge_is_enough_to_be_tiled() {
+        assert_eq!(window_mode(false, false, true), WindowMode::Tiled);
+        assert!(!WindowMode::Tiled.uses_floating_restore());
+    }
+
+    #[test]
+    fn no_state_flags_at_all_is_a_floating_window() {
+        assert_eq!(window_mode(false, false, false), WindowMode::Floating);
+        assert!(WindowMode::Floating.uses_floating_restore());
+    }
+
+    #[test]
+    fn an_ordinary_configure_extent_converts_unchanged() {
+        assert_eq!(
+            logical_extent(NonZeroU32::new(1920).unwrap()),
+            NonZeroI32::new(1920)
+        );
+        assert_eq!(
+            logical_extent(NonZeroU32::new(1).unwrap()),
+            NonZeroI32::new(1)
+        );
+    }
+
+    #[test]
+    fn an_extent_wider_than_an_i32_is_dropped_not_wrapped() {
+        let too_wide = NonZeroU32::new(u32::MAX).unwrap();
+        assert_eq!(logical_extent(too_wide), None);
+        let boundary = NonZeroU32::new(i32::MAX as u32 + 1).unwrap();
+        assert_eq!(logical_extent(boundary), None);
+        let largest = NonZeroU32::new(i32::MAX as u32).unwrap();
+        assert_eq!(logical_extent(largest), NonZeroI32::new(i32::MAX));
     }
 }

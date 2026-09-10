@@ -213,20 +213,36 @@ pub(crate) fn new_slot_pool(shm: &ShmGlobal, what: &str) -> Option<SlotPool> {
     }
 }
 
+/// One opaque ARGB8888 pixel for an RGB colour. The format's little-endian
+/// byte order is `[B, G, R, A]`, which is worth naming once rather than
+/// open-coding at every solid-fill site.
+pub(crate) fn argb8888_opaque(rgb: [u8; 3]) -> [u8; 4] {
+    [rgb[2], rgb[1], rgb[0], 0xFF]
+}
+
+/// Row stride and total pixel-data length of a `w`x`h` ARGB8888 buffer.
+/// `None` when either dimension is non-positive, or when the stride or the
+/// total does not fit — a compositor-supplied extent must never be trusted to
+/// multiply cleanly.
+pub(crate) fn argb8888_span(w: i32, h: i32) -> Option<(i32, usize)> {
+    let stride = w.checked_mul(4)?;
+    if stride <= 0 || h <= 0 {
+        return None;
+    }
+    let len = (h as usize).checked_mul(stride as usize)?;
+    Some((stride, len))
+}
+
 pub(crate) fn draw_argb8888(
     pool: &mut SlotPool,
     w: i32,
     h: i32,
     fill: impl FnOnce(&mut [u8]) -> bool,
 ) -> Option<SlotBuffer> {
-    let stride = w.checked_mul(4)?;
-    if stride <= 0 || h <= 0 {
-        return None;
-    }
     // The pool rounds slots up to a 64-byte boundary, so the canvas it hands
     // back can be longer than the buffer's pixel data. Trim it to what the
     // compositor will actually read.
-    let len = (h as usize).checked_mul(stride as usize)?;
+    let (stride, len) = argb8888_span(w, h)?;
     let (buffer, canvas) = pool.create_buffer(w, h, stride, Format::Argb8888).ok()?;
     if !fill(canvas.get_mut(..len)?) {
         return None;
@@ -654,14 +670,21 @@ impl WlState {
     }
 }
 
+/// Is a frame's visible size close enough to the window's physical size to end
+/// a fullscreen transition? Both axes must be inside
+/// [`TRANSITION_TOLERANCE_TEXELS`]; a frame that misses on one axis is still a
+/// mid-transition frame.
+pub(crate) fn within_tolerance(vw: i32, vh: i32, pw: i32, ph: i32) -> bool {
+    (vw - pw).abs() <= TRANSITION_TOLERANCE_TEXELS && (vh - ph).abs() <= TRANSITION_TOLERANCE_TEXELS
+}
+
 // Does an incoming frame's visible size match the authoritative physical window
 // size (within tolerance)? Reads the single source, not a per-layer copy.
 pub(crate) fn size_in_tolerance(rt: &crate::runtime::WlRuntime, vw: i32, vh: i32) -> bool {
     let Some(ext) = rt.window().window_extent() else {
         return true;
     };
-    let (pw, ph) = (ext.physical().w(), ext.physical().h());
-    (vw - pw).abs() <= TRANSITION_TOLERANCE_TEXELS && (vh - ph).abs() <= TRANSITION_TOLERANCE_TEXELS
+    within_tolerance(vw, vh, ext.physical().w(), ext.physical().h())
 }
 
 // =====================================================================
@@ -676,6 +699,13 @@ pub(crate) struct DmabufPlane<'a> {
     pub(crate) h: i32,
 }
 
+/// A DRM format modifier split into the `(hi, lo)` halves
+/// `zwp_linux_buffer_params_v1.add` carries — the protocol has no 64-bit
+/// argument type, so the two words travel separately.
+pub(crate) fn split_modifier(modifier: u64) -> (u32, u32) {
+    ((modifier >> 32) as u32, (modifier & 0xffff_ffff) as u32)
+}
+
 /// Create a dmabuf-backed wl_buffer from a single-plane fd.
 pub(crate) fn create_dmabuf_buffer(
     reg: &'static DmabufRegistry,
@@ -684,14 +714,8 @@ pub(crate) fn create_dmabuf_buffer(
     plane: DmabufPlane<'_>,
 ) -> Option<DmabufBuffer> {
     let params: ZwpLinuxBufferParamsV1 = dmabuf.create_params(qh, ());
-    params.add(
-        plane.fd,
-        0,
-        0,
-        plane.stride,
-        (plane.modifier >> 32) as u32,
-        (plane.modifier & 0xffff_ffff) as u32,
-    );
+    let (modifier_hi, modifier_lo) = split_modifier(plane.modifier);
+    params.add(plane.fd, 0, 0, plane.stride, modifier_hi, modifier_lo);
     let buf = params.create_immed(
         plane.w,
         plane.h,
@@ -702,4 +726,92 @@ pub(crate) fn create_dmabuf_buffer(
     );
     params.destroy();
     Some(reg.adopt(buf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_argb8888_fourcc_is_the_little_endian_ar24_code() {
+        // DRM_FORMAT_ARGB8888 as drm_fourcc.h spells it.
+        assert_eq!(DRM_FORMAT_ARGB8888, 0x3432_5241);
+        assert_eq!(fourcc(b'A', b'R', b'2', b'4'), DRM_FORMAT_ARGB8888);
+    }
+
+    #[test]
+    fn fourcc_packs_the_first_character_into_the_low_byte() {
+        assert_eq!(fourcc(0x01, 0x02, 0x03, 0x04), 0x0403_0201);
+    }
+
+    #[test]
+    fn an_opaque_pixel_is_stored_blue_first() {
+        assert_eq!(
+            argb8888_opaque([0x10, 0x20, 0x30]),
+            [0x30, 0x20, 0x10, 0xFF]
+        );
+    }
+
+    #[test]
+    fn an_opaque_pixel_is_always_fully_opaque() {
+        assert_eq!(argb8888_opaque([0, 0, 0])[3], 0xFF);
+        assert_eq!(argb8888_opaque([0xFF, 0xFF, 0xFF]), [0xFF; 4]);
+    }
+
+    #[test]
+    fn a_span_is_four_bytes_per_pixel_per_row() {
+        assert_eq!(argb8888_span(1, 1), Some((4, 4)));
+        assert_eq!(argb8888_span(1920, 1080), Some((7680, 7680 * 1080)));
+    }
+
+    #[test]
+    fn a_non_positive_extent_has_no_span() {
+        assert_eq!(argb8888_span(0, 10), None);
+        assert_eq!(argb8888_span(10, 0), None);
+        assert_eq!(argb8888_span(-1, 10), None);
+        assert_eq!(argb8888_span(10, -1), None);
+    }
+
+    #[test]
+    fn a_stride_that_overflows_an_i32_has_no_span() {
+        assert_eq!(argb8888_span(i32::MAX, 1), None);
+        // Exactly representable: the largest width whose stride still fits.
+        assert!(argb8888_span(i32::MAX / 4, 1).is_some());
+    }
+
+    #[test]
+    fn an_exact_size_ends_the_transition() {
+        assert!(within_tolerance(1920, 1080, 1920, 1080));
+    }
+
+    #[test]
+    fn a_size_at_the_tolerance_boundary_still_ends_the_transition() {
+        let t = TRANSITION_TOLERANCE_TEXELS;
+        assert!(within_tolerance(1920 + t, 1080 - t, 1920, 1080));
+        assert!(!within_tolerance(1920 + t + 1, 1080, 1920, 1080));
+        assert!(!within_tolerance(1920, 1080 - t - 1, 1920, 1080));
+    }
+
+    #[test]
+    fn one_axis_inside_the_tolerance_is_not_enough() {
+        assert!(!within_tolerance(1920, 720, 1920, 1080));
+        assert!(!within_tolerance(1280, 1080, 1920, 1080));
+    }
+
+    #[test]
+    fn a_modifier_splits_into_its_two_words() {
+        assert_eq!(split_modifier(0), (0, 0));
+        assert_eq!(
+            split_modifier(0x0123_4567_89ab_cdef),
+            (0x0123_4567, 0x89ab_cdef)
+        );
+        assert_eq!(split_modifier(u64::MAX), (u32::MAX, u32::MAX));
+    }
+
+    #[test]
+    fn a_modifier_below_the_word_boundary_has_an_empty_high_half() {
+        // DRM_FORMAT_MOD_LINEAR is 0, and vendor modifiers set the high byte.
+        assert_eq!(split_modifier(0xffff_ffff), (0, 0xffff_ffff));
+        assert_eq!(split_modifier(1 << 32), (1, 0));
+    }
 }
