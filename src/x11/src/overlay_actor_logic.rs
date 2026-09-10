@@ -135,9 +135,25 @@ mod tests {
         assert_eq!(software_frame(4, -3, 4096), None);
     }
 
+    // `software_frame`'s `checked_mul` can only fail where `usize` is 32 bits;
+    // on a 64-bit target the largest `i32` extent still fits, so the two
+    // pointer widths assert opposite outcomes for the same call.
     #[test]
+    #[cfg(target_pointer_width = "32")]
     fn an_extent_whose_byte_count_overflows_is_rejected() {
         assert_eq!(software_frame(i32::MAX, i32::MAX, usize::MAX), None);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_largest_i32_extent_still_fits_a_64_bit_usize() {
+        assert_eq!(
+            software_frame(i32::MAX, i32::MAX, usize::MAX),
+            Some(SoftwareFrame {
+                stride: (i32::MAX as usize) * 4,
+                len: (i32::MAX as usize) * 4 * (i32::MAX as usize),
+            })
+        );
     }
 
     #[test]

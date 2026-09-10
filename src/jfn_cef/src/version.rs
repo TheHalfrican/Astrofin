@@ -170,6 +170,8 @@ mod tests {
 
     #[test]
     fn cef_version_probes_the_linked_libcef_once() {
+        crate::test_support::ensure_cef_loaded();
+
         let first = cef_version();
         let second = cef_version();
         assert!(

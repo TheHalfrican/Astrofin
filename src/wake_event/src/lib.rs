@@ -42,10 +42,15 @@ pub fn drain_raw_fd(fd: std::ffi::c_int) {
     }
 }
 
-/// Signal a wake fd created by [`WakeEvent`] (or a compatible eventfd): one
-/// 8-byte write of 1. Async-signal-safe. The single home for the wake-signal
-/// encoding, shared with [`WakeEvent::signal`].
-#[cfg(unix)]
+/// Signal an eventfd-backed wake fd: one 8-byte write of 1. Async-signal-safe.
+/// The single home for the wake-signal encoding, shared with
+/// [`WakeEvent::signal`].
+///
+/// Linux only: the encoding and the single readable-and-writable fd are both
+/// eventfd properties. The other unixes back [`WakeEvent`] with a pipe, whose
+/// [`WakeEvent::fd`] is the read end, so there [`WakeEvent::signal`] — which
+/// owns the write end — is the only way to signal.
+#[cfg(target_os = "linux")]
 pub fn signal_raw_fd(fd: std::ffi::c_int) {
     let val: u64 = 1;
     let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
@@ -69,7 +74,9 @@ mod tests {
         poll(&mut fds, PollTimeout::ZERO).unwrap_or(0) > 0
     }
 
+    // `signal_raw_fd` is eventfd-only, and only Linux backs `WakeEvent` with one.
     #[test]
+    #[cfg(target_os = "linux")]
     fn signal_raw_fd_makes_the_wake_fd_readable() {
         let ev = WakeEvent::new().expect("wake event");
         assert!(!readable(ev.fd()), "a fresh wake fd must not be readable");
@@ -80,7 +87,7 @@ mod tests {
     #[test]
     fn drain_raw_fd_empties_a_signaled_fd() {
         let ev = WakeEvent::new().expect("wake event");
-        signal_raw_fd(ev.fd());
+        ev.signal();
         drain_raw_fd(ev.fd());
         assert!(!readable(ev.fd()));
     }
@@ -89,7 +96,7 @@ mod tests {
     fn repeated_signals_drain_in_one_pass() {
         let ev = WakeEvent::new().expect("wake event");
         for _ in 0..4 {
-            signal_raw_fd(ev.fd());
+            ev.signal();
         }
         drain_raw_fd(ev.fd());
         assert!(!readable(ev.fd()), "one drain must clear every signal");
@@ -101,7 +108,7 @@ mod tests {
         drain_raw_fd(ev.fd());
         assert!(!readable(ev.fd()));
         // Still usable afterwards.
-        signal_raw_fd(ev.fd());
+        ev.signal();
         assert!(readable(ev.fd()));
     }
 }

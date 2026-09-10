@@ -395,6 +395,9 @@ mod tests {
 
     #[test]
     fn about_js_payload_prefixes_the_static_body_with_parsable_json() {
+        // The payload carries the runtime CEF version, so libcef must be live.
+        crate::test_support::ensure_cef_loaded();
+
         let out = about_js_payload();
         let text = String::from_utf8(out).unwrap();
         let first = text.lines().next().unwrap();

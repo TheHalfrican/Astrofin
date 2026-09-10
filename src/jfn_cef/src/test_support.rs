@@ -6,6 +6,10 @@
 //! a do-nothing backend exactly once per test process. Every method that has
 //! a default in the `Platform` trait keeps it; only the six required ones are
 //! implemented, plus `effective_decorations`, which the CSD tests flip.
+//!
+//! [`ensure_cef_loaded`] covers the other process-global: on macOS libcef is a
+//! framework loaded at runtime, so a bare test binary must load it before its
+//! first call into the CEF C API.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -13,7 +17,7 @@
 // does not count the stub backend's trait-impl methods as public surface
 // (`cargo xtask test-ratio` walks files, not the module graph).
 #[cfg(test)]
-pub(crate) use support::{install_platform, set_client_side_decorations};
+pub(crate) use support::{ensure_cef_loaded, install_platform, set_client_side_decorations};
 
 #[cfg(test)]
 mod support {
@@ -88,10 +92,48 @@ mod support {
         }
     }
 
+    /// Load the CEF framework so calls into the CEF C API resolve.
+    ///
+    /// On macOS libcef ships as a framework that is loaded at runtime: the
+    /// thunk table in `libcef_dll_wrapper` stays NULL until `cef_load_library`
+    /// runs, so the first CEF call from a bare test binary jumps through a null
+    /// pointer and the process dies with SIGSEGV. The app loads it in
+    /// `MacosCefHost::before_start`; a test binary has no host, so it loads it
+    /// here, once per process. Elsewhere libcef is linked directly and this is
+    /// a no-op.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn ensure_cef_loaded() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        static LOADED: Once = Once::new();
+        LOADED.call_once(|| {
+            let dir = cef::sys::get_cef_dir().expect("CEF_PATH names a CEF distribution");
+            let framework = dir
+                .join(cef::sys::FRAMEWORK_PATH)
+                .canonicalize()
+                .expect("the CEF framework binary exists");
+            let framework =
+                CString::new(framework.as_os_str().as_bytes()).expect("the path holds no NUL");
+            // SAFETY: `framework` outlives the call and is a NUL-terminated path.
+            let loaded = unsafe { cef::sys::cef_load_library(framework.as_ptr().cast()) };
+            assert_eq!(loaded, 1, "cef_load_library failed for {framework:?}");
+        });
+    }
+
+    /// No-op stand-in for the macOS framework loader; see the macOS variant.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn ensure_cef_loaded() {}
+
     /// Install the stub backend. Idempotent and safe to call from every test —
     /// `jfn_platform_abi::install` panics on a second install, so the `Once`
     /// carries the whole process.
+    ///
+    /// Also loads libcef: a test that needs the platform backend is usually one
+    /// step away from a CEF call.
     pub(crate) fn install_platform() {
+        ensure_cef_loaded();
+
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
             if jfn_platform_abi::try_get().is_none() {

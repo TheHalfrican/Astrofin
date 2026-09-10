@@ -49,6 +49,18 @@ project uses semantic versioning.
   Baseline: zero vulnerabilities, one unmaintained transitive crate
   (ttf-parser via cosmic-text, Linux menu renderer only).
 
+### Fixed
+- The workspace test suite now passes on the GitHub macOS and Linux CI
+  runners, not only on the Windows one. The jfn-cef test binary loads the
+  CEF framework once per process on macOS before its first CEF call (a bare
+  test binary has no `MacosCefHost`, so `cef_version()` went through a NULL
+  thunk and the harness died with SIGSEGV); the two `c_char` pointer casts
+  clippy rejects on aarch64 Linux, where `c_char` is unsigned, use
+  `.cast::<u8>()`; the x11 overflow test asserts per pointer width, since the
+  largest `i32` extent still fits a 64-bit `usize`; and `signal_raw_fd` is
+  Linux-only, because its eventfd write cannot land on the pipe read end
+  the other unixes hand out (the drain tests signal through the event).
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
