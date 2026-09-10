@@ -60,6 +60,14 @@ project uses semantic versioning.
   largest `i32` extent still fits a 64-bit `usize`; and `signal_raw_fd` is
   Linux-only, because its eventfd write cannot land on the pipe read end
   the other unixes hand out (the drain tests signal through the event).
+- A volume dragged to zero is saved as zero: `mpv-player-base.js` treated 0
+  as "unset" and stored full volume, so a deliberate mute came back at
+  100% on the next start. Only null, undefined, an empty string and
+  non-finite numbers count as unset now.
+- Language tags with an underscore (`ur_PK`, `es_419`, a POSIX `LANG`)
+  resolve to their table or bare language instead of English; the
+  resolver folds `_` to `-` on both sides, which also makes jellyfin-web's
+  four underscored tables (bn_BD, es_419, es_DO, ur_PK) reachable.
 
 ## [0.4.0] - 2026-09-09
 

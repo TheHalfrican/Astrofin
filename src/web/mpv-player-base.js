@@ -1,4 +1,14 @@
 (function() {
+    // Zero is a volume - silence - not a missing setting, so `|| default` is
+    // the wrong test here: it turns a deliberate mute into full volume on the
+    // next start. Only null, undefined, '' and values that are not finite
+    // numbers count as unset.
+    function asVolume(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+    }
+
     class MpvPlayerBase {
         constructor({ events, appHost, appSettings }) {
             this.events = events;
@@ -188,20 +198,22 @@
         }
 
         saveVolume(value) {
-            if (value) this.appSettings.set('volume', value);
+            const vol = asVolume(value);
+            if (vol !== null) this.appSettings.set('volume', vol);
         }
 
         getSavedVolume() {
-            return this.appSettings.get('volume') || 1;
+            const vol = asVolume(this.appSettings.get('volume'));
+            return vol === null ? 1 : vol;
         }
 
         // Volume
         setVolume(val, save = true) {
             val = Number(val);
-            if (!isNaN(val)) {
+            if (Number.isFinite(val)) {
                 this._volume = val;
                 if (save) {
-                    this.appSettings.set('volume', (val || 100) / 100);
+                    this.appSettings.set('volume', val / 100);
                     this.events.trigger(this, 'volumechange');
                 }
                 window.api.player.setVolume(val);

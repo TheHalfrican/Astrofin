@@ -74,6 +74,12 @@ test('a player with nothing saved starts at full volume', () => {
     assert.equal(player.getVolume(), 100);
 });
 
+test('a player that was left silent starts silent', () => {
+    const { player, api } = setup({ appSettings: makeAppSettings({ volume: 0 }) });
+    assert.equal(player.getVolume(), 0);
+    assert.deepEqual(api.lastCall('setVolume'), [0]);
+});
+
 test('a new player is not paused, has no source and no duration', () => {
     const { player } = setup();
     assert.equal(player.paused(), false);
@@ -406,15 +412,28 @@ test('saving a volume stores it as a fraction', () => {
     assert.equal(appSettings.store.volume, 0.4);
 });
 
-test('saving a volume of zero is ignored', () => {
+test('saving a volume of zero stores silence rather than keeping the old one', () => {
     const { player, appSettings } = setup({ appSettings: makeAppSettings({ volume: 0.4 }) });
     player.saveVolume(0);
-    assert.equal(appSettings.store.volume, 0.4, 'the previous volume survives');
+    assert.equal(appSettings.store.volume, 0);
+});
+
+test('saving something that is not a volume leaves the stored one alone', () => {
+    const { player, appSettings } = setup({ appSettings: makeAppSettings({ volume: 0.4 }) });
+    for (const bogus of [null, undefined, '', 'loud', NaN, Infinity]) {
+        player.saveVolume(bogus);
+        assert.equal(appSettings.store.volume, 0.4, String(bogus));
+    }
 });
 
 test('the saved volume defaults to full when the setting is missing', () => {
     const { player } = setup({ appSettings: makeAppSettings({}) });
     assert.equal(player.getSavedVolume(), 1);
+});
+
+test('a saved volume of zero comes back as silence, not as full volume', () => {
+    const { player } = setup({ appSettings: makeAppSettings({ volume: 0 }) });
+    assert.equal(player.getSavedVolume(), 0);
 });
 
 test('changing the volume tells mpv, saves it and announces the change', () => {
@@ -442,16 +461,14 @@ test('a volume that is not a number is ignored entirely', () => {
     assert.deepEqual(events.names(), []);
 });
 
-test('muting by dragging the volume to zero stores full volume', () => {
-    // BUG (reported, not fixed here): `(val || 100) / 100` treats a real 0 as
-    // "no value" and saves 1.0, so a volume dragged to zero comes back at 100
-    // on the next start. mpv is still told 0, so only the persisted value is
-    // wrong. Pinned so the fix has to change this line deliberately.
+test('muting by dragging the volume to zero stores silence', () => {
+    // Zero is a volume, not a missing one: it has to survive to the next
+    // start rather than being read back as "unset" and restored at full.
     const { player, api, appSettings } = setup();
     player.setVolume(0);
     assert.equal(player.getVolume(), 0);
     assert.deepEqual(api.lastCall('setVolume'), [0]);
-    assert.equal(appSettings.store.volume, 1);
+    assert.equal(appSettings.store.volume, 0);
 });
 
 test('the volume steps up by two and stops at full', () => {

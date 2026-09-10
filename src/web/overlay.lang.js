@@ -952,20 +952,31 @@ function getDefaultLanguage() {
   return fallbackLanguage;
 }
 
+// Language tags reach us with either separator: a browser says 'ur-PK', a
+// POSIX environment says 'ur_PK', and four of jellyfin-web's own tables are
+// named with an underscore (bn_BD, es_419, es_DO, ur_PK). Folding '_' to '-'
+// on both sides is what makes those tables reachable at all, and stops an
+// underscored tag from being read as one long primary subtag that matches
+// nothing and lands on English.
+function normalizeTag(tag) {
+  return String(tag).toLowerCase().replace(/_/g, '-');
+}
+
 // Exact tag, then the bare language, then English: 'pt-br' has its own table,
-// 'de-de' has none but 'de' does, and anything unknown lands on en-us.
+// 'de-de' has none but 'de' does, and anything unknown lands on en-us. The
+// table's own spelling of the tag is what comes back, so the result is always
+// a key that `languages` actually holds.
 function resolveLanguage(tag) {
-  let lang = tag.toLowerCase();
+  const wanted = normalizeTag(tag);
 
-  if (!languages.find(l => l.lang === lang)) {
-    lang = lang.split('-')[0];
-  }
+  const exact = languages.find(l => normalizeTag(l.lang) === wanted);
+  if (exact) return exact.lang;
 
-  if (!languages.find(l => l.lang === lang)) {
-    lang = fallbackLanguage;
-  }
+  const primary = wanted.split('-')[0];
+  const bare = languages.find(l => normalizeTag(l.lang) === primary);
+  if (bare) return bare.lang;
 
-  return lang;
+  return fallbackLanguage;
 }
 
 let language = resolveLanguage(getDefaultLanguage());
@@ -994,6 +1005,7 @@ if (typeof module !== 'undefined' && module.exports) {
     languages: languages,
     fallbackLanguage: fallbackLanguage,
     getDefaultLanguage: getDefaultLanguage,
+    normalizeTag: normalizeTag,
     resolveLanguage: resolveLanguage,
     language: language,
     languageStrings: languageStrings,

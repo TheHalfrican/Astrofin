@@ -87,27 +87,56 @@ test('resolveLanguage drops the region when only the bare language has a table',
 
 test('resolveLanguage falls back to en-us for anything unknown', () => {
     const { lang } = loadLang();
-    for (const tag of ['tlh', 'xx-YY', '', '-', 'en_US']) {
+    for (const tag of ['tlh', 'xx-YY', '', '-', 'xx_YY']) {
         assert.strictEqual(lang.resolveLanguage(tag), 'en-us', tag);
     }
 });
 
-test('the underscored tables are unreachable through resolveLanguage', () => {
+test('resolveLanguage reads an underscore as a separator, not as part of the tag', () => {
+    // A tag arrives with either separator: a browser says 'ur-PK', a POSIX
+    // LANG says 'ur_PK'. Both have to walk the same ladder — before the fix
+    // the underscored spelling was one long primary subtag matching nothing,
+    // so every one of these landed on English.
+    const { lang } = loadLang();
+    assert.strictEqual(lang.resolveLanguage('en_US'), 'en-us');
+    assert.strictEqual(lang.resolveLanguage('pt_BR'), 'pt-br');
+    assert.strictEqual(lang.resolveLanguage('de_DE'), 'de');
+    assert.strictEqual(lang.resolveLanguage('fr_BE'), 'fr');
+});
+
+test('the underscored tables are reachable through resolveLanguage', () => {
     // jellyfin-web names four of its string files with an underscore
-    // (bn_BD, es_419, es_DO, ur_PK). A browser tag never contains one, and the
-    // ladder only ever strips at '-', so these tables can only be reached by
-    // their bare language — Urdu, which has none, therefore lands on English.
+    // (bn_BD, es_419, es_DO, ur_PK). Matching with '_' folded to '-' on both
+    // sides is what reaches them, in either spelling; the table's own key is
+    // what comes back, so the caller can look the strings up with it.
     const { lang } = loadLang();
     const underscored = lang.languages.filter((l) => l.lang.includes('_')).map((l) => l.lang);
     assert.deepStrictEqual(underscored, ['bn_BD', 'es_419', 'es_DO', 'ur_PK']);
-    assert.strictEqual(lang.resolveLanguage('ur-PK'), 'en-us');
-    assert.strictEqual(lang.resolveLanguage('es-419'), 'es');
-    assert.strictEqual(lang.resolveLanguage('bn-BD'), 'bn');
+    for (const [tag, table] of [
+        ['ur-PK', 'ur_PK'], ['ur_PK', 'ur_PK'],
+        ['es-419', 'es_419'], ['es_419', 'es_419'],
+        ['es-DO', 'es_DO'], ['es_DO', 'es_DO'],
+        ['bn-BD', 'bn_BD'], ['bn_BD', 'bn_BD']
+    ]) {
+        assert.strictEqual(lang.resolveLanguage(tag), table, tag);
+        assert.ok(lang.languages.find((l) => l.lang === table), table);
+    }
+});
+
+test('an underscored tag drops to its bare language, or to English when there is none', () => {
+    // 'zh_Hant' has no table and no bare 'zh' either, so English is right for
+    // it; 'es_MX' does have a bare 'es' one step down, and 'sr_Latn' resolves
+    // to plain Serbian the same way.
+    const { lang } = loadLang();
+    assert.strictEqual(lang.resolveLanguage('es_MX'), 'es-mx');
+    assert.strictEqual(lang.resolveLanguage('sr_Latn'), 'sr');
+    assert.strictEqual(lang.resolveLanguage('zh_Hant'), 'en-us');
 });
 
 test('the language picked at load follows the navigator', () => {
     assert.strictEqual(loadLang({ language: 'de-DE' }).lang.language, 'de');
     assert.strictEqual(loadLang({ language: 'pt-BR' }).lang.language, 'pt-br');
+    assert.strictEqual(loadLang({ language: 'ur_PK' }).lang.language, 'ur_PK');
     assert.strictEqual(loadLang({ language: 'tlh' }).lang.language, 'en-us');
 });
 
