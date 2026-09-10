@@ -128,6 +128,13 @@ project uses semantic versioning.
   now recovers the count from the press stream on Windows, X11 and Wayland
   (Chromium's own thresholds: under 500 ms, within 4 px, same button, up to
   three) and macOS passes the `NSEvent` click count through, clamped.
+- X11 glue hardened (docs/test-plan.md §6): the SHM allocator rejects a
+  non-positive or overflowing extent itself instead of relying on checks two
+  modules away; the mpv-proxy no-op rewrite no longer indexes past an empty
+  request; the `_NET_WM_SYNC_REQUEST` handshake disarms when the counter is
+  written, so a later reconcile cannot re-apply a stale latch. The clipboard
+  read on the platform trait is renamed from `_async`: three of the four
+  backends always ran the callback inline, and the trait now says so.
 
 ## [0.4.0] - 2026-09-09
 

@@ -79,7 +79,7 @@ impl Inner {
             return false;
         }
         let inner = Arc::clone(self);
-        p.clipboard_read_text_async(Box::new(move |text| {
+        p.clipboard_read_text(Box::new(move |text| {
             if text.is_empty() {
                 return;
             }

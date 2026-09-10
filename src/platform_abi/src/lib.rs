@@ -621,7 +621,7 @@ pub trait Platform: Send + Sync {
     /// shared-texture path.
     fn set_shared_texture_unsupported(&self) {}
 
-    /// Whether [`clipboard_read_text_async`] will actually invoke the
+    /// Whether [`Platform::clipboard_read_text`] will actually invoke the
     /// backend clipboard. Wayland clears this in `wl_init` when no data
     /// device manager is present; the menu Paste path uses it to decide
     /// between native OS read vs CEF `frame.Paste()`.
@@ -629,8 +629,19 @@ pub trait Platform: Send + Sync {
         true
     }
 
-    fn clipboard_read_text_async(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
-        // No backend support — invoke with empty text synchronously.
+    /// Read the clipboard's plain text, handing it to `on_done`.
+    ///
+    /// `on_done` runs exactly once, but *when* is the backend's business and no
+    /// caller may assume either way: macOS (`NSPasteboard`), Windows
+    /// (`GetClipboardData`), X11 (no backend read at all) and this default all
+    /// invoke it inline on the calling thread, because those reads are
+    /// synchronous and cheap; Wayland alone defers it to its clipboard worker,
+    /// which owns the `wl_data_offer` pipe. Hence the borrowed `&str` — a
+    /// callback that wants to keep the text owns a copy of it — and hence the
+    /// plain name: it used to be `clipboard_read_text_async`, promising an
+    /// asynchrony three of the four backends never had.
+    fn clipboard_read_text(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
+        // No backend support — invoke with empty text, inline.
         on_done("");
     }
     /// Disable subsequent clipboard reads (set by Wayland when no data
@@ -1266,7 +1277,7 @@ pub(crate) mod tests {
         assert!(p.clipboard_text_supported());
         let seen = Arc::new(Mutex::new(None));
         let sink = Arc::clone(&seen);
-        p.clipboard_read_text_async(Box::new(move |text| {
+        p.clipboard_read_text(Box::new(move |text| {
             *sink.lock() = Some(text.to_string());
         }));
         assert_eq!(seen.lock().as_deref(), Some(""));

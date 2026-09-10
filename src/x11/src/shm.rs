@@ -15,11 +15,15 @@ use x11rb::rust_connection::RustConnection;
 
 use crate::shm_logic::{ShmBuffer, can_reuse, segment_size};
 
-/// Allocate or reuse a SHM buffer at (w, h). Returns false on failure;
-/// `buf` is left in its previous state when the reuse condition matched, or
-/// in `empty()` state on failure.
+/// Allocate or reuse a SHM buffer at (w, h). Returns false on failure — an
+/// extent no segment can describe (non-positive, or a byte count that overflows
+/// `usize`) included, so the arithmetic is guarded here and not only in the
+/// actor and the menu. `buf` is left in its previous state when the reuse
+/// condition matched, or in `empty()` state on failure.
 pub fn shm_alloc(buf: &mut ShmBuffer, conn: &RustConnection, w: i32, h: i32) -> bool {
-    let size: usize = segment_size(w, h);
+    let Some(size) = segment_size(w, h) else {
+        return false;
+    };
     if can_reuse(buf.is_mapped(), buf.dims(), w, h) {
         return true;
     }
@@ -53,7 +57,7 @@ fn attach_memfd(conn: &RustConnection, size: usize) -> Option<(shm::Seg, MmapMut
         MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING,
     )
     .ok()?;
-    ftruncate(&fd, size as i64).ok()?;
+    ftruncate(&fd, i64::try_from(size).ok()?).ok()?;
     // Sealed against grow/shrink so the server's mapping can never fault.
     fcntl(
         &fd,

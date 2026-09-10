@@ -106,11 +106,14 @@ pub(crate) fn setup_reply_len(first: u8, words: u16) -> Option<usize> {
 }
 
 /// Same-length rewrite to `NoOperation`, which accepts any request length and
-/// has no reply, so sequence numbers stay intact.
+/// has no reply, so sequence numbers stay intact. An empty request has no
+/// opcode byte to rewrite and appends nothing.
 pub(crate) fn emit_noop(raw: &[u8], out: &mut Vec<u8>) {
     let start = out.len();
     out.extend_from_slice(raw);
-    out[start] = NO_OPERATION_REQUEST;
+    if let Some(opcode) = out.get_mut(start) {
+        *opcode = NO_OPERATION_REQUEST;
+    }
 }
 
 /// Append one `.Xauthority` record: a big-endian family, then four
@@ -238,6 +241,16 @@ mod tests {
         assert_eq!(out.len(), raw.len());
         assert_eq!(out[0], NO_OPERATION_REQUEST);
         assert_eq!(out[1..], raw[1..]);
+    }
+
+    #[test]
+    fn an_empty_request_neutralizes_to_nothing_at_all() {
+        let mut out = vec![0xEE];
+        emit_noop(&[], &mut out);
+        assert_eq!(out, vec![0xEE], "nothing appended, nothing rewritten");
+        let mut empty = Vec::new();
+        emit_noop(&[], &mut empty);
+        assert!(empty.is_empty());
     }
 
     #[test]

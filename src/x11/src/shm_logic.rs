@@ -67,11 +67,19 @@ impl Default for ShmBuffer {
     }
 }
 
-/// Bytes one `w` x `h` BGRA segment needs. Callers only ever reach here with a
-/// positive extent (the actor rejects a non-positive frame before it presents),
-/// which is what keeps the cast well-defined.
-pub(crate) fn segment_size(w: i32, h: i32) -> usize {
-    (w as usize) * (h as usize) * 4
+/// Bytes one `w` x `h` BGRA segment needs, or `None` when no segment can
+/// describe that extent: a non-positive side, or a byte count that does not fit
+/// a `usize`. The callers that present into the segment do reject a
+/// non-positive frame of their own (see `overlay_actor_logic::software_frame`),
+/// but the arithmetic that sizes the mapping guards itself rather than trusting
+/// them — an unchecked `w * h * 4` here is a panic in debug and a short mapping
+/// in release.
+pub(crate) fn segment_size(w: i32, h: i32) -> Option<usize> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let stride = (w as usize).checked_mul(4)?;
+    (h as usize).checked_mul(stride)
 }
 
 /// Whether an existing buffer can be presented into as-is. A mapped buffer at
@@ -109,7 +117,7 @@ mod tests {
     #[test]
     fn setting_a_mapping_publishes_the_segment_and_extent() {
         let mut buf = ShmBuffer::empty();
-        buf.set(9, anon(segment_size(4, 2)), 4, 2);
+        buf.set(9, anon(segment_size(4, 2).unwrap()), 4, 2);
         assert!(buf.is_mapped());
         assert_eq!(buf.seg(), 9);
         assert_eq!(buf.dims(), (4, 2));
@@ -131,8 +139,8 @@ mod tests {
     #[test]
     fn a_remap_replaces_the_segment_and_the_extent() {
         let mut buf = ShmBuffer::empty();
-        buf.set(1, anon(segment_size(2, 2)), 2, 2);
-        buf.set(2, anon(segment_size(4, 4)), 4, 4);
+        buf.set(1, anon(segment_size(2, 2).unwrap()), 2, 2);
+        buf.set(2, anon(segment_size(4, 4).unwrap()), 4, 4);
         assert_eq!(buf.seg(), 2);
         assert_eq!(buf.dims(), (4, 4));
         assert_eq!(buf.pixels_mut().len(), 64);
@@ -141,7 +149,7 @@ mod tests {
     #[test]
     fn the_mapping_is_writable_end_to_end() {
         let mut buf = ShmBuffer::empty();
-        buf.set(1, anon(segment_size(4, 2)), 4, 2);
+        buf.set(1, anon(segment_size(4, 2).unwrap()), 4, 2);
         let pixels = buf.pixels_mut();
         let last = pixels.len() - 1;
         pixels[0] = 1;
@@ -160,15 +168,41 @@ mod tests {
 
     #[test]
     fn a_single_row_segment_is_the_row_stride() {
-        assert_eq!(segment_size(800, 1), 3200);
-        assert_eq!(segment_size(1, 600), 2400);
+        assert_eq!(segment_size(800, 1), Some(3200));
+        assert_eq!(segment_size(1, 600), Some(2400));
     }
 
     #[test]
     fn a_segment_is_four_bytes_per_pixel() {
-        assert_eq!(segment_size(1, 1), 4);
-        assert_eq!(segment_size(1920, 1080), 1920 * 1080 * 4);
-        assert_eq!(segment_size(0, 1080), 0);
+        assert_eq!(segment_size(1, 1), Some(4));
+        assert_eq!(segment_size(1920, 1080), Some(1920 * 1080 * 4));
+    }
+
+    #[test]
+    fn a_non_positive_extent_has_no_segment_size() {
+        assert_eq!(segment_size(0, 1080), None);
+        assert_eq!(segment_size(1920, 0), None);
+        assert_eq!(segment_size(-1920, 1080), None);
+        assert_eq!(segment_size(1920, -1080), None);
+        assert_eq!(segment_size(i32::MIN, i32::MIN), None);
+    }
+
+    // As in `overlay_actor_logic`, the multiplication can only overflow where
+    // `usize` is 32 bits; the largest `i32` extent still fits 64 bits, so the
+    // two pointer widths assert opposite outcomes for the same call.
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn an_extent_whose_byte_count_overflows_has_no_segment_size() {
+        assert_eq!(segment_size(i32::MAX, i32::MAX), None);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_largest_i32_extent_still_fits_a_64_bit_segment() {
+        assert_eq!(
+            segment_size(i32::MAX, i32::MAX),
+            Some((i32::MAX as usize) * 4 * (i32::MAX as usize))
+        );
     }
 
     #[test]

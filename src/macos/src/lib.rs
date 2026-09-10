@@ -379,7 +379,7 @@ pub fn macos_run_blocking(f: Box<dyn FnOnce() + Send>) {
 // are synchronous so the callback fires inline on the calling thread.
 // =====================================================================
 
-pub fn macos_clipboard_read_text_async(on_done: Box<dyn FnOnce(&str) + Send>) {
+pub fn macos_clipboard_read_text(on_done: Box<dyn FnOnce(&str) + Send>) {
     let pb = NSPasteboard::generalPasteboard();
     // SAFETY: reading the framework's pasteboard-type constant.
     let text = pb
@@ -622,8 +622,8 @@ impl Platform for MacosPlatform {
         macos_set_theme_color(rgb);
     }
 
-    fn clipboard_read_text_async(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
-        macos_clipboard_read_text_async(on_done);
+    fn clipboard_read_text(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
+        macos_clipboard_read_text(on_done);
     }
 
     fn open_external_url(&self, url: &str) {

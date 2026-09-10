@@ -154,9 +154,14 @@ pub(crate) fn sync_request_value(
 /// The `_NET_WM_SYNC_REQUEST` handshake's client-side bookkeeping.
 ///
 /// The WM latches a counter value on us before a resize and waits for us to set
-/// it once our configures have landed. Latching disarms: the value is only
-/// committed after the `ConfigureNotify` that armed it, so we never tell the WM
-/// we are done with a resize we have not seen yet.
+/// it once our configures have landed. `armed` means "the parent
+/// `ConfigureNotify` belonging to the value currently latched has arrived", so
+/// both ends of a handshake clear it: latching disarms (a new value needs its
+/// own configure, never the previous one's) and writing the counter disarms
+/// (the configure that arm stood for has been answered). With only the first
+/// clear the flag outlived its configure, and every reconcile after a write was
+/// one `pending` set outside `latch` away from telling the WM a resize it had
+/// not configured yet was done.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResizeSync {
     /// The counter id, or 0 when the protocol was not advertised.
@@ -184,18 +189,23 @@ impl ResizeSync {
         self.armed = false;
     }
 
-    /// The parent's `ConfigureNotify` for the latched resize has arrived.
+    /// The parent's `ConfigureNotify` for the latched resize has arrived. Every
+    /// parent configure arms, including one no sync request preceded; nothing is
+    /// written for those, because a write also needs a latched value.
     pub(crate) fn arm(&mut self) {
         self.armed = true;
     }
 
     /// The counter write owed to the WM, consuming it. `None` while nothing is
-    /// latched or the configure has not arrived yet.
+    /// latched or the configure has not arrived yet. Writing disarms, so the
+    /// handshake returns to its pristine state and the next one starts from a
+    /// fresh latch and a fresh configure of its own.
     pub(crate) fn take_commit(&mut self) -> Option<(u32, i32, u32)> {
         if !self.armed {
             return None;
         }
         let (hi, lo) = self.pending.take()?;
+        self.armed = false;
         Some((self.counter, hi, lo))
     }
 }
@@ -389,6 +399,43 @@ mod tests {
         sync.arm();
         assert!(sync.take_commit().is_some());
         assert_eq!(sync.take_commit(), None);
+    }
+
+    #[test]
+    fn a_matching_configure_write_disarms_the_handshake() {
+        let mut sync = ResizeSync::new(42);
+        sync.latch(1, 2);
+        sync.arm();
+        assert_eq!(sync.take_commit(), Some((42, 1, 2)));
+        assert_eq!(
+            sync,
+            ResizeSync::new(42),
+            "an answered handshake is back to its pristine state"
+        );
+    }
+
+    #[test]
+    fn a_reconcile_after_the_counter_write_writes_nothing() {
+        let mut sync = ResizeSync::new(42);
+        sync.latch(1, 2);
+        sync.arm();
+        assert!(sync.take_commit().is_some());
+        // Later reconciles, with and without further parent configures.
+        assert_eq!(sync.take_commit(), None);
+        sync.arm();
+        assert_eq!(sync.take_commit(), None);
+    }
+
+    #[test]
+    fn a_new_latch_re_arms_only_with_its_own_configure() {
+        let mut sync = ResizeSync::new(42);
+        sync.latch(1, 2);
+        sync.arm();
+        assert!(sync.take_commit().is_some());
+        sync.latch(3, 4);
+        assert_eq!(sync.take_commit(), None, "the old arm must not carry over");
+        sync.arm();
+        assert_eq!(sync.take_commit(), Some((42, 3, 4)));
     }
 
     #[test]

@@ -87,7 +87,7 @@ fn win_set_idle_inhibit(level: c_int) {
     let _ = post_task(ThreadId::UI, Some(&mut task));
 }
 
-fn win_clipboard_read_text_async(on_done: Box<dyn FnOnce(&str) + Send>) {
+fn win_clipboard_read_text(on_done: Box<dyn FnOnce(&str) + Send>) {
     let mut text = String::new();
     unsafe {
         if OpenClipboard(None).is_ok() {
@@ -273,8 +273,8 @@ impl Platform for WindowsPlatform {
         win_set_theme_color(rgb);
     }
 
-    fn clipboard_read_text_async(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
-        win_clipboard_read_text_async(on_done);
+    fn clipboard_read_text(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
+        win_clipboard_read_text(on_done);
     }
 
     fn open_external_url(&self, url: &str) {

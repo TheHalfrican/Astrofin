@@ -314,7 +314,7 @@ impl Platform for WaylandPlatform {
         self.clipboard.store(false, Ordering::Release);
     }
 
-    fn clipboard_read_text_async(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
+    fn clipboard_read_text(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
         if !self.clipboard.load(Ordering::Acquire) {
             on_done("");
             return;

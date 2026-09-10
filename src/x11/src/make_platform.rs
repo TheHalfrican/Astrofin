@@ -217,8 +217,11 @@ impl Platform for X11Platform {
         false
     }
 
-    fn clipboard_read_text_async(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
-        // X11 has no native clipboard read path here — fire empty result.
+    /// X11 has no native clipboard read path here (`clipboard_text_supported`
+    /// is false, so the menu pastes through CEF instead): the empty result is
+    /// handed over inline on the calling thread, which is what the trait
+    /// permits — there is nothing to wait for.
+    fn clipboard_read_text(&self, on_done: Box<dyn FnOnce(&str) + Send>) {
         on_done("");
     }
 

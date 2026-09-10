@@ -271,16 +271,24 @@ Found during phase 5 (also design calls):
   that dominate their public surface exist only to satisfy trait bounds. They
   stay exempt; the counting rule that trait-impl methods are public surface
   is what makes them look untested.
-- `src/x11/src/shm.rs`'s `shm_alloc` computes its segment size as `w * h * 4`
-  with no guard of its own; the `> 0` checks that make it safe live two
-  modules away, in `overlay_actor` and `menu`. `x11::mpv_proxy_logic`'s
-  `emit_noop` indexes `out[start]` after appending, which would panic on an
-  empty request.
+- **Fixed 2026-09-10.** `src/x11/src/shm.rs`'s `shm_alloc` computed its
+  segment size as `w * h * 4` with no guard of its own; the `> 0` checks that
+  made it safe lived two modules away, in `overlay_actor` and `menu`.
+  `shm_logic::segment_size` now returns `Option<usize>` (non-positive or
+  overflowing extents included) and `shm_alloc` refuses those. `x11::mpv_proxy_logic`'s
+  `emit_noop` indexed `out[start]` after appending, which would panic on an
+  empty request; it writes through `get_mut` now.
 - `src/macos/src/input.rs` reads `clickCount` off the `NSEvent` and drops it,
   and `jfn_input_dispatch_mouse_button` has no click-count parameter, so CEF
   never sees a double-click on macOS.
-- `X11Platform::clipboard_read_text_async` invokes its callback synchronously
-  on the caller's thread despite the name.
-- `x11::geometry`'s `ResizeSync` never disarms: `sync_armed` is cleared only
-  by the next `latch`, never by a commit, so every later reconcile writes the
-  latched value whether or not its configures correspond to it.
+- **Fixed 2026-09-10.** `X11Platform::clipboard_read_text_async` invoked its
+  callback synchronously on the caller's thread despite the name — and so do
+  the macOS, Windows and default implementations; Wayland alone is really
+  asynchronous. The `_async` was the lie, so the trait method is now
+  `Platform::clipboard_read_text`, documented as "runs `on_done` exactly once,
+  inline or deferred, the backend decides".
+- **Fixed 2026-09-10.** `x11::geometry`'s `ResizeSync` never disarmed:
+  `armed` was cleared only by the next `latch`, never by the counter write, so
+  the flag outlived the configure it stood for. `take_commit` clears it now,
+  which is what makes "armed" mean "the configure for the value currently
+  latched has arrived" on its own instead of leaning on `pending.take()`.
