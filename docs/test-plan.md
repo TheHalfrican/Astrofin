@@ -258,32 +258,69 @@ Recorded, needing a design decision before they change behaviour:
   navigate to. The per-origin `jmpNative` gate above removes the consequence
   that mattered (a document the main layer wanders onto no longer gets the
   IPC surface), but the navigation itself is still unconstrained.
-- instance-ipc: no backoff on a persistent `accept()` error, no cap on
-  concurrent connections or idle timeout, and `Drop` does not wake a
-  `serve` task blocked in `recv`.
-- On Windows the pipe namespace is global: a squatter who learns the
-  instance id can make the app exit as "already running".
-- `settings.json`: a duplicate key or out-of-range number still fails the
-  whole document (now logged); `read_to_string` has no size cap;
-  `windowScale` is not validated; four accessors panic if no Platform is
-  installed and the renderer links the crate.
-- Legacy-profile import: symlinks are copied through on Windows without
-  symlink privilege; no size or free-space check.
-- `paths::ensure` swallows `create_dir_all` errors; a relative
-  `ASTROFIN_CONFIG_DIR` follows each process's cwd.
-- A secret split across two log records is not redacted.
+
+### Decided and fixed 2026-09-10
+
+The design calls below were made by the owner and are implemented, each with
+its own tests. What is left above still needs a decision.
+
+- **instance-ipc, a failing `accept()`** — exponential backoff from 10 ms
+  doubling to a 1 s cap, reset by the next accepted connection
+  (`src/instance_ipc/src/policy.rs`).
+- **instance-ipc, concurrency** — at most 8 connections in flight; a ninth is
+  closed unserved, after a 25 ms grace that lets connections whose peer has
+  already hung up release their slot (eight launches in a row must not refuse
+  the ninth).
+- **instance-ipc, idle connections** — a connection that completes no frame
+  within 5 s is closed.
+- **instance-ipc, shutdown** — the stop signal is a published `watch` value
+  rather than a notification, so a `serve` task that had not yet parked in
+  `recv` still sees it and a dropped `Listener` ends its connections.
+- **instance-ipc, Windows pipe namespace** — the pipe name carries the user's
+  SID (falling back to `%USERNAME%`) as well as the instance id, sanitised
+  through the same alphabet the instance id is validated against
+  (`paths::pipe_name`, `paths::sanitize_user_key`; the token lookup itself is
+  `src/paths/src/user_win.rs`, now exempt).
+- **instance-ipc, rebinding after a shutdown** — a taken name whose probe
+  answers ENOENT/not-found classifies as *stale*, not failed, and the bind is
+  retried 5 times at 50 ms before giving up.
+- **`settings.json`, a bad key** — unchanged: one bad key still fails the whole
+  document, and the failure is logged.
+- **`settings.json`, size** — read is capped at 1 MiB; a larger file is warned
+  about and treated as unparseable rather than loaded in part.
+- **`settings.json`, `windowScale`** — clamped to 0.5..=4.0 with a warning;
+  non-finite, zero and negative values keep the default (zero is also how "no
+  saved scale" is spelled in memory).
+- **The four decoration accessors** — fall back to `Csd` when no `Platform` is
+  installed instead of panicking, so the CEF renderer can link the crate
+  (`config/tests/window_decorations_unset.rs`).
+- **Legacy import, symlinks** — Windows skips a link it cannot recreate, with a
+  warning, instead of copying through it; unix keeps recreating the link.
+- **Legacy import, size** — the source tree is measured first (stopping early
+  past the limit) and the import is skipped, with a warning, when it exceeds
+  2 GiB or the destination filesystem has less free space than that
+  (`statvfs` / `GetDiskFreeSpaceExW` behind the `FreeSpace` trait, faked in
+  tests).
+- **`paths::ensure`** — a failed `create_dir_all` is logged at warn with the
+  path and the error; the path is still returned.
+- **A relative `--config-dir`/`ASTROFIN_CONFIG_DIR`** — resolved once against
+  the launch cwd (lexically, since the directory need not exist yet) and the
+  *absolute* path is what is stored and re-exported to the CEF helpers.
+- **`Mailbox::wait`** — the `take` closure now wakes waiters, so a two-sided
+  handshake closes without both sides re-publishing with `update`.
+- **`Platform::install_shutdown_handler`** — the decisions (who owns the
+  callback slot, what a delivered signal dispatches) moved to
+  `platform_abi/src/shutdown_logic.rs` and are tested there; the `sigaction`
+  call stays thin and exempt, and is exercised without raising anything by a
+  guard install/restore round-trip in `signal_unix.rs`.
+- **A secret split across two log records** — accepted as a known limit;
+  `src/logging/src/redact.rs` now documents why closing it would cost an
+  ordered, crash-safe log.
 
 Found during phase 2 (also design calls):
 
-- instance-ipc on Windows: rebinding immediately after `Listener::shutdown()`
-  can find the name still taken while the probe gets `ENOENT` rather than
-  `ConnectionRefused`, so it classifies as failed instead of stale.
-- `Mailbox::wait`'s `take` closure mutates under the lock but does not
-  notify; a two-sided handshake must publish with `update` on both sides.
 - Ratio counting: trait-impl methods (`Write`, `Drop`, `Visit`, ...) count as
   public surface; kept, since each impl is a behaviour worth a test.
-- `Platform::install_shutdown_handler`'s Unix default installs real signal
-  handlers and is not exercised in tests.
 
 Found during phase 5 (also design calls):
 

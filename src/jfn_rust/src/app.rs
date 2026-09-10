@@ -646,13 +646,19 @@ pub fn jfn_app_main() -> c_int {
     // before argv was parsed and which load settings.json on their own for
     // the injected `jmpInfo`, inherit the same directories. Single-threaded
     // here: nothing has been spawned yet.
-    if let Some(path) = &cli.config_dir {
-        jfn_paths::set_config_dir_override(path.into());
-        unsafe { std::env::set_var(jfn_paths::ENV_CONFIG_DIR, path) };
+    // The *resolved* path is what is exported: a relative `--config-dir`
+    // otherwise means whatever directory each process happens to be started
+    // in, and a CEF helper (or this process after any `set_current_dir`) would
+    // read a different settings.json than the browser process wrote.
+    if let Some(path) = &cli.config_dir
+        && let Some(resolved) = jfn_paths::set_config_dir_override(path.into())
+    {
+        unsafe { std::env::set_var(jfn_paths::ENV_CONFIG_DIR, &resolved) };
     }
-    if let Some(path) = &cli.cache_dir {
-        jfn_paths::set_cache_dir_override(path.into());
-        unsafe { std::env::set_var(jfn_paths::ENV_CACHE_DIR, path) };
+    if let Some(path) = &cli.cache_dir
+        && let Some(resolved) = jfn_paths::set_cache_dir_override(path.into())
+    {
+        unsafe { std::env::set_var(jfn_paths::ENV_CACHE_DIR, &resolved) };
     }
 
     // Only the browser process reaches this point (helper processes returned

@@ -353,24 +353,33 @@ fn a_client_that_disconnects_immediately_blocks_nobody() {
     still_serving(&rt, &instance);
 }
 
+/// Replaces `many_concurrent_clients_are_all_answered`, which pinned the
+/// unbounded behaviour: a crowd of peers is now capped, so what a client is
+/// promised is its own answer *or* a closed connection — never a wrong answer,
+/// never a hang. The first eight accepted are always served, because the count
+/// of in-flight connections only ever falls while the crowd is being accepted.
 #[test]
-fn many_concurrent_clients_are_all_answered() {
+fn concurrent_clients_are_answered_up_to_the_connection_cap() {
     let rt = rt();
     let (_dir, instance) = scratch_instance();
     let _listener = serving(&rt, &instance, echo_len);
 
-    let mut answers = rt.block_on(async {
+    let answers = rt.block_on(async {
         let mut tasks = Vec::new();
         for i in 0..32usize {
             tasks.push(tokio::spawn(async move {
                 let mut stream = Stream::connect(&instance).await.unwrap();
-                stream
+                // Both the write and the read may fail on a refused peer.
+                if stream
                     .send(&Req {
                         payload: "y".repeat(i),
                     })
                     .await
-                    .unwrap();
-                stream.recv::<Resp>().await.unwrap().unwrap().len
+                    .is_err()
+                {
+                    return (i, None);
+                }
+                (i, stream.recv::<Resp>().await.ok().flatten().map(|r| r.len))
             }));
         }
         let mut answers = Vec::new();
@@ -380,8 +389,15 @@ fn many_concurrent_clients_are_all_answered() {
         answers
     });
 
-    answers.sort_unstable();
-    assert_eq!(answers, (0..32usize).collect::<Vec<_>>());
+    for (i, len) in &answers {
+        if let Some(n) = len {
+            assert_eq!(n, i, "client {i} was answered {n}");
+        }
+    }
+    let served = answers.iter().filter(|(_, len)| len.is_some()).count();
+    assert!(served >= 8, "only {served} of 32 clients were served");
+
+    still_serving(&rt, &instance);
 }
 
 /// `clean_drop_frees_name` proves the same thing through the filesystem, but

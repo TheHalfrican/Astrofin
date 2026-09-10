@@ -20,6 +20,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::space::{Disk, FreeSpace};
 use crate::{
     LEGACY_APP_DIR_NAME, cache_dir_raw, cache_override, config_dir_raw, config_override, imp,
 };
@@ -42,6 +43,78 @@ const MAX_DEPTH: u32 = 32;
 /// Past this many per-entry failures the log gets a single count instead of a
 /// line each.
 const MAX_WARNINGS: usize = 20;
+
+/// Largest legacy profile that is imported at all.
+///
+/// A Jellium Desktop config directory is a few megabytes and its cache is
+/// tens; anything measured in gigabytes is a media folder somebody pointed at
+/// the profile, or a cache that grew without bound. Copying it would stall the
+/// first launch for minutes with no UI to say why (the import runs before
+/// logging is even up), so past this the old profile is left where it is and
+/// the app starts fresh.
+const MAX_IMPORT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Why an import was not attempted at all.
+#[derive(Debug, PartialEq, Eq)]
+enum TooBig {
+    /// The source is larger than [`MAX_IMPORT_BYTES`].
+    Source(u64),
+    /// The destination filesystem cannot hold the source.
+    Destination { needed: u64, free: u64 },
+}
+
+/// Whether a legacy profile of `source_bytes` may be copied onto a filesystem
+/// with `free_bytes` to spare.
+///
+/// `free_bytes` is `None` when the filesystem could not be interrogated, which
+/// is permission to proceed: a share or container mount whose free space we
+/// cannot read is still usually writable, and the copy reports its own errors
+/// per entry. What this exists to stop is the case the per-entry reporting
+/// handles badly — filling the disk one file at a time and leaving a
+/// half-imported profile plus a machine with no room to log about it.
+fn check_import_size(source_bytes: u64, free_bytes: Option<u64>) -> Result<(), TooBig> {
+    if source_bytes > MAX_IMPORT_BYTES {
+        return Err(TooBig::Source(source_bytes));
+    }
+    match free_bytes {
+        Some(free) if free < source_bytes => Err(TooBig::Destination {
+            needed: source_bytes,
+            free,
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Bytes held by the tree at `src`, stopping as soon as the total is past
+/// `limit`.
+///
+/// Links are measured, never followed: the import recreates them (or skips
+/// them), so their targets are not what is about to be copied, and following
+/// them is how a link to `/` turns a size check into a full-filesystem walk.
+/// Unreadable entries count as nothing — they will not be copied either.
+fn measure_tree(src: &Path, depth: u32, limit: u64) -> u64 {
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(src) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        total = total.saturating_add(if meta.is_dir() && !meta.file_type().is_symlink() {
+            measure_tree(&entry.path(), depth + 1, limit.saturating_sub(total))
+        } else {
+            meta.len()
+        });
+        if total > limit {
+            break;
+        }
+    }
+    total
+}
 
 /// What [`migrate_legacy`] did, buffered because it runs before logging is
 /// initialized (the config directory has to be in place before `settings.json`
@@ -130,6 +203,28 @@ pub fn migrate_legacy() -> MigrationReport {
         }
         // Fresh install with nothing to carry over.
         if !legacy.is_dir() {
+            continue;
+        }
+        // Measured before anything is created: an import that cannot finish
+        // must not leave a half-copied profile behind, and the destination
+        // directory's absence is the only signal that the import is still due.
+        let size = measure_tree(&legacy, 0, MAX_IMPORT_BYTES);
+        let free = Disk.free_bytes(new_dir.parent().unwrap_or_else(|| Path::new(".")));
+        if let Err(too_big) = check_import_size(size, free) {
+            report.warn(match too_big {
+                TooBig::Source(bytes) => format!(
+                    "{kind}: not importing {}: it holds at least {bytes} bytes, more than the \
+                     {MAX_IMPORT_BYTES}-byte import limit; Astrofin will start with a fresh \
+                     profile",
+                    legacy.display()
+                ),
+                TooBig::Destination { needed, free } => format!(
+                    "{kind}: not importing {}: it needs {needed} bytes and only {free} are free \
+                     on {}; Astrofin will start with a fresh profile",
+                    legacy.display(),
+                    new_dir.display()
+                ),
+            });
             continue;
         }
         match copy_leg(kind, &legacy, &new_dir, &mut report) {
@@ -344,10 +439,10 @@ fn copy_symlink(from: &Path, to: &Path, counts: &mut Counts, report: &mut Migrat
         return;
     }
     // Windows refuses symlink creation without Developer Mode or
-    // SeCreateSymbolicLinkPrivilege. Copy through the link when it resolves to
-    // a plain file, otherwise leave it out.
-    match fs::metadata(from) {
-        Ok(meta) if meta.is_file() => match fs::copy(from, to) {
+    // SeCreateSymbolicLinkPrivilege, which is the normal case.
+    let resolves_to_a_file = fs::metadata(from).is_ok_and(|meta| meta.is_file());
+    match link_fallback(cfg!(windows), resolves_to_a_file) {
+        LinkFallback::CopyTarget => match fs::copy(from, to) {
             Ok(_) => counts.copied += 1,
             Err(e) => {
                 counts.failed += 1;
@@ -357,7 +452,7 @@ fn copy_symlink(from: &Path, to: &Path, counts: &mut Counts, report: &mut Migrat
                 ));
             }
         },
-        _ => {
+        LinkFallback::Skip => {
             counts.skipped += 1;
             report.warn(format!(
                 "migration: could not recreate symlink {} -> {}, skipped",
@@ -366,6 +461,32 @@ fn copy_symlink(from: &Path, to: &Path, counts: &mut Counts, report: &mut Migrat
             ));
         }
     }
+}
+
+/// What to do with a symlink the import could not recreate.
+#[derive(Debug, PartialEq, Eq)]
+enum LinkFallback {
+    /// Copy what the link points at, in its place.
+    CopyTarget,
+    /// Leave it out of the imported profile.
+    Skip,
+}
+
+/// Windows never copies through a link it could not recreate.
+///
+/// Recreating a symlink there needs Developer Mode or
+/// `SeCreateSymbolicLinkPrivilege`, so the fallback was the *usual* path, not
+/// the rare one: a link the user made to keep something out of the profile —
+/// a cache on another volume, a shared folder — came back as a full copy
+/// inside it, silently doubling the data and detaching it from whatever the
+/// link was tracking. A missing entry that the log names is the better
+/// failure. Unix keeps the fallback, where it is genuinely rare (the link is
+/// recreated verbatim unless the destination is unwritable).
+fn link_fallback(windows: bool, target_is_file: bool) -> LinkFallback {
+    if windows || !target_is_file {
+        return LinkFallback::Skip;
+    }
+    LinkFallback::CopyTarget
 }
 
 /// Whether `target` lies inside `dir`, resolved through symlinks.
@@ -1147,5 +1268,114 @@ mod tests {
         let dir_conf = new_dir.join("mpv").join("as-a-dir.conf");
         fs::create_dir_all(&dir_conf).expect("mkdir");
         assert!(repair_conf_at(&dir_conf, &legacy, &new_dir).is_empty());
+    }
+
+    // =====================================================================
+    // Size and free-space gate
+    // =====================================================================
+
+    /// A `FreeSpace` that answers whatever the test wants, including "I could
+    /// not tell".
+    struct FakeSpace(Option<u64>);
+
+    impl FreeSpace for FakeSpace {
+        fn free_bytes(&self, _path: &Path) -> Option<u64> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn check_import_size_passes_a_profile_that_fits() {
+        assert_eq!(check_import_size(10_000, Some(u64::MAX)), Ok(()));
+        assert_eq!(check_import_size(0, Some(0)), Ok(()));
+        // Exactly the free space is still enough.
+        assert_eq!(check_import_size(4096, Some(4096)), Ok(()));
+        assert_eq!(check_import_size(MAX_IMPORT_BYTES, Some(u64::MAX)), Ok(()));
+    }
+
+    #[test]
+    fn check_import_size_refuses_a_profile_past_the_import_limit() {
+        assert_eq!(
+            check_import_size(MAX_IMPORT_BYTES + 1, Some(u64::MAX)),
+            Err(TooBig::Source(MAX_IMPORT_BYTES + 1))
+        );
+    }
+
+    #[test]
+    fn check_import_size_refuses_a_destination_with_less_room_than_the_source() {
+        assert_eq!(
+            check_import_size(4096, Some(4095)),
+            Err(TooBig::Destination {
+                needed: 4096,
+                free: 4095
+            })
+        );
+    }
+
+    /// A filesystem that cannot report its free space is not a filesystem
+    /// that is full.
+    #[test]
+    fn check_import_size_proceeds_when_the_free_space_is_unknown() {
+        assert_eq!(check_import_size(MAX_IMPORT_BYTES, None), Ok(()));
+        assert_eq!(
+            FakeSpace(None).free_bytes(Path::new("anywhere")),
+            None,
+            "the fake reports what it was built with"
+        );
+        assert_eq!(
+            FakeSpace(Some(7)).free_bytes(Path::new("anywhere")),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn measure_tree_sums_every_file_under_the_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("profile");
+        write(&root.join("a"), "0123456789");
+        write(&root.join("deep").join("b"), "01234");
+        assert_eq!(measure_tree(&root, 0, u64::MAX), 15);
+        assert_eq!(measure_tree(&root.join("missing"), 0, u64::MAX), 0);
+    }
+
+    /// The walk stops as soon as it is past the budget, so a media folder
+    /// somebody parked in the profile does not cost a full traversal.
+    #[test]
+    fn measure_tree_stops_once_it_is_past_the_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("profile");
+        for i in 0..8 {
+            write(&root.join(format!("f{i}")), &"x".repeat(100));
+        }
+        let measured = measure_tree(&root, 0, 150);
+        assert!(measured > 150, "{measured}");
+        assert!(measured < 800, "the whole tree was walked: {measured}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn measure_tree_measures_a_symlink_without_following_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("profile");
+        let outside = tmp.path().join("outside");
+        write(&outside.join("big"), &"x".repeat(4096));
+        fs::create_dir_all(&root).expect("mkdir");
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+        assert!(
+            measure_tree(&root, 0, u64::MAX) < 4096,
+            "the link target was counted"
+        );
+    }
+
+    #[test]
+    fn link_fallback_never_copies_through_a_link_on_windows() {
+        assert_eq!(link_fallback(true, true), LinkFallback::Skip);
+        assert_eq!(link_fallback(true, false), LinkFallback::Skip);
+    }
+
+    #[test]
+    fn link_fallback_copies_a_file_target_on_unix_and_skips_anything_else() {
+        assert_eq!(link_fallback(false, true), LinkFallback::CopyTarget);
+        assert_eq!(link_fallback(false, false), LinkFallback::Skip);
     }
 }

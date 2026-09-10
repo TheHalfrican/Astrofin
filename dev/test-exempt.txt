@@ -99,7 +99,8 @@ src/linux_util/src/xkb.rs           | queries a live xkb state; the flag table i
 src/linux_util/src/input.rs         | dispatch only; the routing table it follows is in keysym.rs.
 src/linux_util/src/open_url.rs      | spawns the desktop URL handler.
 src/platform_abi/src/signal_unix.rs   | installs real SIGINT/SIGTERM dispositions process-wide.
-src/platform_abi/src/process_unix.rs  | arms a real signal handler process-wide.
+src/platform_abi/src/process_unix.rs  | arms a real signal handler process-wide; its decisions are in shutdown_logic.rs.
+src/paths/src/user_win.rs             | reads the current process token; the name it feeds is derived and tested in paths/src/lib.rs.
 
 # --- Entry points and tooling ---------------------------------------------
 src/jfn_rust/src/main.rs       | process entry point and panic hook; covered by the E2E suite.

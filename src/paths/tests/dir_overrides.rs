@@ -34,14 +34,22 @@ fn an_explicit_override_beats_the_environment_and_ignores_an_empty_path() {
     //    literally would resolve the profile against the working directory
     //    here while the CEF helpers, which read the environment variable
     //    directly, kept the real one.
-    jfn_paths::set_config_dir_override(PathBuf::new());
-    jfn_paths::set_cache_dir_override(PathBuf::new());
+    assert_eq!(jfn_paths::set_config_dir_override(PathBuf::new()), None);
+    assert_eq!(jfn_paths::set_cache_dir_override(PathBuf::new()), None);
     assert_eq!(jfn_paths::config_dir(), from_env.path());
     assert_eq!(jfn_paths::cache_dir(), cache_env.path());
 
-    // 3. A real path wins over the environment.
-    jfn_paths::set_config_dir_override(from_flag.path().to_path_buf());
-    jfn_paths::set_cache_dir_override(cache_flag.path().to_path_buf());
+    // 3. A real path wins over the environment, and the setter hands back the
+    //    absolute path it stored — that, not the spelling on the command
+    //    line, is what the browser process re-exports to the CEF helpers.
+    assert_eq!(
+        jfn_paths::set_config_dir_override(from_flag.path().to_path_buf()),
+        Some(from_flag.path().to_path_buf())
+    );
+    assert_eq!(
+        jfn_paths::set_cache_dir_override(cache_flag.path().to_path_buf()),
+        Some(cache_flag.path().to_path_buf())
+    );
     assert_eq!(jfn_paths::config_dir(), from_flag.path());
     assert_eq!(jfn_paths::cache_dir(), cache_flag.path());
     assert_eq!(

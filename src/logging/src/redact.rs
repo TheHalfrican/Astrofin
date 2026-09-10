@@ -10,11 +10,33 @@
 //! offsets, so the spans it yields index the original buffer directly.
 //!
 //! Known limits, deliberate:
-//!   - Redaction is per emitted record. A token split across two records —
-//!     e.g. a CEF stderr line longer than the 4 KiB capture chunk — is not
-//!     reassembled, so each half passes through unredacted.
+//!   - Redaction is per emitted record. A token split across two records is
+//!     not reassembled, so each half passes through unredacted.
 //!   - Only the shapes below are recognised. A brand-new credential shape in
 //!     a log line is not redacted until it is added here.
+//!
+//! # Why a secret split across two records is accepted
+//!
+//! The redactor is a filter on one finished record: `RedactGuard` buffers the
+//! bytes of a single event and censors them as it is dropped. If a secret ends
+//! up half in one record and half in the next — a CEF stderr line longer than
+//! the 4 KiB capture chunk that the capture loop cannot rejoin, a page string
+//! the caller had already split, a needle that lands exactly on the boundary —
+//! neither half matches a rule, and both are written out.
+//!
+//! Closing that would mean carrying state across records: hold every line back
+//! until the next one arrives (so the log always lags, and the last line before
+//! a crash — the one worth having — is the line that never lands), or keep a
+//! rolling window of the previous record and scan the join (which redacts the
+//! same bytes twice, reorders nothing but re-emits records out of the order
+//! they were written, and still misses a secret spread over three). Both trade
+//! a reliable, ordered, crash-safe log for a partial fix.
+//!
+//! The exposure is small in return: our own log lines are formatted whole, and
+//! the mpv and CEF lines that do get chunked carry a URL only at the start of
+//! a line. The mitigations that matter are elsewhere — the log file is created
+//! 0600, and a token that does reach it is still one the local user already
+//! holds.
 
 use memchr::memmem;
 

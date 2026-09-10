@@ -11,6 +11,7 @@ crate-type = ["rlib"]
 [dependencies]
 parking_lot.workspace = true
 tempfile.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 # Also a normal dependency, but integration tests only see dev-dependencies.
@@ -18,6 +19,15 @@ tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
 
 # macOS keeps its own derivation, so `dirs` is gated off it.
 [target.'cfg(not(target_os = "macos"))'.dependencies]

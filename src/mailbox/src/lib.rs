@@ -51,13 +51,24 @@ impl<S> Mailbox<S> {
     }
 
     /// Block until `ready` holds of the state, then run `take` under the same
-    /// lock without releasing it in between.
+    /// lock without releasing it in between, and wake every waiter.
+    ///
+    /// The wake is what makes `take` safe to publish from and not only to
+    /// drain with. Without it a two-sided handshake deadlocked: a producer
+    /// parked until the consumer had emptied the slot never learned that it
+    /// *had* been emptied, because draining it inside `take` woke nobody, and
+    /// it slept until some unrelated [`Self::update`] happened along. Both
+    /// sides had to remember to re-publish with `update` after every `wait`,
+    /// which is exactly the kind of rule that holds until it does not.
     pub fn wait<R>(&self, ready: impl Fn(&S) -> bool, take: impl FnOnce(&mut S) -> R) -> R {
         let mut state = self.inner.state.lock();
         while !ready(&state) {
             self.inner.cv.wait(&mut state);
         }
-        take(&mut state)
+        let out = take(&mut state);
+        drop(state);
+        self.inner.cv.notify_all();
+        out
     }
 }
 
@@ -160,10 +171,12 @@ mod tests {
         t.join().expect("producer thread");
     }
 
+    /// Replaces `a_full_slot_hands_every_value_across_the_thread_in_order`,
+    /// which had to re-publish with `update` after every `wait` because a
+    /// `take` woke nobody. The drain inside `take` is now the wake, so the
+    /// handshake closes on its own.
     #[test]
-    fn a_full_slot_hands_every_value_across_the_thread_in_order() {
-        // `wait` mutates under the lock but wakes nobody, so both sides
-        // publish their side of the handshake with `update`.
+    fn draining_the_slot_inside_take_wakes_a_producer_waiting_for_the_room() {
         let mb = Mailbox::new(None::<u32>);
         let producer = mb.clone();
         let t = std::thread::spawn(move || {
@@ -177,9 +190,19 @@ mod tests {
         let mut seen = Vec::new();
         for _ in 0..3 {
             seen.push(mb.wait(|s| s.is_some(), Option::take));
-            mb.update(|_| ());
         }
         t.join().expect("producer thread");
         assert_eq!(seen, vec![Some(1), Some(2), Some(3)]);
+    }
+
+    /// The same wake seen from the other side: nothing but the `take` runs
+    /// between the producer parking and the producer waking.
+    #[test]
+    fn wait_wakes_another_waiter_whose_predicate_the_take_made_true() {
+        let mb = Mailbox::new(Some(1u32));
+        let waiter = mb.clone();
+        let t = std::thread::spawn(move || waiter.wait(Option::is_none, |_| 42u32));
+        assert_eq!(mb.wait(|s| s.is_some(), Option::take), Some(1));
+        assert_eq!(t.join().expect("waiter thread"), 42);
     }
 }

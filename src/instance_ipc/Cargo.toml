@@ -15,10 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
 interprocess.workspace = true
-tokio = { workspace = true, features = ["rt", "net", "io-util", "sync", "macros"] }
+tokio = { workspace = true, features = ["rt", "net", "io-util", "sync", "macros", "time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tempfile.workspace = true
 
 [lints]

@@ -27,6 +27,8 @@ pub mod osr_popup;
 #[cfg_attr(unix, path = "process_unix.rs")]
 #[cfg_attr(not(unix), path = "process_other.rs")]
 mod process;
+#[cfg(unix)]
+mod shutdown_logic;
 #[cfg_attr(unix, path = "signal_unix.rs")]
 #[cfg_attr(not(unix), path = "signal_other.rs")]
 mod signal;

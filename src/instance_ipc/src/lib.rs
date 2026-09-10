@@ -2,6 +2,8 @@ use std::fmt::Debug;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::tokio::{Listener as SocketListener, Stream as SocketStream};
@@ -10,10 +12,11 @@ use jfn_platform_abi::Instance;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 pub mod jfn;
+mod policy;
 
 /// Longest line-delimited frame accepted from a peer, in bytes.
 ///
@@ -50,7 +53,12 @@ pub struct Stream {
 
 impl Stream {
     pub async fn connect(instance: &Instance) -> io::Result<Self> {
-        let name = Name::for_instance(instance)?;
+        Self::connect_to(&Name::for_instance(instance)?).await
+    }
+
+    /// [`Self::connect`] against an already-derived name, so a test can talk
+    /// to a listener bound in a temp directory.
+    async fn connect_to(name: &Name) -> io::Result<Self> {
         let stream = SocketStream::connect(name.to_socket()?).await?;
         Ok(Self::wrap(stream))
     }
@@ -136,7 +144,7 @@ pub enum Start {
 }
 
 pub struct Listener {
-    shutdown: Arc<Notify>,
+    shutdown: watch::Sender<bool>,
     accept: Option<JoinHandle<()>>,
 }
 
@@ -157,17 +165,53 @@ impl Listener {
         Req: DeserializeOwned + Debug + Send + 'static,
         Resp: Serialize + Send + Sync + 'static,
     {
+        Self::create_with(name, handle, policy::IDLE_TIMEOUT).await
+    }
+
+    /// [`Self::create`] with the per-connection idle timeout injected, so a
+    /// test does not have to wait out [`policy::IDLE_TIMEOUT`].
+    async fn create_with<Req, Resp>(name: &Name, handle: fn(&Req) -> Resp, idle: Duration) -> Start
+    where
+        Req: DeserializeOwned + Debug + Send + 'static,
+        Resp: Serialize + Send + Sync + 'static,
+    {
         match Self::make(name, false) {
-            Ok(listener) => Self::spawn(listener, handle),
+            Ok(listener) => Self::spawn(listener, handle, idle),
             Err(e) if name_taken(&e) => match Self::probe(name).await {
                 Probe::AlreadyRunning => Start::AlreadyRunning,
-                Probe::Stale => match Self::make(name, true) {
-                    Ok(listener) => Self::spawn(listener, handle),
-                    Err(e) => Start::Failed(e),
-                },
+                Probe::Stale => Self::rebind(name, handle, idle).await,
                 Probe::Failed(e) => Start::Failed(e),
             },
             Err(e) => Start::Failed(e),
+        }
+    }
+
+    /// Take over a name whose holder is gone.
+    ///
+    /// Retried, because "stale" and "free" are not the same instant on
+    /// Windows: a pipe whose last instance has just been closed reports as
+    /// gone to a connect while `CreateNamedPipe` still refuses the name for as
+    /// long as a handle to it survives anywhere. The budget is bounded by
+    /// [`policy::rebind_delay`] so a name that is genuinely wedged still fails
+    /// instead of hanging the launch.
+    async fn rebind<Req, Resp>(name: &Name, handle: fn(&Req) -> Resp, idle: Duration) -> Start
+    where
+        Req: DeserializeOwned + Debug + Send + 'static,
+        Resp: Serialize + Send + Sync + 'static,
+    {
+        let mut retries = 0;
+        loop {
+            match Self::make(name, true) {
+                Ok(listener) => return Self::spawn(listener, handle, idle),
+                Err(e) => match policy::rebind_delay(retries) {
+                    Some(delay) => {
+                        tracing::debug!("rebinding {}: {e}; retrying", name.path().display());
+                        tokio::time::sleep(delay).await;
+                        retries += 1;
+                    }
+                    None => return Start::Failed(e),
+                },
+            }
         }
     }
 
@@ -185,19 +229,19 @@ impl Listener {
         };
         match SocketStream::connect(sock).await {
             Ok(_) => Probe::AlreadyRunning,
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused => Probe::Stale,
+            Err(e) if policy::probe_is_stale(e.kind()) => Probe::Stale,
             // Unreachable ≠ dead — never classify (and later reclaim) as stale.
             Err(e) => Probe::Failed(e),
         }
     }
 
-    fn spawn<Req, Resp>(listener: SocketListener, handle: fn(&Req) -> Resp) -> Start
+    fn spawn<Req, Resp>(listener: SocketListener, handle: fn(&Req) -> Resp, idle: Duration) -> Start
     where
         Req: DeserializeOwned + Debug + Send + 'static,
         Resp: Serialize + Send + Sync + 'static,
     {
-        let shutdown = Arc::new(Notify::new());
-        let accept = tokio::spawn(accept_loop(listener, handle, shutdown.clone()));
+        let (shutdown, stop) = watch::channel(false);
+        let accept = tokio::spawn(accept_loop(listener, handle, stop, idle));
         Start::Started(Listener {
             shutdown,
             accept: Some(accept),
@@ -205,7 +249,7 @@ impl Listener {
     }
 
     pub async fn shutdown(mut self) {
-        self.shutdown.notify_waiters();
+        self.shutdown.send_replace(true);
         if let Some(accept) = self.accept.take() {
             accept.abort();
             let _ = accept.await;
@@ -215,11 +259,24 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.shutdown.notify_waiters();
+        // A published `true` — not a notification — because a `serve` task
+        // parked in `recv` may not have reached its wait point yet, and a
+        // wake it never received would leave it holding the connection until
+        // the peer hung up.
+        self.shutdown.send_replace(true);
         if let Some(accept) = self.accept.take() {
             accept.abort();
         }
     }
+}
+
+/// Resolves once the listener has been shut down or dropped.
+///
+/// `wait_for` inspects the current value before it parks, so a stop published
+/// before this is first polled is still seen; a dropped sender (the listener
+/// went away without a clean shutdown) counts as a stop too.
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    let _ = stop.wait_for(|stopped| *stopped).await;
 }
 
 /// Does a failed bind mean somebody already holds the name?
@@ -241,35 +298,89 @@ enum Probe {
 async fn accept_loop<Req, Resp>(
     listener: SocketListener,
     handle: fn(&Req) -> Resp,
-    shutdown: Arc<Notify>,
+    mut stop: watch::Receiver<bool>,
+    idle: Duration,
+) where
+    Req: DeserializeOwned + Debug + Send + 'static,
+    Resp: Serialize + Send + Sync + 'static,
+{
+    let mut backoff = policy::Backoff::new();
+    let active = Arc::new(AtomicUsize::new(0));
+    loop {
+        let accepted = tokio::select! {
+            () = stopped(&mut stop) => break,
+            accepted = listener.accept() => accepted,
+        };
+        let conn = match accepted {
+            Ok(conn) => {
+                backoff.reset();
+                conn
+            }
+            Err(e) => {
+                // Without the sleep a permanent error (`EMFILE`, above all)
+                // makes `accept` return immediately for as long as it lasts,
+                // and the bare retry spins a core and floods the log.
+                let delay = backoff.next_delay();
+                tracing::warn!("accept: {e}; retrying in {delay:?}");
+                tokio::select! {
+                    () = stopped(&mut stop) => break,
+                    () = tokio::time::sleep(delay) => continue,
+                }
+            }
+        };
+        if !policy::has_capacity(active.load(Ordering::Acquire)) {
+            // A peer that has already hung up keeps its slot until its task is
+            // polled and sees the end of stream, so eight launches in a row
+            // would otherwise refuse the ninth. One short beat lets those land
+            // — see `policy::CAP_GRACE`.
+            tokio::select! {
+                () = stopped(&mut stop) => break,
+                () = tokio::time::sleep(policy::CAP_GRACE) => {}
+            }
+        }
+        if !policy::has_capacity(active.load(Ordering::Acquire)) {
+            // Closing the connection is the whole response: a real second
+            // instance retries, and a peer that opened eight sockets and left
+            // them silent gets no ninth.
+            tracing::warn!(
+                "refusing a connection: {} already in flight",
+                policy::MAX_CONNECTIONS
+            );
+            drop(conn);
+            continue;
+        }
+        active.fetch_add(1, Ordering::AcqRel);
+        let served = active.clone();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            serve(Stream::wrap(conn), handle, stop, idle).await;
+            served.fetch_sub(1, Ordering::AcqRel);
+        });
+    }
+}
+
+async fn serve<Req, Resp>(
+    mut stream: Stream,
+    handle: fn(&Req) -> Resp,
+    mut stop: watch::Receiver<bool>,
+    idle: Duration,
 ) where
     Req: DeserializeOwned + Debug + Send + 'static,
     Resp: Serialize + Send + Sync + 'static,
 {
     loop {
-        let conn = tokio::select! {
-            () = shutdown.notified() => break,
-            accepted = listener.accept() => match accepted {
-                Ok(conn) => conn,
-                Err(e) => {
-                    tracing::warn!("accept: {e}");
-                    continue;
-                }
-            },
-        };
-        tokio::spawn(serve(Stream::wrap(conn), handle, shutdown.clone()));
-    }
-}
-
-async fn serve<Req, Resp>(mut stream: Stream, handle: fn(&Req) -> Resp, shutdown: Arc<Notify>)
-where
-    Req: DeserializeOwned + Debug + Send + 'static,
-    Resp: Serialize + Send + Sync + 'static,
-{
-    loop {
         let received = tokio::select! {
-            () = shutdown.notified() => break,
-            received = stream.recv::<Req>() => received,
+            () = stopped(&mut stop) => break,
+            received = tokio::time::timeout(idle, stream.recv::<Req>()) => received,
+        };
+        let received = match received {
+            Ok(received) => received,
+            Err(_elapsed) => {
+                // Nothing completed a frame within the window: either the peer
+                // is wedged or it is holding a slot on purpose.
+                tracing::debug!("closing a connection idle for {idle:?}");
+                break;
+            }
         };
         match received {
             Ok(Some(req)) => {
@@ -409,6 +520,138 @@ mod tests {
     fn parse_frame_rejects_an_empty_frame() {
         let err = parse_frame::<Msg>(b"").expect_err("empty");
         assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    /// The listener over a real socket in a temp directory. Windows names a
+    /// pipe rather than a path, so these bind a name that only unix accepts.
+    #[cfg(unix)]
+    mod socket {
+        use super::super::{Listener, Name, Start, Stream, policy};
+        use serde::{Deserialize, Serialize};
+        use std::time::Duration;
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Ping {
+            n: u32,
+        }
+
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct Pong {
+            n: u32,
+        }
+
+        fn bump(req: &Ping) -> Pong {
+            Pong { n: req.n + 1 }
+        }
+
+        fn name_in(dir: &tempfile::TempDir) -> Name {
+            Name {
+                path: dir.path().join("s"),
+            }
+        }
+
+        async fn start(name: &Name, idle: Duration) -> Listener {
+            match Listener::create_with(name, bump, idle).await {
+                Start::Started(listener) => listener,
+                Start::AlreadyRunning => panic!("the name was already bound"),
+                Start::Failed(e) => panic!("could not bind: {e}"),
+            }
+        }
+
+        /// Connect, exchange one message, and leave the connection parked in
+        /// the server's `recv` — which is what holds a slot.
+        async fn parked(name: &Name, n: u32) -> Stream {
+            let mut client = Stream::connect_to(name).await.expect("connect");
+            client.send(&Ping { n }).await.expect("send");
+            let pong: Option<Pong> = client.recv().await.expect("recv");
+            assert_eq!(pong, Some(Pong { n: n + 1 }));
+            client
+        }
+
+        #[tokio::test]
+        async fn a_peer_gets_its_request_handled() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = name_in(&dir);
+            let listener = start(&name, Duration::from_secs(30)).await;
+            let _client = parked(&name, 1).await;
+            listener.shutdown().await;
+        }
+
+        /// The cap: eight peers may park at once, and the ninth is closed
+        /// without being served.
+        #[tokio::test]
+        async fn a_connection_past_the_cap_is_closed_without_being_served() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = name_in(&dir);
+            let listener = start(&name, Duration::from_secs(30)).await;
+
+            let mut held = Vec::new();
+            for n in 0..policy::MAX_CONNECTIONS {
+                held.push(parked(&name, n as u32).await);
+            }
+
+            let mut ninth = Stream::connect_to(&name).await.expect("connect");
+            // The write may itself fail once the server has closed its end;
+            // either way there is no response.
+            let _ = ninth.send(&Ping { n: 99 }).await;
+            let got = tokio::time::timeout(Duration::from_secs(5), ninth.recv::<Pong>())
+                .await
+                .expect("the ninth connection was left open");
+            assert!(matches!(got, Ok(None) | Err(_)), "{got:?}");
+
+            listener.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn a_silent_connection_is_closed_after_the_idle_timeout() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = name_in(&dir);
+            let listener = start(&name, Duration::from_millis(150)).await;
+
+            let mut client = Stream::connect_to(&name).await.expect("connect");
+            let got = tokio::time::timeout(Duration::from_secs(5), client.recv::<Pong>())
+                .await
+                .expect("an idle connection was left open");
+            assert!(matches!(got, Ok(None) | Err(_)), "{got:?}");
+
+            listener.shutdown().await;
+        }
+
+        /// The finding this closes: `Drop` used to notify, and a `serve` task
+        /// that had not yet parked never saw the notification.
+        #[tokio::test]
+        async fn dropping_the_listener_ends_a_parked_connection() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = name_in(&dir);
+            let listener = start(&name, Duration::from_secs(30)).await;
+            let mut client = parked(&name, 7).await;
+
+            drop(listener);
+
+            let got = tokio::time::timeout(Duration::from_secs(5), client.recv::<Pong>())
+                .await
+                .expect("the connection outlived the listener");
+            assert!(matches!(got, Ok(None) | Err(_)), "{got:?}");
+        }
+
+        /// A live holder must never be evicted; a name whose holder has gone
+        /// must be reclaimed, which is the retried rebind.
+        #[tokio::test]
+        async fn a_name_is_reclaimed_after_its_holder_shuts_down_but_never_while_it_lives() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = name_in(&dir);
+            let listener = start(&name, Duration::from_secs(30)).await;
+
+            assert!(matches!(
+                Listener::create_with(&name, bump, Duration::from_secs(30)).await,
+                Start::AlreadyRunning
+            ));
+
+            listener.shutdown().await;
+            let restarted = start(&name, Duration::from_secs(30)).await;
+            let _client = parked(&name, 4).await;
+            restarted.shutdown().await;
+        }
     }
 
     /// Unix reports an existing socket file as `AddrInUse`; Windows reports a

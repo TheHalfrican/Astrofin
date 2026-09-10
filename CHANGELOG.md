@@ -50,6 +50,26 @@ project uses semantic versioning.
   - Every page-supplied string in a log line has newlines and control
     characters escaped.
   - `openConfigDir` and `appExit` ignore a repeat within 250 ms.
+  - Second-instance IPC: a failing `accept()` backs off from 10 ms to a
+    1 s cap; at most 8 connections are served at once; a connection that
+    completes no frame in 5 s is closed; dropping the listener ends its
+    connections. On Windows the pipe name also carries the user's SID, so
+    another user cannot squat the instance name, and a name still taken
+    right after a shutdown is retried as stale instead of reported as
+    "already running".
+  - `settings.json` reads are capped at 1 MiB; `windowScale` is clamped to
+    0.5..=4.0; the decoration accessors fall back instead of panicking when
+    no platform backend is installed.
+  - Legacy-profile import skips symlinks on Windows with a warning, and is
+    skipped entirely when the source exceeds 2 GiB or the destination has
+    less free space than that.
+  - A relative `--config-dir`/`ASTROFIN_CONFIG_DIR` is resolved once against
+    the launch directory and the absolute path is what the CEF helpers see;
+    a failed directory creation is logged instead of swallowed.
+  - A secret split across two log records is documented as a known
+    redaction limit.
+- `Mailbox::wait` wakes waiters when the `take` closure drains the slot, so
+  a two-sided handshake no longer needs both sides to re-publish.
 
 ### Added
 - Backend tests to one test per public function across every non-exempt

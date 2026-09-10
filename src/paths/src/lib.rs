@@ -48,17 +48,67 @@ fn overrides() -> MutexGuard<'static, Overrides> {
 /// `Some("")`, and taking that literally would resolve the profile to the
 /// process's working directory in the browser process while the CEF helpers,
 /// which read the environment variable directly, kept the real one.
-pub fn set_config_dir_override(path: PathBuf) {
-    if !path.as_os_str().is_empty() {
-        overrides().config_dir = Some(path);
-    }
+///
+/// Returns the absolute path actually stored, so the caller can export *that*
+/// into [`ENV_CONFIG_DIR`] rather than the relative spelling it was given —
+/// see [`absolutize`].
+pub fn set_config_dir_override(path: PathBuf) -> Option<PathBuf> {
+    let resolved = resolve_override(path)?;
+    overrides().config_dir = Some(resolved.clone());
+    Some(resolved)
 }
 
 /// See [`set_config_dir_override`].
-pub fn set_cache_dir_override(path: PathBuf) {
-    if !path.as_os_str().is_empty() {
-        overrides().cache_dir = Some(path);
+pub fn set_cache_dir_override(path: PathBuf) -> Option<PathBuf> {
+    let resolved = resolve_override(path)?;
+    overrides().cache_dir = Some(resolved.clone());
+    Some(resolved)
+}
+
+/// An empty override is no override; anything else is pinned to the launch
+/// working directory before it is stored.
+fn resolve_override(path: PathBuf) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return None;
     }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    Some(absolutize(&path, &cwd))
+}
+
+/// Pin a possibly relative profile directory to one absolute path.
+///
+/// `--config-dir profile` used to mean a different directory in every process:
+/// the browser process resolved it against its own working directory and then
+/// exported the *relative* spelling, so a CEF helper started from anywhere
+/// else — or the same process after something called `set_current_dir` —
+/// loaded a different `settings.json`. Resolving once at startup and storing
+/// the result makes every reader agree.
+///
+/// Lexical, not [`fs::canonicalize`]: the directory usually does not exist
+/// yet on a first run, and canonicalising would fail. `..` components are
+/// deliberately left in place — resolving them textually would step over a
+/// symlink to somewhere else — while a bare `.` is dropped as noise. A
+/// Windows drive-relative path (`C:profile`) has a prefix but no root, so it
+/// cannot be joined onto a cwd on another drive and is returned unchanged.
+fn absolutize(path: &Path, cwd: &Path) -> PathBuf {
+    if path.is_absolute() || path.components().next().is_none() {
+        return path.to_path_buf();
+    }
+    let mut joined = cwd.to_path_buf();
+    let mut any = false;
+    for component in path.components() {
+        if matches!(component, std::path::Component::CurDir) {
+            continue;
+        }
+        // A prefixed-but-relative Windows path: joining would silently change
+        // which volume it names.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            return path.to_path_buf();
+        }
+        joined.push(component);
+        any = true;
+    }
+    if any { joined } else { cwd.to_path_buf() }
 }
 
 fn env_override(var: &str) -> Option<PathBuf> {
@@ -94,8 +144,18 @@ fn home() -> String {
     env_or("HOME", "/tmp")
 }
 
+/// Create a directory we are about to hand out, and say so when we could not.
+///
+/// The path is still returned: the caller's next write reports the real
+/// failure with the file it was trying to write, which is a better error than
+/// anything this could return. What was missing until now is the line naming
+/// the directory itself — without it a read-only `%APPDATA%`, a full disk or a
+/// plain file sitting where the profile belongs surfaced only as a string of
+/// unexplained write failures much later in the log.
 fn ensure(path: PathBuf) -> PathBuf {
-    let _ = fs::create_dir_all(&path);
+    if let Err(e) = fs::create_dir_all(&path) {
+        tracing::warn!(target: "Paths", "could not create {}: {e}", path.display());
+    }
     path
 }
 
@@ -262,13 +322,75 @@ pub fn instance_listener_path(id: impl std::fmt::Display) -> io::Result<PathBuf>
     check_instance_id(&id)?;
     #[cfg(unix)]
     {
+        // Already per-user: `runtime_dir` is `$XDG_RUNTIME_DIR` or a 0700
+        // directory of our own under /tmp, both of which nobody else can
+        // write into.
         Ok(runtime_dir()?.join(format!("{APP_DIR_NAME}-{id}")))
     }
     #[cfg(windows)]
     {
-        Ok(PathBuf::from(format!(r"\\.\pipe\{APP_DIR_NAME}-{id}")))
+        Ok(PathBuf::from(pipe_name(&id, &user_win::current_user_key())))
     }
 }
+
+/// Longest user key spliced into a pipe name. The Windows namespace caps the
+/// whole name at 256: `\\.\pipe\astrofin-` is 18, the id at most
+/// [`INSTANCE_ID_MAX`], and the separator one more.
+#[cfg(any(windows, test))]
+const USER_KEY_MAX: usize = 96;
+
+/// Used when no per-user value can be derived at all. Restores the old,
+/// unscoped name rather than failing the launch.
+#[cfg(any(windows, test))]
+const USER_KEY_FALLBACK: &str = "user";
+
+/// The Windows pipe name for one instance of one user.
+///
+/// `\\.\pipe\` is a single machine-wide namespace: every session and every
+/// user sees the same names, so the instance id on its own lets any other
+/// account on the machine bind our name first and make every launch conclude
+/// "already running" and exit. Splicing a per-user value in scopes the name
+/// the way `runtime_dir` already scopes the unix socket. It is not a secret —
+/// a SID is not private — but it means the squatter has to be *this* user,
+/// who could stop the app anyway.
+///
+/// The user key is sanitised the same way [`check_instance_id`] validates an
+/// id: a separator, a NUL or a control character in a user name would
+/// otherwise reshape the name (`\\.\pipe\astrofin-a\b-<id>` names a pipe in a
+/// different directory of the namespace).
+#[cfg(any(windows, test))]
+fn pipe_name(instance_id: &str, user_key: &str) -> String {
+    format!(
+        r"\\.\pipe\{APP_DIR_NAME}-{}-{instance_id}",
+        sanitize_user_key(user_key)
+    )
+}
+
+/// Reduce an arbitrary per-user string to the same alphabet
+/// [`check_instance_id`] accepts, so it can be spliced into a pipe name.
+/// Everything outside it collapses to `_`, which cannot merge two users that
+/// the alphabet would otherwise keep apart *and* cannot escape the name.
+#[cfg(any(windows, test))]
+fn sanitize_user_key(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(USER_KEY_MAX));
+    for c in raw.chars() {
+        if out.len() == USER_KEY_MAX {
+            break;
+        }
+        out.push(if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            c
+        } else {
+            '_'
+        });
+    }
+    if out.is_empty() {
+        return USER_KEY_FALLBACK.to_string();
+    }
+    out
+}
+
+#[cfg(windows)]
+mod user_win;
 
 /// `InstanceId` renders as 32 hex digits, so a whitelist costs nothing and
 /// keeps a future caller from handing this a separator, a `..`, a NUL or a
@@ -301,6 +423,7 @@ pub fn default_log_file() -> Option<PathBuf> {
 }
 
 mod migrate;
+mod space;
 pub use migrate::{MigrationReport, migrate_legacy, repair_mpv_conf};
 
 #[cfg_attr(target_os = "linux", path = "imp_linux.rs")]
@@ -313,14 +436,143 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::{
-        APP_DIR_NAME, INSTANCE_ID_MAX, LOG_FILE_NAME, bundled_shader_dir, check_instance_id,
-        instance_listener_path, log_dir_raw, pick_shader_dir, resource_dir, user_shader_dir,
-        write_atomic, write_atomic_noclobber,
+        APP_DIR_NAME, INSTANCE_ID_MAX, LOG_FILE_NAME, USER_KEY_FALLBACK, USER_KEY_MAX, absolutize,
+        bundled_shader_dir, check_instance_id, ensure, instance_listener_path, log_dir_raw,
+        pick_shader_dir, pipe_name, resource_dir, sanitize_user_key, user_shader_dir, write_atomic,
+        write_atomic_noclobber,
     };
     use std::ffi::OsStr;
     use std::fs;
     use std::io::ErrorKind;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn ensure_creates_the_directory_and_hands_the_path_back() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let nested = tmp.path().join("a").join("b");
+        assert_eq!(ensure(nested.clone()), nested);
+        assert!(nested.is_dir());
+        // Idempotent: the second call finds it there and is still quiet.
+        assert_eq!(ensure(nested.clone()), nested);
+    }
+
+    /// A directory it cannot create is logged, not returned as an error: the
+    /// caller's own write reports the real problem with the file it names.
+    #[test]
+    fn ensure_still_returns_a_path_it_could_not_create() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let blocker = tmp.path().join("blocker");
+        fs::write(&blocker, b"a file, not a directory").expect("write");
+        let under = blocker.join("profile");
+        assert_eq!(ensure(under.clone()), under);
+        assert!(!under.exists());
+    }
+
+    #[test]
+    fn absolutize_pins_a_relative_directory_to_the_launch_cwd() {
+        let cwd = Path::new(if cfg!(windows) {
+            r"C:\launch"
+        } else {
+            "/launch"
+        });
+        assert_eq!(
+            absolutize(Path::new("profile"), cwd),
+            cwd.join("profile"),
+            "a bare name resolves against the launch directory"
+        );
+        assert_eq!(
+            absolutize(Path::new("a/b"), cwd),
+            cwd.join("a").join("b"),
+            "so does a nested one"
+        );
+    }
+
+    #[test]
+    fn absolutize_leaves_an_absolute_directory_alone() {
+        let cwd = Path::new(if cfg!(windows) {
+            r"C:\launch"
+        } else {
+            "/launch"
+        });
+        let absolute = if cfg!(windows) {
+            PathBuf::from(r"C:\elsewhere\profile")
+        } else {
+            PathBuf::from("/elsewhere/profile")
+        };
+        assert_eq!(absolutize(&absolute, cwd), absolute);
+    }
+
+    /// `.` is noise; `..` is not resolved textually, because doing so steps
+    /// over a symlink instead of through it.
+    #[test]
+    fn absolutize_drops_a_bare_dot_and_keeps_parent_components() {
+        let cwd = Path::new(if cfg!(windows) {
+            r"C:\launch"
+        } else {
+            "/launch"
+        });
+        assert_eq!(absolutize(Path::new("."), cwd), cwd);
+        assert_eq!(absolutize(Path::new("./profile"), cwd), cwd.join("profile"));
+        assert_eq!(
+            absolutize(Path::new("../profile"), cwd),
+            cwd.join("..").join("profile")
+        );
+    }
+
+    #[test]
+    fn sanitize_user_key_keeps_a_sid_verbatim() {
+        assert_eq!(
+            sanitize_user_key("S-1-5-21-3623811015-3361044348-30300820-1013"),
+            "S-1-5-21-3623811015-3361044348-30300820-1013"
+        );
+    }
+
+    #[test]
+    fn sanitize_user_key_neutralises_anything_that_could_reshape_a_pipe_name() {
+        assert_eq!(sanitize_user_key(r"dom\user"), "dom_user");
+        assert_eq!(sanitize_user_key("a/b"), "a_b");
+        assert_eq!(sanitize_user_key("a\0b"), "a_b");
+        assert_eq!(sanitize_user_key("a\nb"), "a_b");
+        assert_eq!(sanitize_user_key("a:b"), "a_b");
+        assert_eq!(sanitize_user_key(".."), "__");
+        assert_eq!(sanitize_user_key("Ünïcode"), "_n_code");
+    }
+
+    #[test]
+    fn sanitize_user_key_caps_the_length_and_never_yields_nothing() {
+        assert_eq!(sanitize_user_key("").len(), USER_KEY_FALLBACK.len());
+        assert_eq!(sanitize_user_key(""), USER_KEY_FALLBACK);
+        assert_eq!(sanitize_user_key(&"x".repeat(500)).len(), USER_KEY_MAX);
+    }
+
+    /// The Windows pipe namespace is machine-wide, so the name has to carry
+    /// the user as well as the instance.
+    #[test]
+    fn pipe_name_scopes_the_instance_to_one_user() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let mine = pipe_name(id, "S-1-5-21-99-1001");
+        assert_eq!(
+            mine,
+            r"\\.\pipe\astrofin-S-1-5-21-99-1001-0123456789abcdef0123456789abcdef"
+        );
+        assert_ne!(mine, pipe_name(id, "S-1-5-21-99-1002"));
+        assert_ne!(
+            mine,
+            pipe_name("0123456789abcdef0123456789abcdee", "S-1-5-21-99-1001")
+        );
+    }
+
+    #[test]
+    fn pipe_name_stays_inside_the_windows_name_limit() {
+        let name = pipe_name(&"i".repeat(INSTANCE_ID_MAX), &"u".repeat(USER_KEY_MAX * 2));
+        assert!(name.len() < 256, "{} chars", name.len());
+        assert!(name.starts_with(r"\\.\pipe\astrofin-"), "{name}");
+        // One pipe, not a path into the namespace.
+        assert_eq!(
+            name.matches('\\').count(),
+            r"\\.\pipe\".matches('\\').count()
+        );
+    }
 
     /// Everything in `dir` except `keep`. The atomic writers stage a temp file
     /// beside the target; a failed write must not leave it behind.

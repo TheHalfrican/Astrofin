@@ -28,6 +28,56 @@ const HWDEC_DEFAULT: &str = if cfg!(target_os = "macos") {
     "no"
 };
 
+/// Largest `settings.json` that is read at all.
+///
+/// The document is a flat object of scalars plus one small map; a real file is
+/// a few hundred bytes and the largest plausible one — a `videoModeLibraries`
+/// entry per library on a very large server — is a few kilobytes. A megabyte
+/// is therefore not a limit anybody can reach by using the app, and the file
+/// is loaded into memory in one piece by a process that has to stay
+/// responsive, so something that has grown past it is damage (a log appended
+/// to the wrong path, a partial disk image) rather than settings.
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
+
+/// Bounds on a stored `windowScale`. Below the first the UI is unreadable and
+/// the window may be smaller than its own titlebar; above the second a saved
+/// geometry can put the window off every monitor. Both are far outside the
+/// 1.0-3.0 range real displays report.
+const WINDOW_SCALE_MIN: f32 = 0.5;
+const WINDOW_SCALE_MAX: f32 = 4.0;
+
+/// What a `windowScale` read from the file resolves to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ScaleCheck {
+    /// Usable as written.
+    Ok(f32),
+    /// Outside the range, pulled to the nearer end.
+    Clamped(f32),
+    /// Not a scale at all: NaN, an infinity, or zero and below — which is
+    /// also how "no saved scale" is spelled in memory, so it resolves to the
+    /// default rather than clamping up to [`WINDOW_SCALE_MIN`].
+    Unusable,
+}
+
+/// Validate the `windowScale` a hand-edited file offers.
+fn check_window_scale(raw: f64) -> ScaleCheck {
+    if !raw.is_finite() || raw <= 0.0 {
+        return ScaleCheck::Unusable;
+    }
+    if raw < f64::from(WINDOW_SCALE_MIN) {
+        return ScaleCheck::Clamped(WINDOW_SCALE_MIN);
+    }
+    if raw > f64::from(WINDOW_SCALE_MAX) {
+        return ScaleCheck::Clamped(WINDOW_SCALE_MAX);
+    }
+    ScaleCheck::Ok(raw as f32)
+}
+
+/// Whether a settings file of `len` bytes is worth reading into memory.
+fn settings_size_ok(len: u64) -> bool {
+    len <= MAX_SETTINGS_BYTES
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
     pub x: i32,
@@ -328,7 +378,21 @@ impl SettingsData {
             self.window.logical_height = v;
         }
         if let Some(v) = file.window_scale {
-            self.window.scale = v as f32;
+            match check_window_scale(v) {
+                ScaleCheck::Ok(scale) => self.window.scale = scale,
+                ScaleCheck::Clamped(scale) => {
+                    tracing::warn!(
+                        target: "Config",
+                        "windowScale {v} is outside {WINDOW_SCALE_MIN}..={WINDOW_SCALE_MAX}, \
+                         using {scale}"
+                    );
+                    self.window.scale = scale;
+                }
+                ScaleCheck::Unusable => tracing::warn!(
+                    target: "Config",
+                    "windowScale {v} is not a usable scale, keeping the default"
+                ),
+            }
         }
         if let Some(v) = file.window_x {
             self.window.x = v;
@@ -530,6 +594,20 @@ pub fn settings_load() -> bool {
 /// number that does not fit its own field; those keep their defaults and the
 /// rest of the file still loads.
 fn read_file(path: &Path) -> Option<SettingsFile> {
+    // Checked before the read, not after: `read_to_string` on a file that has
+    // grown to gigabytes is the failure, not a way to detect it.
+    if let Ok(meta) = fs::metadata(path)
+        && !settings_size_ok(meta.len())
+    {
+        tracing::warn!(
+            target: "Config",
+            "settings file {} is {} bytes, past the {MAX_SETTINGS_BYTES}-byte limit; ignoring it, \
+             every setting at its default",
+            path.display(),
+            meta.len()
+        );
+        return None;
+    }
     let contents = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
@@ -710,11 +788,28 @@ pub fn configured_window_decorations() -> Option<WindowDecorations> {
     state().lock().data.window_decorations
 }
 
-/// Browser-process only: falls back to the installed `Platform`, which panics
-/// if absent.
+/// The effective decoration mode: the user's choice, resolved against what
+/// the installed `Platform` can actually honour.
 pub fn window_decorations_mode() -> WindowDecorations {
     let configured = state().lock().data.window_decorations;
-    jfn_platform_abi::get().resolve_window_decorations(configured)
+    resolve_decorations(configured)
+}
+
+/// Resolve a stored choice with, or without, a `Platform`.
+///
+/// The CEF renderer process links this crate — it reads `settings.json` itself
+/// to build the injected settings blob — and installs no backend, so
+/// `jfn_platform_abi::get()` used to turn any call of the four decoration
+/// accessors there into a panic inside a helper process. Client-side
+/// decorations are the answer when nobody can be asked: every backend supports
+/// them (`DecorationOptions::contains` is unconditionally true for `Csd`),
+/// which makes them the one mode that cannot be wrong, and an explicit choice
+/// is still reported as made.
+fn resolve_decorations(configured: Option<WindowDecorations>) -> WindowDecorations {
+    match jfn_platform_abi::try_get() {
+        Some(platform) => platform.resolve_window_decorations(configured),
+        None => configured.unwrap_or(WindowDecorations::Csd),
+    }
 }
 
 pub fn window_decorations() -> String {
@@ -776,8 +871,9 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, SettingsData, SettingsFile, WindowDecorations, default_device_name,
-        normalize_device_name,
+        BTreeMap, MAX_SETTINGS_BYTES, ScaleCheck, SettingsData, SettingsFile, WINDOW_SCALE_MAX,
+        WINDOW_SCALE_MIN, WindowDecorations, check_window_scale, default_device_name,
+        normalize_device_name, settings_size_ok,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -1197,29 +1293,103 @@ mod tests {
         assert_eq!(data.window.x, i32::MIN);
     }
 
-    /// A scale big enough to overflow `f32` but not `f64` does load, and it
-    /// is written back as `null` (serde_json's spelling for a non-finite
-    /// number), which the next load ignores. It degrades to the default
-    /// instead of persisting a poisoned value — but it *is* handed to the
-    /// window code as an infinity first.
+    /// Replaces `an_f32_overflowing_window_scale_is_written_back_as_null`,
+    /// which pinned the unvalidated behaviour: a scale too large for an `f32`
+    /// used to reach the window code as an infinity and only degrade to the
+    /// default on the *next* load. It is now clamped on the way in.
     #[test]
-    fn an_f32_overflowing_window_scale_is_written_back_as_null() {
+    fn a_window_scale_too_large_for_f32_is_clamped_instead_of_stored_as_an_infinity() {
         let data = loaded(r#"{"windowScale":1e39}"#);
-        assert!(data.window.scale.is_infinite());
+        assert!((data.window.scale - WINDOW_SCALE_MAX).abs() < f32::EPSILON);
 
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
-        assert!(text.contains(r#""windowScale":null"#), "{text}");
-        assert_eq!(loaded(&text).window.scale, 0.0);
+        assert!(text.contains(r#""windowScale":4.0"#), "{text}");
     }
 
-    /// Negative and zero scales load verbatim; nothing in this crate rejects
-    /// them.
+    /// Replaces `a_negative_window_scale_loads_and_is_dropped_on_save`: a
+    /// non-positive scale is not clamped up to the minimum, because zero is
+    /// also how "no saved scale" is spelled in memory.
     #[test]
-    fn a_negative_window_scale_loads_and_is_dropped_on_save() {
-        let data = loaded(r#"{"windowScale":-2.0}"#);
-        assert!((data.window.scale - -2.0).abs() < f32::EPSILON);
-        let text = serde_json::to_string(&data.to_file()).expect("serializes");
-        assert!(!text.contains("windowScale"), "{text}");
+    fn a_negative_or_zero_window_scale_is_ignored_rather_than_loaded() {
+        for text in [r#"{"windowScale":-2.0}"#, r#"{"windowScale":0}"#] {
+            let data = loaded(text);
+            assert_eq!(data.window.scale, 0.0, "{text}");
+            let written = serde_json::to_string(&data.to_file()).expect("serializes");
+            assert!(!written.contains("windowScale"), "{written}");
+        }
+    }
+
+    #[test]
+    fn a_window_scale_inside_the_range_is_taken_as_given() {
+        assert_eq!(check_window_scale(1.0), ScaleCheck::Ok(1.0));
+        assert_eq!(check_window_scale(2.5), ScaleCheck::Ok(2.5));
+        assert_eq!(
+            check_window_scale(f64::from(WINDOW_SCALE_MIN)),
+            ScaleCheck::Ok(WINDOW_SCALE_MIN)
+        );
+        assert_eq!(
+            check_window_scale(f64::from(WINDOW_SCALE_MAX)),
+            ScaleCheck::Ok(WINDOW_SCALE_MAX)
+        );
+        assert!((loaded(r#"{"windowScale":1.25}"#).window.scale - 1.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_window_scale_outside_the_range_is_pulled_to_the_nearer_end() {
+        assert_eq!(
+            check_window_scale(0.25),
+            ScaleCheck::Clamped(WINDOW_SCALE_MIN)
+        );
+        assert_eq!(
+            check_window_scale(100.0),
+            ScaleCheck::Clamped(WINDOW_SCALE_MAX)
+        );
+        assert_eq!(
+            check_window_scale(f64::MAX),
+            ScaleCheck::Clamped(WINDOW_SCALE_MAX)
+        );
+    }
+
+    #[test]
+    fn a_window_scale_that_is_not_a_number_leaves_the_default() {
+        for raw in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(check_window_scale(raw), ScaleCheck::Unusable, "{raw}");
+        }
+    }
+
+    #[test]
+    fn settings_size_ok_admits_a_real_file_and_refuses_a_grown_one() {
+        assert!(settings_size_ok(0));
+        assert!(settings_size_ok(4096));
+        assert!(settings_size_ok(MAX_SETTINGS_BYTES));
+        assert!(!settings_size_ok(MAX_SETTINGS_BYTES + 1));
+    }
+
+    /// Past the cap the file is unparseable, not partially loaded: every
+    /// setting falls back to its default, exactly as a syntax error does.
+    #[test]
+    fn read_file_ignores_a_settings_file_past_the_size_cap() {
+        let mut body = br#"{"serverUrl":"http://host","deviceName":"#.to_vec();
+        body.push(b'"');
+        body.extend(std::iter::repeat_n(b'x', MAX_SETTINGS_BYTES as usize));
+        body.extend_from_slice(br#""}"#);
+        let (_tmp, path) = seed("settings.json", &body);
+        assert!(read_file(&path).is_none());
+    }
+
+    /// The four decoration accessors are reachable from the CEF renderer,
+    /// where no backend is ever installed; they used to panic there.
+    #[test]
+    fn the_decoration_accessors_answer_without_a_platform_installed() {
+        assert!(
+            jfn_platform_abi::try_get().is_none(),
+            "this test binary must install no backend"
+        );
+        assert_eq!(super::resolve_decorations(None), WindowDecorations::Csd);
+        assert_eq!(
+            super::resolve_decorations(Some(WindowDecorations::ServerThemed)),
+            WindowDecorations::ServerThemed
+        );
     }
 
     #[test]
