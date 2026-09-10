@@ -30,6 +30,15 @@
       "page": "page-1"
     },
     {
+      "file": "SeriesDetail.dc.html",
+      "title": "5 Item detail (series)",
+      "x": 4800,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "page": "page-1"
+    },
+    {
       "file": "Astrofin.dc.html",
       "title": "1 Foundations: tokens, accents, Home, connect",
       "x": 0,
@@ -55,6 +64,14 @@
       "w": 300,
       "page": "page-1",
       "text": "Item detail, movie, screen 4 of the brief. \"Game hub\" layout: key art full-bleed under the two scrims, logo (or the title in display type when the server has no logo) top-left, metadata chips, a three-line blurb, then the vertical action stack with Resume focused and its remaining time. Cast and More-like-this shelves on the right; a glass File panel top-right with the stream facts and the video mode Auto resolved to.\n\nStatic: no live focus on this one yet."
+    },
+    {
+      "id": "series-notes",
+      "x": 6800,
+      "y": 0,
+      "w": 300,
+      "page": "page-1",
+      "text": "Item detail, TV series, screen 5 of the brief. Same hub as the movie page: the action stack leads with Continue on the next unwatched episode and the progress line counts episodes. The right column replaces Cast with the season pills and the season's episode list: 16:9 thumbs, number in cyan mono, watched ticks, a progress bar on the one in progress, the focused row lifted. Next-up panel top-right. Cast and More-like-this sit below the fold on this page.\n\nOwner decision 2026-09-10: no poster on detail pages; backdrop plus logo (title text when the server has no logo)."
     }
   ],
   "launch": {
