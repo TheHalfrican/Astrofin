@@ -113,6 +113,15 @@ project uses semantic versioning.
 - A connectivity result that arrives while no probe is pending is ignored;
   before, a null-url result matched the null initial state and called a
   resolver that did not exist.
+- The A-B loop band and pins drop their inline `left`/`width` when the
+  loop is cleared, not only their visibility, so nothing can slide in from
+  the previous loop's points if the band is ever shown before a render.
+- The Flatpak build no longer fails in `appstreamcli compose`: the app icon
+  SVGs carried a long XML comment before the root tag, which pushed `<svg`
+  past the 256 bytes gdk-pixbuf sniffs for the image format, so the
+  scalable icon read as "Unrecognized image file format". The comment now
+  sits inside the root element. (freedesktop.org serves the uchardet
+  tarball again, which is what let the job get this far.)
 
 ## [0.4.0] - 2026-09-09
 

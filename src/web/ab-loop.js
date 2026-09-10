@@ -675,6 +675,24 @@
             return true;
         }
 
+        // Hide the three pieces and drop the percentages the last loop left
+        // inline on them: `left` and `width` are transitioned, so a band that
+        // ever reappeared before a render wrote them would slide in from the
+        // old loop's points.
+        function resetOverlayGeometry(el) {
+            var parts = [
+                el.querySelector('.' + BAND_CLASS),
+                el.querySelector('.' + PIN_CLASS + '--a'),
+                el.querySelector('.' + PIN_CLASS + '--b')
+            ];
+            for (var i = 0; i < parts.length; i++) {
+                if (!parts[i]) continue;
+                parts[i].hidden = true;
+                parts[i].style.left = '';
+                parts[i].style.width = '';
+            }
+        }
+
         function renderOverlay(osd) {
             var el = ensureOverlay(osd);
             if (!el) return false;
@@ -682,6 +700,7 @@
             var geo = bandGeometry(state, dur);
             if (!geo) {
                 el.hidden = true;
+                resetOverlayGeometry(el);
                 // Mounted, but a loop exists and the duration does not yet:
                 // report "not done" so the band is not left hidden over an
                 // item that is still opening.

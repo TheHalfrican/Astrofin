@@ -660,6 +660,25 @@ test('an A-B toast is lifted clear of the OSD bar, and only while it is up', () 
     assert.equal(flat.classList.contains('af-abloop-toast--lifted'), false);
 });
 
+test('clearing the loop drops the band geometry, not just its visibility', () => {
+    const { doc, pm, win } = loadDom({ positionMs: 90000 });
+    mountPage(doc);
+    Events.trigger(pm, 'playbackstart');
+    push(win, 60, 180);
+    const band = doc.querySelector('.af-abloop-band');
+    const pinA = doc.querySelector('.af-abloop-pin--a');
+    assert.deepEqual([band.style.left, band.style.width], ['10%', '20%']);
+    assert.equal(pinA.style.left, '10%');
+
+    push(win, null, null);
+    assert.equal(doc.querySelector('.af-abloop-overlay').hidden, true);
+    for (const part of [band, pinA]) {
+        assert.equal(part.hidden, true);
+        assert.equal(part.style.left, '');
+        assert.equal(part.style.width, '');
+    }
+});
+
 // ---- surviving jellyfin-web's player page swap ----------------------------
 
 test('the controls mount into the OSD that is on screen', () => {

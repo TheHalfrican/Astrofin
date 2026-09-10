@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Astrofin app icon, flat variant for tiny raster sizes (16/24/32 px).
-     Same rounded square and space gradient as astrofin-icon.svg, but with no
-     nebula, no starfield and no outer glow — those turn to mush below ~48 px.
-     The mark is set slightly larger (62% instead of 58%) and the ring opacity
-     is raised to .75 so both shapes survive downsampling. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
      role="img" aria-label="Astrofin">
+  <!-- Astrofin app icon, flat variant for tiny raster sizes (16/24/32 px).
+       Same rounded square and space gradient as astrofin-icon.svg, but with no
+       nebula, no starfield and no outer glow — those turn to mush below ~48 px.
+       The mark is set slightly larger (62% instead of 58%) and the ring opacity
+       is raised to .75 so both shapes survive downsampling. -->
+  <!-- NOTE: keep this comment INSIDE <svg>. gdk-pixbuf sniffs the image format
+       from the first ~256 bytes of the file; a comment block before the root tag
+       pushes '<svg' past it and every gdk-pixbuf consumer (appstreamcli compose
+       in flatpak-builder, desktop icon thumbnailers) reports
+       "Unrecognized image file format". -->
   <defs>
     <linearGradient id="af-space" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0E1326"/>
