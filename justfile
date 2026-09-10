@@ -48,12 +48,13 @@ test: build
 
 # Run the JS unit tests (node only; not part of `just test`, which is cargo)
 #
-# The glob is quoted so the shell leaves it alone: node >= 21 expands test
+# The globs are quoted so the shell leaves them alone: node >= 21 expands test
 # globs itself, and PowerShell does not glob native-command arguments at all,
-# so the one form works on every OS.
+# so the one form works on every OS. The second glob is the brand tooling in
+# dev/tools/brand/ (ES modules, hence .mjs).
 [group('test')]
 test-js:
-    node --test "src/web/*.test.js"
+    node --test "src/web/*.test.js" "dev/tools/brand/*.test.mjs"
 
 # Tests per public function, per crate and in total (docs/test-plan.md §2)
 [group('test')]

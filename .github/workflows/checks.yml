@@ -63,5 +63,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: node --test src/web
-        run: node --test "src/web/*.test.js"
+      - name: node --test src/web and dev/tools/brand
+        run: node --test "src/web/*.test.js" "dev/tools/brand/*.test.mjs"

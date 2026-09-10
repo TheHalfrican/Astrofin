@@ -121,9 +121,10 @@ jobs:
         run: |
           Set-Location $env:SHORT_WORKSPACE
           # node is installed on the runner host (v26 at the time of writing);
-          # node --test expands the glob itself, pwsh passes it through verbatim.
+          # node --test expands the globs itself, pwsh passes them through
+          # verbatim. Second glob: the brand tooling in dev/tools/brand.
           node --version
-          node --test "src/web/*.test.js"
+          node --test "src/web/*.test.js" "dev/tools/brand/*.test.mjs"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Supply chain: licences/advisories/bans/sources, then the RustSec scan of

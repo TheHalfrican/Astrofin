@@ -218,4 +218,20 @@
     window.addEventListener('keydown', onKeyDown, true);
 
     document.body.appendChild(host);
+
+    // Test hook (see src/web/about.test.js); a no-op in the browser, where
+    // `module` is undefined. The shadow root is closed, so a test can only
+    // reach the panel through what is handed out here.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            host: host,
+            shadow: shadow,
+            box: box,
+            rows: rows,
+            addRow: addRow,
+            dismiss: dismiss,
+            onKeyDown: onKeyDown,
+            isDismissed: function () { return dismissed; }
+        };
+    }
 })();

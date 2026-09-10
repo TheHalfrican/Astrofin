@@ -109,4 +109,6 @@
 
     window._mpvAudioPlayer = mpvAudioPlayer;
     console.debug('[Media] mpvAudioPlayer plugin installed');
+    // Unit tests run this file under node, where there is no window.
+    if (typeof module !== 'undefined' && module.exports) module.exports = mpvAudioPlayer;
 })();

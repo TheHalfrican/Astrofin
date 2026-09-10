@@ -1,6 +1,6 @@
 # Test-suite plan
 
-Status: phases 0-2 done 2026-09-09; phase 3 (frontend) next. Owner decisions are recorded in §1;
+Status: phases 0-3 done 2026-09-09; phase 4 (E2E smoke) in progress. Owner decisions are recorded in §1;
 agents executing a phase read §3 for the working rules and §4 for the phase
 they are on. Update the status line and the phase table as work lands.
 
@@ -86,7 +86,7 @@ functions = 0.72** over 136 files, which is the floor in
 | 0 | Measurement and tooling: `xtask test-ratio`, exemption list, cargo-audit + cargo-deny, CodeQL, `just test-js` and audit in CI, `just coverage` | `test/phase-0-infra` | done 2026-09-09 (baseline 514/713 = 0.72, 133 exempt files) |
 | 1 | Security audit of untrusted-input surfaces, tests and fixes for findings | `test/phase-1-security` | done 2026-09-09: 15+13+20 findings, 9 fixed in code, rest recorded in §6 |
 | 2 | Backend 1:1: pure and mixed crates, in the order of §5 | `test/phase-2-backend` | done 2026-09-09: every non-exempt Rust file at or above 1.0 |
-| 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | planned |
+| 3 | Frontend 1:1: shared helpers, then every `src/web` module | `test/phase-3-frontend` | done 2026-09-09: 20 JS files all tested, 605 JS cases, total ratio 2.32 |
 | 4 | E2E smoke: mock Jellyfin server, CDP driver, bundled clip, CI job | `test/phase-4-e2e` | planned |
 | 5 | Platform glue: pure extractions in `windows`, `macos`, `wayland`, `x11`, `gpu_paint`, `jfn_cef`; finalise exemptions | `test/phase-5-platform` | planned |
 
@@ -121,9 +121,11 @@ Pure crates first, then the mixed ones, then the mpv control plane:
 
 ### Phase 3: frontend
 
-`src/web/test/helpers.js` (fake DOM sufficient for the modules, fake
-`playbackManager`/`Events`/`ApiClient`, fake `jmpNative` recorder, module
-loader that resets `window` between tests), then tests for
+`src/web/test/player-fakes.js` (fake DOM sufficient for the modules, fake
+`playbackManager`/`Events`/`ApiClient`, fake `jmpNative` recorder, and
+`loadModule(file, window)`, which evaluates an injected script inside
+`with (window)` and returns its `module.exports`, so every test gets a fresh
+window), then tests for
 `native-shim`, `mpv-video-player`, `mpv-player-base`, `mpv-audio-player`,
 `client-settings`, `overlay`, `connectivityHelper`, `csd`, `select-menu`,
 `about`, `astrofin-theme` (idempotency across repeated context creation),

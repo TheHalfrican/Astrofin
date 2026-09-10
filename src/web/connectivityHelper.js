@@ -54,3 +54,9 @@ window.jmpCheckServerConnectivity = (() => {
 
     return checkFunc;
 })();
+
+// Test hook: `require()` of this file yields the installed window API. In the
+// browser `module` is undefined, so this is a no-op there.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = window.jmpCheckServerConnectivity;
+}

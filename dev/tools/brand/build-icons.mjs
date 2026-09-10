@@ -14,8 +14,11 @@
 // resvg for the rasterization itself. ICO small sizes are 32-bit BMP/DIB
 // entries (the widest-compatible form) and 256 is a PNG entry; ICNS carries
 // PNG payloads, which every macOS since 10.7 reads.
+//
+// Importing this file does nothing: `main()` runs only when the file is the
+// process entry point, and it is what pulls in @resvg/resvg-js, so the unit
+// tests can exercise the container writers without the native dependency.
 
-import { Resvg } from '@resvg/resvg-js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -24,25 +27,20 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../../..');
 
-const MASTER = resolve(REPO, 'resources/brand/astrofin-icon.svg');
-const MASTER_FLAT = resolve(REPO, 'resources/brand/astrofin-icon-flat.svg');
-const OUT_ICO = resolve(REPO, 'resources/win/astrofin.ico');
-const OUT_ICNS = resolve(REPO, 'resources/macos/AppIcon.icns');
-const OUT_LINUX_SVG = resolve(REPO, 'resources/linux/io.github.thehalfrican.Astrofin.svg');
-
 // Below this the nebula, starfield and cyan halo just turn into noise.
-const FLAT_BELOW = 48;
+export const FLAT_BELOW = 48;
 
-const SIZES = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
+export const SIZES = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 
 // ---- rasterization ---------------------------------------------------------
 
-const svgFull = readFileSync(MASTER);
-const svgFlat = readFileSync(MASTER_FLAT);
-
-/** @returns {Buffer} a PNG of the master rendered at size x size. */
-function renderPng(size) {
-    const svg = size < FLAT_BELOW ? svgFlat : svgFull;
+/**
+ * @param {Function} Resvg the resvg-js constructor
+ * @param {{full: Buffer, flat: Buffer}} svgs the two masters
+ * @returns {Buffer} a PNG of the master rendered at size x size.
+ */
+export function renderPng(Resvg, svgs, size) {
+    const svg = size < FLAT_BELOW ? svgs.flat : svgs.full;
     const r = new Resvg(svg, {
         fitTo: { mode: 'width', value: size },
         background: 'rgba(0,0,0,0)',
@@ -56,7 +54,7 @@ function renderPng(size) {
 
 // ---- a minimal PNG reader (RGBA8, non-interlaced — what resvg emits) --------
 
-function pngInfo(buf) {
+export function pngInfo(buf) {
     if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
     let off = 8;
     let ihdr = null;
@@ -85,7 +83,7 @@ function pngInfo(buf) {
 }
 
 /** Decodes an 8-bit RGBA non-interlaced PNG to a flat RGBA byte array. */
-function pngToRgba(buf) {
+export function pngToRgba(buf) {
     const png = pngInfo(buf);
     if (png.depth !== 8 || png.colorType !== 6 || png.interlace !== 0) {
         throw new Error(`unsupported PNG (depth ${png.depth}, color ${png.colorType})`);
@@ -128,12 +126,12 @@ function pngToRgba(buf) {
 
 // ---- ICO -------------------------------------------------------------------
 
-const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
+export const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
 // Below this a BMP/DIB entry is used; at or above it a PNG entry.
 const ICO_PNG_FROM = 256;
 
 /** 32-bit BGRA bottom-up DIB with a 1bpp AND mask, as an ICO image payload. */
-function dibEntry(png) {
+export function dibEntry(png) {
     const { width, height, data } = pngToRgba(png);
     const xorStride = width * 4;
     const maskStride = (((width + 31) >> 5) << 2); // 1bpp, rows padded to 4 bytes
@@ -167,7 +165,7 @@ function dibEntry(png) {
     return Buffer.concat([header, xor, mask]);
 }
 
-function buildIco(pngs) {
+export function buildIco(pngs) {
     const images = ICO_SIZES.map((size) => ({
         size,
         isPng: size >= ICO_PNG_FROM,
@@ -197,7 +195,7 @@ function buildIco(pngs) {
 // ---- ICNS ------------------------------------------------------------------
 
 // OSType -> pixel size of the PNG payload.
-const ICNS_CHUNKS = [
+export const ICNS_CHUNKS = [
     ['ic07', 128],   // 128x128
     ['ic08', 256],   // 256x256
     ['ic09', 512],   // 512x512
@@ -208,7 +206,7 @@ const ICNS_CHUNKS = [
     ['ic14', 512],   // 256x256@2x
 ];
 
-function buildIcns(pngs) {
+export function buildIcns(pngs) {
     const chunks = ICNS_CHUNKS.map(([type, size]) => {
         const payload = pngs.get(size);
         const head = Buffer.alloc(8);
@@ -225,7 +223,7 @@ function buildIcns(pngs) {
 
 // ---- read-back verification ------------------------------------------------
 
-function verifyIco(buf) {
+export function verifyIco(buf) {
     if (buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1) throw new Error('bad ICO header');
     const count = buf.readUInt16LE(4);
     console.log(`  ICO: ${count} entries, ${buf.length} bytes`);
@@ -250,7 +248,7 @@ function verifyIco(buf) {
     }
 }
 
-function verifyIcns(buf) {
+export function verifyIcns(buf) {
     if (buf.toString('ascii', 0, 4) !== 'icns') throw new Error('bad ICNS magic');
     const total = buf.readUInt32BE(4);
     if (total !== buf.length) throw new Error(`ICNS length ${total} != file size ${buf.length}`);
@@ -272,27 +270,52 @@ function verifyIcns(buf) {
 
 // ---- main ------------------------------------------------------------------
 
-const pngs = new Map();
-for (const size of SIZES) {
-    const png = renderPng(size);
-    pngs.set(size, png);
-    console.log(`rendered ${String(size).padStart(4)}px ${size < FLAT_BELOW ? '(flat)' : '(full)'} -> ${png.length} bytes`);
+/**
+ * Renders every size and writes the three containers.
+ *
+ * `options.repo` moves the whole read/write tree (the tests point it at a temp
+ * dir) and `options.Resvg` substitutes the rasterizer; with neither, this is
+ * exactly what `node dev/tools/brand/build-icons.mjs` does against the repo.
+ */
+export async function main(options = {}) {
+    const repo = options.repo || REPO;
+    const Resvg = options.Resvg || (await import('@resvg/resvg-js')).Resvg;
+
+    const master = resolve(repo, 'resources/brand/astrofin-icon.svg');
+    const masterFlat = resolve(repo, 'resources/brand/astrofin-icon-flat.svg');
+    const outIco = resolve(repo, 'resources/win/astrofin.ico');
+    const outIcns = resolve(repo, 'resources/macos/AppIcon.icns');
+    const outLinuxSvg = resolve(repo, 'resources/linux/io.github.thehalfrican.Astrofin.svg');
+
+    const svgs = { full: readFileSync(master), flat: readFileSync(masterFlat) };
+
+    const pngs = new Map();
+    for (const size of SIZES) {
+        const png = renderPng(Resvg, svgs, size);
+        pngs.set(size, png);
+        console.log(`rendered ${String(size).padStart(4)}px ${size < FLAT_BELOW ? '(flat)' : '(full)'} -> ${png.length} bytes`);
+    }
+
+    for (const p of [outIco, outIcns, outLinuxSvg]) mkdirSync(dirname(p), { recursive: true });
+
+    const ico = buildIco(pngs);
+    writeFileSync(outIco, ico);
+    const icns = buildIcns(pngs);
+    writeFileSync(outIcns, icns);
+    writeFileSync(outLinuxSvg, svgs.full);
+
+    console.log('\nverifying:');
+    verifyIco(readFileSync(outIco));
+    verifyIcns(readFileSync(outIcns));
+
+    // The Linux icon must also survive a resvg parse at the size the shell uses.
+    const linuxCheck = new Resvg(readFileSync(outLinuxSvg), { fitTo: { mode: 'width', value: 256 } }).render();
+    console.log(`  linux SVG: parses, renders ${linuxCheck.width}x${linuxCheck.height}`);
+
+    console.log('\nok');
+    return { ico: outIco, icns: outIcns, svg: outLinuxSvg };
 }
 
-for (const p of [OUT_ICO, OUT_ICNS, OUT_LINUX_SVG]) mkdirSync(dirname(p), { recursive: true });
-
-const ico = buildIco(pngs);
-writeFileSync(OUT_ICO, ico);
-const icns = buildIcns(pngs);
-writeFileSync(OUT_ICNS, icns);
-writeFileSync(OUT_LINUX_SVG, svgFull);
-
-console.log('\nverifying:');
-verifyIco(readFileSync(OUT_ICO));
-verifyIcns(readFileSync(OUT_ICNS));
-
-// The Linux icon must also survive a resvg parse at the size the shell uses.
-const linuxCheck = new Resvg(readFileSync(OUT_LINUX_SVG), { fitTo: { mode: 'width', value: 256 } }).render();
-console.log(`  linux SVG: parses, renders ${linuxCheck.width}x${linuxCheck.height}`);
-
-console.log('\nok');
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    await main();
+}
