@@ -87,13 +87,13 @@ test('a second result for the same url after settling is ignored', async () => {
     assert.doesNotThrow(() => result('http://a.example', false, ''));
 });
 
-test('a result while nothing is pending currently throws when the url is null', () => {
-    // Characterisation, not endorsement: `pendingUrl` starts as null, so a
-    // null-url result from native passes the `pendingUrl === url` guard and
-    // calls a null `pendingResolve`. Native only ever sends the url it was
-    // given, so this is unreachable today — see the phase-3 report.
+test('a result while nothing is pending is ignored, whatever url it carries', () => {
+    // `pendingUrl` starts as null, so a null-url result matches on the url
+    // alone; without an outstanding probe there is no resolver to call.
     const { result } = load();
-    assert.throws(() => result(null, true, 'http://x.example'), TypeError);
+    assert.doesNotThrow(() => result(null, true, 'http://x.example'));
+    assert.doesNotThrow(() => result(null, false, ''));
+    assert.doesNotThrow(() => result('http://a.example', true, 'http://a.example'));
 });
 
 test('abort cancels the native probe and rejects the outstanding promise', async () => {

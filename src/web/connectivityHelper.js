@@ -7,7 +7,9 @@ window.jmpCheckServerConnectivity = (() => {
     // Called by native code when result is ready
     window._onServerConnectivityResult = (url, success, resolvedUrl) => {
         console.debug('Connectivity result:', url, success, resolvedUrl);
-        if (pendingUrl === url) {
+        // `pendingUrl` starts as null, so a null-url result would match on its
+        // own and call a resolver that is not there yet.
+        if (pendingUrl === url && pendingResolve) {
             if (success) {
                 pendingResolve(resolvedUrl);
             } else {

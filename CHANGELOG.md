@@ -48,6 +48,46 @@ project uses semantic versioning.
   hosted `checks` workflow (rustfmt, deny, audit, JS tests, ratio floor).
   Baseline: zero vulnerabilities, one unmaintained transitive crate
   (ttf-parser via cosmic-text, Linux menu renderer only).
+- Frontend tests to one test per public function (docs/test-plan.md phase 3):
+  every `src/web/` module, plus the three `dev/tools/brand/*.mjs` scripts, has
+  a `node:test` suite beside it, sharing the fakes in `src/web/test/` (a fake
+  DOM, fake `playbackManager`/`Events`/`ApiClient`, a `jmpNative` recorder, and
+  a `loadModule()` that evaluates an injected script into a fresh window). 113
+  -> 605 JS cases at merge. The source changes are test hooks only: a guarded
+  `module.exports` shim per module, `resolveLanguage()` split out of
+  `overlay.lang.js` unchanged, and the brand scripts' top-level work moved
+  behind an entry-point guard so importing them is side-effect free.
+- E2E smoke suite (docs/e2e.md, docs/test-plan.md phase 4): `just e2e`
+  (`node dev/e2e/run.mjs`) drives the staged `build/` tree over the Chrome
+  DevTools Protocol against a `node:http` mock of the Jellyfin server, which
+  also serves a pinned jellyfin-web 10.11.11 and a clip encoded by the
+  submodule mpv. Ten tests in six scenarios, about 20 s: launch and
+  `--version`; connect -> sign in -> Home with no page errors and no
+  unmodelled requests; play -> pause -> seek -> stop, asserted from mpv's own
+  pushes and the `/Sessions` reports; a `settings.json` round-trip read back by
+  a second process; second-instance forwarding; and a clean quit with zero
+  `ERROR` log lines. Every launch is muted (`ao=null` in a throwaway profile;
+  `E2E_AUDIO=1` opts back in) and takes the desktop, so
+  `.gitea/workflows/e2e-windows.yml` is `workflow_dispatch`-only.
+- Platform glue brought under test (docs/test-plan.md phase 5): the pure logic
+  behind 24 exempt files moved into sibling `*_logic.rs` modules, or private
+  helpers where there was less of it, without changing behaviour. What came
+  out, across `windows`, `windows_sink`, `x11`, `wayland`, `macos`,
+  `macos_sink`, `jfn_cef`, `gpu_paint` and `xtask`: WPARAM and LPARAM decoding,
+  modifier tables, rect and DPI maths, WndProc and event routing, cursor and
+  keysym tables, Chromium switch construction, popup replay and resize
+  coalescing, X11 framing and geometry, Wayland scroll and repeat arithmetic,
+  NSEvent tables, SMTC and now-playing projections, and release/CEF/libmpv
+  naming. Those files left `dev/test-exempt.txt` (136 -> 112), which now holds
+  only glue that needs a display server, a GPU, a live CEF/mpv process, a
+  session bus or a real syscall, with a reason on each line. Ratio 2485 tests /
+  1116 public functions = 2.23; floor 1.50 -> 2.20.
+- `build-linux-appimage.yml` and `build-macos.yml` run clippy and `cargo test`
+  once their dependencies are in place: on Linux inside the same
+  `astrofin-appimage:base` container that builds the workspace, on macOS
+  natively against the meson libmpv and the unpacked CEF. The Linux- and
+  macOS-only test modules are now compiled and run by CI, not only by the
+  Gitea Windows runner.
 
 ### Fixed
 - The workspace test suite now passes on the GitHub macOS and Linux CI
@@ -68,6 +108,11 @@ project uses semantic versioning.
   resolve to their table or bare language instead of English; the
   resolver folds `_` to `-` on both sides, which also makes jellyfin-web's
   four underscored tables (bn_BD, es_419, es_DO, ur_PK) reachable.
+- The "Reset Saved Server" button in client settings is `type="button"`,
+  so it no longer submits the settings form it sits in.
+- A connectivity result that arrives while no probe is pending is ignored;
+  before, a null-url result matched the null initial state and called a
+  resolver that did not exist.
 
 ## [0.4.0] - 2026-09-09
 

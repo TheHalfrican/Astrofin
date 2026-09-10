@@ -290,6 +290,12 @@ test('the mpv config and reset buttons appear only with a saved server', () => {
         []);
 });
 
+test('neither settings button submits the form it sits in', () => {
+    const ctx = load();
+    const buttons = renderForm(ctx).querySelectorAll('button.emby-button');
+    assert.deepStrictEqual(buttons.map((b) => b.type), ['button', 'button']);
+});
+
 test('the mpv config button asks native to open the config directory', () => {
     const ctx = load();
     const form = renderForm(ctx);

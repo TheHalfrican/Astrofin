@@ -345,6 +345,8 @@
             const btn = document.createElement('button');
             btn.className = 'raised button-cancel block emby-button';
             btn.textContent = 'Reset Saved Server';
+            // Without this it is a submit button inside the settings form.
+            btn.type = 'button';
             btn.addEventListener('click', () => {
                 jmpInfo.settings.main.userWebClient = '';
                 if (window.jmpNative && window.jmpNative.saveServerUrl) {
