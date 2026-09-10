@@ -56,6 +56,15 @@ test: build
 test-js:
     node --test "src/web/*.test.js" "dev/tools/brand/*.test.mjs"
 
+# End-to-end smoke suite: drives the staged build/ tree against a mock Jellyfin
+# server over the Chrome DevTools Protocol (docs/e2e.md). Needs a desktop
+# session — it opens a real window — and depends on `build` for the tree it
+# launches. Set E2E_AUDIO=1 to hear the fixture clip; it is muted otherwise.
+# Forwards args, e.g. `just e2e --only playback`.
+[group('test')]
+e2e *args: build
+    node dev/e2e/run.mjs {{args}}
+
 # Tests per public function, per crate and in total (docs/test-plan.md §2)
 [group('test')]
 test-ratio *args:

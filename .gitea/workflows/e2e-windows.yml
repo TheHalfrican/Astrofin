@@ -1,0 +1,136 @@
+# End-to-end smoke suite (docs/e2e.md), on the self-hosted act_runner.
+#
+# MANUAL ONLY, deliberately. The runner was checked and does have a desktop:
+# act_runner runs from the "Gitea Act Runner" scheduled task as NoahM with
+# LogonType Interactive, in the same session as explorer.exe, so the app's
+# window and GPU context come up exactly as they do for a developer run.
+# What is missing is isolation, not capability:
+#
+#   * the suite opens a real Astrofin window on whatever desktop that session
+#     owns and takes focus for ~20 s per launch, so a push-triggered run would
+#     hijack the developer's screen mid-keystroke;
+#   * only one app instance may exist per machine at a time, so a CI run that
+#     overlaps a developer's `just run` breaks both;
+#   * the desktop only exists while that session is logged in, so an unattended
+#     push after a reboot would fail for a reason unrelated to the change.
+#
+# Run it from the Gitea UI, or:
+#   gh workflow run e2e-windows.yml -R TheHalfrican/Astrofin --ref <branch>
+# Re-evaluate the trigger if the runner ever moves to a dedicated machine or a
+# headless GPU session.
+name: e2e-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Run only scenario files whose name contains this substring'
+        required: false
+        default: ''
+
+concurrency:
+  # Never two app instances on the one runner, whichever workflow started them.
+  group: astrofin-app-instance
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    env:
+      RUNNER_CACHE_ROOT: C:\Users\NoahM\act_runner\cache\astrofin
+      # Same MAX_PATH workaround as build-windows.yml: cef-dll-sys' bundled
+      # CMake build writes object paths ~198 characters below the repo root.
+      SHORT_WORKSPACE: C:\astrofin-ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Link persistent caches and shorten the workspace path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:RUNNER_CACHE_ROOT
+          $mpvSha = (git -C third_party/mpv rev-parse HEAD).Trim()
+          $links = @(
+            @{ link = '.cache';                   target = "$root\cache" },
+            @{ link = 'build';                    target = "$root\build" },
+            @{ link = 'third_party\mpv-install';  target = "$root\mpv-install-$mpvSha" }
+          )
+          function Remove-LinkOrDir([string]$path) {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            if (-not $item) { return }
+            if ($item.LinkType) { [IO.Directory]::Delete($path, $false) }
+            else { Remove-Item -LiteralPath $path -Recurse -Force }
+          }
+          foreach ($l in $links) {
+            New-Item -ItemType Directory -Force $l.target | Out-Null
+            Remove-LinkOrDir (Join-Path (Get-Location).Path $l.link)
+            New-Item -ItemType Junction -Path $l.link -Target $l.target | Out-Null
+            "linked $($l.link) -> $($l.target)"
+          }
+          Remove-LinkOrDir $env:SHORT_WORKSPACE
+          New-Item -ItemType Junction -Path $env:SHORT_WORKSPACE -Target (Get-Location).Path | Out-Null
+
+      - name: Build libmpv (skipped when the cache for this submodule commit exists)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          pwsh -ExecutionPolicy Bypass -File dev\windows\build_mpv_source.ps1 -Arch x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Fetch CEF (cached)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          cargo xtask fetch-cef
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage the runnable build/ tree
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+          pwsh -ExecutionPolicy Bypass -File dev\windows\build.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Separate from the run so a missing jellyfin-web download or a missing
+      # mpv CLI reads as a setup failure, not a scenario failure. Both land in
+      # the junctioned .cache, so only the first run on a cold cache pays.
+      - name: E2E setup (pinned jellyfin-web + media fixture)
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          node --version
+          node dev\e2e\run.mjs --setup-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: E2E scenarios
+        shell: pwsh
+        run: |
+          Set-Location $env:SHORT_WORKSPACE
+          $only = '${{ gitea.event.inputs.only }}'
+          if ($only) { node dev\e2e\run.mjs --only $only } else { node dev\e2e\run.mjs }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # A failed scenario is usually explained by the app's own run log, but the
+      # harness deletes each throwaway profile on teardown. Nothing to collect
+      # here yet; keep the step as the place to add it if that changes.
+      - name: Leave no app instance behind
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process astrofin -ErrorAction SilentlyContinue | ForEach-Object {
+            "killing leftover astrofin pid $($_.Id)"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Drop the short workspace junction
+        if: always()
+        shell: pwsh
+        run: |
+          $item = Get-Item -LiteralPath $env:SHORT_WORKSPACE -Force -ErrorAction SilentlyContinue
+          if ($item -and $item.LinkType) { [IO.Directory]::Delete($env:SHORT_WORKSPACE, $false) }
