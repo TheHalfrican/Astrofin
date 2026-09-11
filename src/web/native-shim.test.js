@@ -15,7 +15,8 @@
 //     `playerLoad`, thousandths for the rate;
 //   * the `_native*` callbacks the Rust side invokes turned back into
 //     Qt-style signals;
-//   * the document listeners: fullscreen, Escape, double-click, and the
+//   * the document listeners: fullscreen, Escape, the absence of a mousedown
+//     fullscreen toggle (the platform delivers dblclick now, adf6a92), and the
 //     DOMContentLoaded stylesheet and theme-colour sync.
 //
 // The placeholders are substituted exactly as `render_injected_scripts` does
@@ -591,7 +592,12 @@ test('escape leaves fullscreen, and does nothing when there is none to leave', (
     assert.equal(ctx.native.callsTo('toggleFullscreen').length, 1);
 });
 
-// Wayland gives no click count, so the shim counts the clicks itself.
+// Double-clicking the video toggles fullscreen through jellyfin-web's own
+// dblclick handler now that every platform delivers a real DOM dblclick (the
+// native side recovers the click count, adf6a92). The shim used to ALSO run a
+// mousedown-pair detector that called toggleFullscreen itself, so a single
+// double-click toggled twice and cancelled out (the live bug: fullscreen=true
+// then =false). The guard below is that the shim contributes no such path.
 function mousedown(ctx, at, extra = {}) {
     ctx.win.Date = { now: () => at };
     const target = extra.target || ctx.pageEl;
@@ -600,64 +606,30 @@ function mousedown(ctx, at, extra = {}) {
     }, extra));
 }
 
-function withPage(opts) {
+function withVideoPage(opts) {
     const ctx = setup(opts);
     ctx.pageEl = ctx.doc.createElement('div');
     ctx.pageEl.classList.add('mainAnimatedPage');
     ctx.doc.body.appendChild(ctx.pageEl);
-    ctx.showVideo = () => {
-        const dlg = ctx.doc.createElement('div');
-        dlg.classList.add('videoPlayerContainer');
-        ctx.doc.body.appendChild(dlg);
-    };
+    const dlg = ctx.doc.createElement('div');
+    dlg.classList.add('videoPlayerContainer');
+    ctx.doc.body.appendChild(dlg);
     return ctx;
 }
 
-test('a double click on the page toggles fullscreen while a video is up', () => {
-    const ctx = withPage();
-    ctx.showVideo();
+test('the shim installs no mousedown fullscreen toggle — the platform delivers dblclick', () => {
+    const ctx = setup();
+    assert.ok(!ctx.doc.listeners.some((l) => l.type === 'mousedown'),
+        'a mousedown listener here would double-toggle against the native dblclick');
+});
+
+test('a fast mousedown pair over a playing video toggles nothing from the shim', () => {
+    // The old detector fired here; jellyfin-web's dblclick owns the toggle now.
+    const ctx = withVideoPage();
     mousedown(ctx, 1000);
     mousedown(ctx, 1200);
-    assert.equal(ctx.native.callsTo('toggleFullscreen').length, 1);
-});
-
-test('a double click with no video playing does nothing', () => {
-    const ctx = withPage();
-    mousedown(ctx, 1000);
-    mousedown(ctx, 1200);
-    assert.deepEqual(ctx.native.callsTo('toggleFullscreen'), []);
-});
-
-test('two slow clicks, or two clicks apart, are not a double click', () => {
-    const ctx = withPage();
-    ctx.showVideo();
-    mousedown(ctx, 1000);
-    mousedown(ctx, 1600); // 600 ms later
-    assert.deepEqual(ctx.native.callsTo('toggleFullscreen'), []);
-    mousedown(ctx, 1700, { clientX: 140 }); // moved 40 px
-    assert.deepEqual(ctx.native.callsTo('toggleFullscreen'), []);
-});
-
-test('a third click does not toggle again on its own', () => {
-    const ctx = withPage();
-    ctx.showVideo();
-    mousedown(ctx, 1000);
-    mousedown(ctx, 1100);
-    mousedown(ctx, 1200);
-    assert.equal(ctx.native.callsTo('toggleFullscreen').length, 1, 'the counter restarts');
-});
-
-test('clicks on the header or with another button are left to jellyfin-web', () => {
-    const ctx = withPage();
-    ctx.showVideo();
-    const header = ctx.doc.createElement('div');
-    header.classList.add('skinHeader');
-    ctx.doc.body.appendChild(header);
-    mousedown(ctx, 1000, { target: header });
-    mousedown(ctx, 1100, { target: header });
-    mousedown(ctx, 1200, { button: 2 });
-    mousedown(ctx, 1250, { button: 2 });
-    assert.deepEqual(ctx.native.callsTo('toggleFullscreen'), []);
+    assert.deepEqual(ctx.native.callsTo('toggleFullscreen'), [],
+        'our code adds no second toggle on top of the platform dblclick');
 });
 
 // ---- DOMContentLoaded -----------------------------------------------------

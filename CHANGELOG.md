@@ -208,6 +208,13 @@ project uses semantic versioning.
   now recovers the count from the press stream on Windows, X11 and Wayland
   (Chromium's own thresholds: under 500 ms, within 4 px, same button, up to
   three) and macOS passes the `NSEvent` click count through, clamped.
+- Double-clicking the video no longer toggles fullscreen twice and cancels
+  itself. Once the dispatcher above started delivering a real `dblclick`,
+  jellyfin-web's own handler toggled fullscreen — and the shim's leftover
+  mousedown-pair detector toggled it again on the same gesture, so the log
+  showed `fullscreen=true` then `fullscreen=false` on every double-click. The
+  JS detector is removed; the platform-delivered `dblclick` is now the one
+  path.
 - X11 glue hardened (docs/test-plan.md §6): the SHM allocator rejects a
   non-positive or overflowing extent itself instead of relying on checks two
   modules away; the mpv-proxy no-op rewrite no longer indexes past an empty

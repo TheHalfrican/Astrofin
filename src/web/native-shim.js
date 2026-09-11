@@ -22,29 +22,11 @@
         }
     });
 
-    // Double-click on video area toggles fullscreen.
-    // Detected in JS because Wayland doesn't provide click count natively.
-    (function() {
-        let lastTime = 0, lastX = 0, lastY = 0;
-        document.addEventListener('mousedown', (e) => {
-            // left button only and only if clicked on main content (not header,
-            // or controls)
-            if (e.button !== 0 || !e.target.classList.contains("mainAnimatedPage")) return;
-            const now = Date.now();
-            const dx = e.clientX - lastX;
-            const dy = e.clientY - lastY;
-            if ((now - lastTime) < 500 && (dx * dx + dy * dy) < 25) {
-                if (document.querySelector('.videoPlayerContainer')) {
-                    if (window.jmpNative) window.jmpNative.toggleFullscreen();
-                }
-                lastTime = 0;
-            } else {
-                lastTime = now;
-                lastX = e.clientX;
-                lastY = e.clientY;
-            }
-        }, true);  // capture phase — before jellyfin-web can stopPropagation
-    })();
+    // Double-click on the video toggles fullscreen via jellyfin-web's own
+    // dblclick handler. Every platform now delivers a real DOM dblclick (the
+    // native side recovers the click count, adf6a92), so the old JS mousedown-
+    // pair detector is gone — it double-toggled once Chromium synthesised its
+    // own dblclick alongside it.
 
     // Buffered ranges storage (updated by native code)
     window._bufferedRanges = [];
