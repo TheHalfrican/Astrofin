@@ -180,6 +180,27 @@ project uses semantic versioning.
   opaque over the art; those are made transparent under the gate.
 
 ### Fixed
+- Dropdowns open again on Windows. Every `<select>` in the app — the Settings
+  panels, and jellyfin-web's own preference pages — highlighted its capsule
+  and then showed nothing, because Windows asked CEF to composite Chromium's
+  own off-screen popup and Chromium tears that popup widget down in the same
+  UI-thread turn it opens it (`OnPopupShow(true)`, `OnPopupSize`,
+  `OnPopupShow(false)`, with nothing of ours in between). Windows now draws
+  dropdowns in the page with `select-menu.js`, which is what X11 already did,
+  so the list is a real menu the page owns.
+- The in-page dropdown wears the Astrofin palette instead of a grey system
+  box: the panel surface, a hairline border, the panel radius and a cyan
+  hover, with a literal fallback behind every token so it stays readable in a
+  page the theme sheet was not injected into.
+- The chevron on a Settings dropdown sits on the capsule's centre line.
+  jellyfin-web's `.selectArrow` carries a `margin-top: 1.2em` meant for a
+  label-above-select row; on our pill that pushed the glyph 12px below centre.
+- A hovered or keyboard-focused row in the user Settings menu (Profile /
+  Display / Home / Playback / Client Settings) no longer paints a
+  square-cornered block across the rounded row. jellyfin-web builds the row as
+  a link wrapping a `.listItem`, so the pill shape was on the link and the
+  fill on the child; the fill now inherits the row's radius, and keyboard
+  focus gets the token focus ring, which the row had nothing of before.
 - The detail-page backdrop art reads clearly instead of sitting back behind
   the starfield: the blur drops from 6px to 3px and the art's brightness,
   saturation and the right-edge scrim are lifted. The scrim over the blurb

@@ -1346,6 +1346,81 @@ Three things only the running app could say:
    working, not a bug. The code stays: nothing else in the page knows the CEF
    version, and a user-agent change would light it.
 
+### Three defects found in the live page (2026-09-11)
+
+The first live pass drove the controls over CDP, which sets `selectedIndex`
+programmatically and so never opened a dropdown at all. Driving them with real
+pointer events found three things.
+
+**1. The dropdowns did not open — and not because of anything on this page.**
+Clicking a `<select>` lit the capsule's focus ring and produced no list, in the
+Settings panels *and* on jellyfin-web's own preference pages, so it was never a
+theme bug. The cause is in the platform layer: `src/windows/src/lib.rs` asked
+for `MenuDelivery::Composited` for `MenuKind::Dropdown`, which means Chromium's
+own off-screen popup widget is painted into a nested DirectComposition visual
+(`PET_POPUP` -> `WinOsrPopup::present`). Chromium tears that widget down in the
+same UI-thread turn it opens it. With a debug line on every step of the
+handshake it reads, every time:
+
+```
+on_popup_show show=true
+on_popup_size x=834 y=289 w=280 h=123
+try_show_popup show x=834 y=289 w=280 h=123
+on_popup_show show=false
+```
+
+Measured with a synthetic `Input.dispatchMouseEvent` press, a real DPI-aware
+`SetCursorPos` + `mouse_event` press with no debugger attached, and an
+`Alt+ArrowDown` with no mouse involved; with shared textures on and with
+`--disable-gpu-compositing`; and with and without the `getPopupOptions`
+renderer round trip. Nothing of ours runs in between — `WasResized`,
+`NotifyScreenInfoChanged`, `Invalidate`, `SetWindowlessFrameRate`, `WasHidden`
+and `SendExternalBeginFrame` were each logged while a popup was open and none
+of them fired — and the page itself sees no scroll, resize, blur, focus change
+or mutation across the open. A popup destroyed before it paints can never be
+composited, so the list was never on screen.
+
+The fix is delivery, not drawing: Windows now uses `MenuDelivery::Page`, which
+injects `select-menu.js` — the same in-page menu X11 has always used. It
+`preventDefault`s the mousedown, so Chromium's popup is never asked for, and it
+commits by writing `selectedIndex` and firing `input`/`change`, which is the
+path `client-settings.js` already listens on. `MenuDelivery::Composited` is now
+unused by every platform.
+
+`select-menu.js`'s menu lives in a **closed** shadow root, so its stylesheet is
+a string inside the module and no page CSS can reach it. It now reads the
+`--af-*` tokens (custom properties inherit through the shadow boundary) with a
+literal fallback on every one, so it stays legible in a layer the theme sheet
+was not injected into. `src/web/select-menu.test.js` pins both halves of that,
+plus that every token it names exists in `astrofin-tokens.css`.
+
+**2. The chevron sat 12px below the capsule's centre line.** Stock is
+`.selectArrow{font-size:1.7em;margin-top:1.2em}` — that margin is how the stock
+control drops the glyph to the baseline of a label-above-select row.
+`.material-icons` is `inline-block`, so the margin really does grow the arrow
+container's line box: centring the *container* (`top:50%` +
+`translateY(-50%)`) still left the glyph half the margin low. Section (p) now
+resets `margin:0` on `.selectArrow` (with `display:block; line-height:1`).
+Verified at both 1280x698 and 1920x1080: arrow mid-line minus select mid-line
+is 0.00 px, and was 12.00 px before.
+
+**3. The user Settings menu's row highlight was a rectangle on a capsule.**
+Not this screen, but the page above it (`#/mypreferencesmenu`). jf-web 10.11.11
+builds each row as `a.emby-button.listItem-border > div.listItem` with the
+anchor zeroed to `margin:0;padding:0` inline — so section (f)'s "plain buttons
+are glass pills" rule rounds the **anchor** (999px, measured live) while
+section (b)'s `.listItem:hover` fill lands on the **inner div**, flat. Section
+(b) now gives `.listItem-border > .listItem:hover|:focus` `border-radius:
+inherit`, which tracks whatever radius the row ended up with and stays `0` on a
+`.listItem-border` that is not a button. Keyboard focus drew *nothing* at all
+before — stock `.emby-button{outline:none!important}` kills the browser ring
+and jf-web puts nothing in its place on the pointer path — so
+`.listItem-border:focus-visible` now carries `--af-focus-ring`, which follows
+the pill's radius because it is a box-shadow. The detail page's episode rows
+are not `.listItem-border > .listItem` (checked live: zero matches on a season
+page) and their own `html.af-detail` rules out-specify this anyway, so they
+keep the transparent fill and the 14px radius.
+
 ## Testing
 
 ### Static

@@ -153,6 +153,26 @@ html.af-backdrop .backdropContainer {
 .listItem:focus {
   background: var(--af-surface-raised);
 }
+/* The fill has to take the row's own shape. jf-web 10.11.11 builds a
+ * preferences-menu row (Profile / Display / Home / Playback / Client
+ * Settings) as `a.emby-button.listItem-border > div.listItem` with the anchor
+ * zeroed to `margin:0;padding:0` inline, so section (f)'s glass-pill rule
+ * rounds the <a> while the fill above lands on the inner div — flat, it
+ * painted a rectangle across the pill's corners. `inherit` tracks whatever
+ * radius the row itself ended up with, including the stock `0` on a
+ * `.listItem-border` that is not a button. */
+.listItem-border > .listItem:hover,
+.listItem-border > .listItem:focus {
+  border-radius: inherit;
+}
+/* Stock kills the browser's own ring (`.emby-button{outline:none!important}`)
+ * and puts nothing in its place, so a keyboard-focused row had no mark at all
+ * on the pointer path. The token ring is a box-shadow, so it follows the
+ * pill's radius without being told it. */
+.listItem-border:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+}
 .listItem-border {
   border-color: var(--af-hairline) !important;
 }
@@ -3799,8 +3819,16 @@ html.af-settings .af-set-row-control .selectArrowContainer {
   pointer-events: none;
   color: var(--af-text-muted);
 }
+/* Stock is `.selectArrow{font-size:1.7em;margin-top:1.2em}` — the margin is
+ * the stock control's own way of dropping the glyph to the baseline of a
+ * label-above-select row. `.material-icons` is inline-block, so that margin
+ * does grow the container's line box: centring the container still left the
+ * glyph 1.2em (24px at our size) below the capsule's middle. */
 html.af-settings .af-set-row-control .selectArrow {
+  display: block;
+  margin: 0;
   font-size: 20px;
+  line-height: 1;
 }
 
 html.af-settings .af-set-card .emby-input,

@@ -194,10 +194,22 @@ impl Platform for WindowsPlatform {
         render::restack(ordered);
     }
 
+    /// Dropdowns are drawn **in the page** (`select-menu.js`), the way X11
+    /// draws them, rather than as CEF's own composited OSR popup. Measured on
+    /// 2026-09-11 with a debug line on every step of the handshake: Chromium
+    /// tears the OSR popup widget down in the same UI-thread turn it opens it
+    /// (`OnPopupShow(true)`, `OnPopupSize`, `OnPopupShow(false)`) for a
+    /// synthetic press, a real `SetCursorPos` + `mouse_event` press and an
+    /// `Alt+ArrowDown`, with and without shared textures and with and without
+    /// a debugger attached — and with nothing of ours in between: every
+    /// browser-host call that can cancel a page popup was logged and never
+    /// fired, and the page saw no scroll, resize, blur or mutation. A
+    /// composited popup can therefore never be painted, which is why the
+    /// dropdowns did not open at all.
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&menu::WinMenuHost),
-            MenuKind::Dropdown => MenuDelivery::Composited,
+            MenuKind::Dropdown => MenuDelivery::Page,
         }
     }
 

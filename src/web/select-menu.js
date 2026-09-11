@@ -19,19 +19,30 @@
         host.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:2147483647';
         var shadow = host.attachShadow({mode: 'closed'});
 
+        // Custom properties inherit through a shadow boundary, so the menu
+        // wears the Astrofin palette wherever the theme stylesheet is
+        // installed; every value carries the literal it resolves to so the
+        // menu is still legible without it.
         var style = document.createElement('style');
         style.textContent =
             '*{margin:0;padding:0;box-sizing:border-box;user-select:none}' +
             '.bg{position:fixed;left:0;top:0;width:100vw;height:100vh}' +
-            '.m{position:fixed;background:#2b2b2b;border:1px solid #555;' +
-              'border-radius:4px;padding:4px 0;overflow-y:auto;' +
-              'font:13px/1.4 sans-serif;color:#e0e0e0;' +
-              'box-shadow:0 2px 8px rgba(0,0,0,.4);outline:none}' +
-            '.i{padding:5px 24px 5px 12px;cursor:default;white-space:nowrap}' +
-            '.i:hover,.i.a{background:#3d3d3d}' +
+            '.m{position:fixed;background:var(--af-surface-raised,#161C33);' +
+              'border:1px solid var(--af-edge-strong,rgba(159,180,255,.28));' +
+              'border-radius:var(--af-radius-md,14px);padding:6px;overflow-y:auto;' +
+              'font:400 14px/1.45 var(--af-font-body,system-ui,-apple-system,' +
+                '"Segoe UI",Roboto,sans-serif);' +
+              'color:var(--af-text-primary,#EAF0FF);' +
+              'box-shadow:0 18px 48px rgba(0,0,0,.55);outline:none}' +
+            '.i{padding:8px 28px 8px 12px;border-radius:var(--af-radius-sm,8px);' +
+              'cursor:default;white-space:nowrap}' +
+            '.i:hover,.i.a{background:rgba(var(--af-accent-primary-rgb,111,227,255),.14);' +
+              'color:var(--af-accent-primary,#6FE3FF)}' +
             '.i.sel{font-weight:600}' +
-            '.i.off{color:#666;pointer-events:none}' +
-            '.g{padding:5px 12px 2px;color:#9a9a9a;font-weight:600;cursor:default;white-space:nowrap}';
+            '.i.off{color:var(--af-text-muted,#9AA6C8);opacity:.5;pointer-events:none}' +
+            '.g{padding:8px 12px 4px;color:var(--af-text-muted,#9AA6C8);font-weight:600;' +
+              'font-size:12px;letter-spacing:.08em;text-transform:uppercase;' +
+              'cursor:default;white-space:nowrap}';
         shadow.appendChild(style);
 
         var bg = document.createElement('div');

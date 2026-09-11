@@ -378,3 +378,51 @@ test('a menu that would overflow the right edge is pulled back', () => {
     ctx.win.timers.advance(20);
     assert.strictEqual(menu.style.left, '1076px', '1280 - 200 - 4');
 });
+
+// ---- the menu's own skin ---------------------------------------------------
+//
+// The menu lives in a *closed* shadow root, so its stylesheet is a string
+// inside the module and nothing else can reach it. Custom properties inherit
+// through the shadow boundary, which is how it wears the Astrofin palette; a
+// literal fallback on every one is what keeps it readable in a page that has
+// no theme (the E2E mock server, and any layer the stylesheet is not injected
+// into).
+
+function menuCss(ctx) {
+    return shadow(ctx).querySelector('style').textContent;
+}
+
+test('the menu is drawn from the Astrofin tokens, not the old grey box', () => {
+    const ctx = load();
+    ctx.api.openMenu(addSelect(ctx));
+    const css = menuCss(ctx);
+    for (const token of ['--af-surface-raised', '--af-edge-strong', '--af-text-primary',
+        '--af-text-muted', '--af-accent-primary', '--af-radius-md', '--af-radius-sm']) {
+        assert.ok(css.includes(token), `stylesheet should use ${token}`);
+    }
+    for (const grey of ['#2b2b2b', '#3d3d3d', '#e0e0e0', '#9a9a9a', '#555', '#666']) {
+        assert.ok(!css.includes(grey), `stylesheet should not hard-code ${grey}`);
+    }
+});
+
+test('every token the menu names carries a literal fallback', () => {
+    const ctx = load();
+    ctx.api.openMenu(addSelect(ctx));
+    const css = menuCss(ctx);
+    const named = [...css.matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)];
+    assert.ok(named.length > 0, 'the stylesheet should reference custom properties');
+    for (const [, name, next] of named) {
+        assert.strictEqual(next, ',', `var(${name}) must carry a fallback`);
+    }
+});
+
+test('every token the menu names is one the tokens sheet defines', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const tokens = fs.readFileSync(path.join(__dirname, 'astrofin-tokens.css'), 'utf8');
+    const ctx = load();
+    ctx.api.openMenu(addSelect(ctx));
+    for (const [, name] of menuCss(ctx).matchAll(/var\(\s*(--[\w-]+)/g)) {
+        assert.ok(tokens.includes(name + ':'), `${name} is not defined in astrofin-tokens.css`);
+    }
+});
