@@ -72,6 +72,22 @@ project uses semantic versioning.
   a two-sided handshake no longer needs both sides to re-publish.
 
 ### Added
+- The Astrofin Settings page (design canvas screen 7): the stock jellyfin-web
+  form becomes a six-section rail (Server / Playback / Video mode / Audio /
+  Advanced / About) with one glass panel visible at a time. Video mode is the
+  headline — a four-state segmented switch (Auto / Live-Action / Animation /
+  Off) over the real `<select>`, which stays the source of truth so every
+  write still goes through `window.api.settings.setValue` — with the
+  now-playing resolve card showing what Auto resolved to and which rule won
+  while a title is loaded. Each control is tagged LIVE or RESTART and the
+  restart-only changes are counted into a floating "Restart to apply N
+  changes" pill instead of one banner; Device Name moves to Server beside the
+  read-only saved address, and "Reset Saved Server" is reframed as "Sign out
+  of this server" (same behaviour). New `src/web/astrofin-settings.js` and
+  section (p) of `astrofin-theme.css`, both gated on `html.af-settings`;
+  `client-settings.js` stamps the `data-af-setting`/`data-af-section`/
+  `data-af-applies` hooks the theme addresses the page through. Docs:
+  `docs/design/theme-injection.md` "Settings".
 - The movie, series and season poster returns to the top-right of the detail
   page in the single-column layout (under 1600px, the 4K-at-300% case), where
   the blurb caps on the left and the space was empty; dropped to sit centred

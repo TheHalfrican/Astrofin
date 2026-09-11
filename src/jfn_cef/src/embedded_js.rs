@@ -15,6 +15,7 @@ pub fn get(name: &str) -> Option<&'static str> {
         "csd.js" => include_str!("../../web/csd.js"),
         "select-menu.js" => include_str!("../../web/select-menu.js"),
         "astrofin-theme.js" => include_str!("../../web/astrofin-theme.js"),
+        "astrofin-settings.js" => include_str!("../../web/astrofin-settings.js"),
         _ => return None,
     })
 }
@@ -42,6 +43,7 @@ mod tests {
         "csd.js",
         "select-menu.js",
         "astrofin-theme.js",
+        "astrofin-settings.js",
     ];
 
     #[test]
@@ -72,6 +74,7 @@ mod tests {
             S::Csd,
             S::SelectMenu,
             S::AstrofinTheme,
+            S::AstrofinSettings,
         ];
         assert_eq!(all.len(), NAMES.len());
         for script in all {

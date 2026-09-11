@@ -280,7 +280,7 @@ test('the mpv config and reset buttons appear only with a saved server', () => {
     const form = renderForm(ctx);
     const buttons = form.querySelectorAll('button.emby-button');
     assert.deepStrictEqual(buttons.map((b) => b.textContent),
-        ['Open mpv config directory', 'Reset Saved Server']);
+        ['Open mpv config directory', 'Sign out of this server']);
 
     const jmpInfo = makeJmpInfo();
     jmpInfo.settings.main.userWebClient = '';
@@ -311,7 +311,7 @@ test('the mpv config button is inert when native is missing', () => {
     assert.doesNotThrow(() => fire(form.querySelectorAll('button.emby-button')[0], 'click'));
 });
 
-test('resetting the server clears it locally, natively, and reloads', () => {
+test('signing out of the server clears it locally, natively, and reloads', () => {
     const ctx = load();
     const form = renderForm(ctx);
     const btn = form.querySelectorAll('button.emby-button')[1];
@@ -319,6 +319,118 @@ test('resetting the server clears it locally, natively, and reloads', () => {
     assert.strictEqual(ctx.jmpInfo.settings.main.userWebClient, '');
     assert.deepStrictEqual(ctx.win.jmpNative.lastCall('saveServerUrl'), ['']);
     assert.strictEqual(ctx.win.location.reloads, 1);
+});
+
+// ---- the Astrofin hooks ---------------------------------------------------
+//
+// astrofin-settings.js and section (p) of astrofin-theme.css address this page
+// through `data-af-*` attributes rather than through the generated control ids
+// (`embyselect0`), which carry no meaning. The attributes are therefore part of
+// this module's contract, not decoration.
+
+test('every control container is stamped with its key, section and apply mode', () => {
+    const ctx = load();
+    const form = renderForm(ctx);
+    const containers = form.querySelectorAll('[data-af-setting]');
+    assert.deepStrictEqual(
+        containers.map((c) => [
+            c.getAttribute('data-af-setting'),
+            c.getAttribute('data-af-section'),
+            c.getAttribute('data-af-applies')
+        ]),
+        [
+            ['fullscreen', 'main', 'restart'],   // checkbox
+            ['title', 'main', 'restart'],        // text
+            ['hwdec', 'video', 'restart'],       // select
+            ['codecs', 'video', 'restart']       // codecList
+        ]);
+});
+
+test('only videoMode is tagged as applying live', () => {
+    const jmpInfo = makeJmpInfo();
+    jmpInfo.settingsDescriptions.video.push({
+        key: 'videoMode', displayName: 'Video mode', options: ['auto', 'off']
+    });
+    const ctx = load({ jmpInfo });
+    const form = renderForm(ctx);
+    const live = form.querySelectorAll('[data-af-applies="live"]');
+    assert.deepStrictEqual(live.map((c) => c.getAttribute('data-af-setting')), ['videoMode']);
+});
+
+test('every group carries its section, including the two synthetic ones', () => {
+    const ctx = load();
+    const form = renderForm(ctx);
+    assert.deepStrictEqual(
+        form.querySelectorAll('.verticalSection').map((g) => g.getAttribute('data-af-section')),
+        ['main', 'video', 'mpv', 'server']);
+});
+
+test('the two buttons are addressable by action and the banner by data-af-notice', () => {
+    const ctx = load();
+    const form = renderForm(ctx);
+    assert.ok(form.querySelector('[data-af-action="open-config-dir"]'));
+    assert.ok(form.querySelector('[data-af-action="reset-server"]'));
+    assert.strictEqual(form.querySelector('[data-af-notice]'), form.children[0]);
+});
+
+test('opening the page sets the gate class and announces the page', () => {
+    const ctx = load();
+    buildAppShell(ctx.doc);
+    const seen = [];
+    ctx.doc.addEventListener('af-settings-show', (e) => seen.push(e));
+    ctx.api.showSettingsPage();
+
+    assert.ok(ctx.doc.documentElement.classList.contains('af-settings'));
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0].detail.page, ctx.doc.getElementById('clientSettingsPage'));
+    // Not a bubbling event: it is dispatched on `document` itself.
+    assert.strictEqual(seen[0].bubbles, false);
+});
+
+test('the gate class is set before the show event, so listeners can read it', () => {
+    const ctx = load();
+    buildAppShell(ctx.doc);
+    let gated = null;
+    ctx.doc.addEventListener('af-settings-show',
+        () => { gated = ctx.doc.documentElement.classList.contains('af-settings'); });
+    ctx.api.showSettingsPage();
+    assert.strictEqual(gated, true);
+});
+
+test('navigating away announces the hide and drops the gate class', () => {
+    const ctx = load();
+    buildAppShell(ctx.doc);
+    ctx.api.showSettingsPage();
+    const page = ctx.doc.getElementById('clientSettingsPage');
+
+    const seen = [];
+    ctx.doc.addEventListener('af-settings-hide',
+        (e) => seen.push([e.detail.page, e.detail.page.isConnected]));
+    ctx.doc._callbacks.HISTORY_UPDATE[0]();
+
+    assert.strictEqual(seen.length, 1);
+    // Fired before the removal: the listener still sees the page it decorated.
+    assert.deepStrictEqual(seen[0], [page, true]);
+    assert.strictEqual(ctx.doc.documentElement.classList.contains('af-settings'), false);
+});
+
+test('the gate is a no-op when there is no document element', () => {
+    const ctx = load();
+    const saved = ctx.doc.documentElement;
+    ctx.doc.documentElement = null;
+    assert.strictEqual(ctx.api.setSettingsGate(true), false);
+    ctx.doc.documentElement = saved;
+    assert.strictEqual(ctx.api.setSettingsGate(true), true);
+    assert.strictEqual(ctx.api.setSettingsGate(false), true);
+});
+
+test('the show/hide events are skipped where CustomEvent is missing', () => {
+    const ctx = load();
+    const saved = ctx.win.CustomEvent;
+    ctx.win.CustomEvent = undefined;
+    assert.strictEqual(ctx.api.dispatchSettingsEvent('af-settings-show', null), false);
+    ctx.win.CustomEvent = saved;
+    assert.strictEqual(ctx.api.dispatchSettingsEvent('af-settings-show', null), true);
 });
 
 // ---- the codec list widget ------------------------------------------------

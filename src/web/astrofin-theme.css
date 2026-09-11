@@ -3517,3 +3517,813 @@ html.af-detail .itemDetailPage .listViewUserDataButtons .paper-icon-button-light
 html.af-detail .itemDetailPage .listViewUserDataButtons .paper-icon-button-light > .material-icons {
   font-size: 18px;
 }
+
+/* ===================================================================== */
+/* (p) Settings                                                           */
+/* Gated on html.af-settings, set by client-settings.js for exactly as     */
+/* long as #clientSettingsPage is mounted; the structure inside it is      */
+/* built by astrofin-settings.js. Without the gate the stock page renders  */
+/* exactly as jellyfin-web built it.                                      */
+/*                                                                        */
+/* .settingsContainer, .verticalSection and .infoBanner carry no stock CSS */
+/* at all in jf-web 10.11.11, so there is nothing to out-specify here; the */
+/* `!important`s below are all against inline styles (the codec widget) or */
+/* against .selectContainer, whose own margin is `!important`.             */
+/* ===================================================================== */
+
+/* --- The frame: rail | panel ----------------------------------------- */
+
+html.af-settings .settingsContainer {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: var(--af-space-8);
+  align-items: start;
+  box-sizing: border-box;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-top: var(--af-space-6);
+}
+/* The <form> is a layout no-op: the rail and the panels are its children
+ * (so every control still bubbles its `change` to it) but the grid tracks
+ * belong to .settingsContainer. */
+html.af-settings .settingsContainer > form {
+  display: contents;
+}
+/* A stock .verticalSection emptied of its controls is nothing but a heading. */
+html.af-settings .settingsContainer .af-set-emptied,
+html.af-settings .settingsContainer .verticalSection[hidden] {
+  display: none !important;
+}
+
+html.af-settings .af-set-rail {
+  grid-column: 1;
+  position: sticky;
+  top: var(--af-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-1);
+  min-width: 0;
+}
+html.af-settings .af-set-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-3);
+  box-sizing: border-box;
+  height: 52px;
+  padding: 0 var(--af-space-4);
+  border: 0;
+  border-radius: var(--af-radius-md);
+  background: transparent;
+  color: var(--af-text-muted);
+  font: 500 17px/22px var(--af-font-body);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--af-dur-ring-in) var(--af-ease-out),
+    box-shadow var(--af-dur-ring-in) var(--af-ease-out),
+    color var(--af-dur-ring-in) var(--af-ease-out);
+}
+html.af-settings .af-set-tab .af-set-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--af-text-muted);
+}
+html.af-settings .af-set-tab.af-on {
+  background: var(--af-glass);
+  box-shadow: 0 0 0 1px var(--af-edge-strong), 0 0 32px rgba(var(--af-accent-primary-rgb), .12);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-tab.af-on .af-set-icon {
+  color: var(--af-accent-primary);
+}
+html.af-settings .af-set-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+  color: var(--af-text-primary);
+}
+@media (hover: hover) and (pointer: fine) {
+  html.af-settings .af-set-tab:hover {
+    color: var(--af-text-primary);
+  }
+}
+
+/* The stock restart banner, rewritten by astrofin-settings.js into the
+ * rail's footnote: the per-row RESTART tags say the rest. */
+html.af-settings .af-set-note {
+  margin-top: var(--af-space-4);
+  padding: 0 var(--af-space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: 400 14px/20px var(--af-font-body);
+  color: var(--af-text-muted);
+}
+
+/* --- Panels ----------------------------------------------------------- */
+
+html.af-settings .af-set-panels {
+  grid-column: 2;
+  min-width: 0;
+  /* Clearance for the restart pill, which is fixed over this corner. */
+  padding-bottom: 88px;
+}
+html.af-settings .af-set-panel {
+  flex-direction: column;
+  gap: var(--af-space-6);
+}
+html.af-settings .af-set-panel.af-on {
+  display: flex;
+}
+html.af-settings .af-set-panel[hidden] {
+  display: none !important;
+}
+html.af-settings .af-set-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--af-space-6);
+}
+html.af-settings .af-set-eyebrow {
+  margin-bottom: var(--af-space-2);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+html.af-settings .af-set-panel-title {
+  margin: 0;
+  font: var(--af-type-section);
+  font-size: 28px;
+  line-height: 34px;
+  letter-spacing: 0;
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-head-tag {
+  margin-bottom: var(--af-space-1);
+}
+
+html.af-settings .af-set-card {
+  box-sizing: border-box;
+  padding: 2px 28px;
+  border: 1px solid var(--af-edge-luminous);
+  border-radius: var(--af-radius-panel);
+  background: var(--af-glass);
+  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
+  backdrop-filter: blur(var(--af-glass-blur-panel));
+}
+
+/* --- Rows ------------------------------------------------------------- */
+
+html.af-settings .af-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--af-space-8);
+  padding: 18px 0;
+  border-bottom: 1px solid var(--af-hairline);
+}
+html.af-settings .af-set-row:last-child {
+  border-bottom: 0;
+}
+html.af-settings .af-set-row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 5px;
+  min-width: 0;
+  max-width: 560px;
+}
+html.af-settings .af-set-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-3);
+  flex-wrap: wrap;
+}
+html.af-settings .af-set-row-label {
+  font: 500 17px/22px var(--af-font-body);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-row-desc,
+html.af-settings .af-set-card .fieldDescription {
+  margin: 0;
+  font: 400 14px/20px var(--af-font-body);
+  color: var(--af-text-muted);
+}
+/* Shrinkable, capped: a select whose longest option is a sentence would
+ * otherwise squeeze the description into a column of two words. */
+html.af-settings .af-set-row-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: var(--af-space-3);
+  min-width: 0;
+  max-width: 46%;
+}
+
+html.af-settings .af-set-tag {
+  border-radius: var(--af-radius-pill);
+  padding: 5px 8px;
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-badge);
+  white-space: nowrap;
+}
+html.af-settings .af-set-tag-restart {
+  color: var(--af-accent-warm);
+  background: rgba(var(--af-accent-warm-rgb), .10);
+  border: 1px solid rgba(var(--af-accent-warm-rgb), .28);
+}
+html.af-settings .af-set-tag-live {
+  color: var(--af-accent-primary);
+  background: rgba(var(--af-accent-primary-rgb), .10);
+  border: 1px solid rgba(var(--af-accent-primary-rgb), .30);
+}
+
+/* --- The jellyfin-web widgets inside a row ----------------------------- */
+
+/* The moved containers keep their classes (and their listeners); only the
+ * stock spacing and the duplicated labels have to go. */
+html.af-settings .af-set-row-control > .selectContainer,
+html.af-settings .af-set-row-control > .inputContainer,
+html.af-settings .af-set-row-control > .checkboxContainer {
+  margin: 0 !important;
+  min-width: 0;
+  max-width: 100%;
+  flex: none;
+}
+html.af-settings .af-set-row-control .inputLabel,
+html.af-settings .af-set-row-control .selectLabel,
+html.af-settings .af-set-row-control .checkboxLabel {
+  display: none !important;
+}
+
+/* emby-select upgrades to `label.selectLabel + select + .selectArrowContainer`
+ * inside .selectContainer (jf-web 10.11.11), so the arrow is positioned
+ * against the container and the select carries the pill. */
+/* A definite width, so the select can be `width:100%` of it and the arrow can
+ * sit at `right:16px` of the same box. Left shrink-to-fit, the container
+ * resolves against the longest option's max-content, the select's percentage
+ * max-width has nothing definite to resolve against, and a long option pushes
+ * the text out under the arrow. */
+html.af-settings .af-set-row-control .selectContainer {
+  position: relative;
+  display: block;
+  width: 280px;
+  max-width: 100%;
+}
+html.af-settings .af-set-card select {
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 44px 12px 20px;
+  border: 1px solid var(--af-edge-chip);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill);
+  color: var(--af-text-primary);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  cursor: pointer;
+}
+html.af-settings .af-set-card select:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+}
+html.af-settings .af-set-row-control .selectArrowContainer {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--af-text-muted);
+}
+html.af-settings .af-set-row-control .selectArrow {
+  font-size: 20px;
+}
+
+html.af-settings .af-set-card .emby-input,
+html.af-settings .af-set-card textarea {
+  box-sizing: border-box;
+  width: 320px;
+  max-width: 100%;
+  padding: 12px 18px;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-md);
+  background: var(--af-glass-floor);
+  color: var(--af-text-primary);
+  font: 400 16px/20px var(--af-font-body);
+}
+
+/* Checkboxes become the artboard's 52x30 switch. jf-web's emby-checkbox
+ * upgrade hides the real <input> and draws `.checkboxOutline`, so that is
+ * the track; an un-upgraded checkbox (no `.emby-checkbox` class, which the
+ * upgrade adds) gets the same switch drawn on the input itself. */
+html.af-settings .af-set-row-control .emby-checkbox-label,
+html.af-settings .af-set-row-control .checkboxContainer > label {
+  display: flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+}
+html.af-settings .af-set-row-control .checkboxOutline {
+  position: static;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 52px;
+  height: 30px;
+  padding: 3px;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-floor);
+  transition: background var(--af-dur-ring-in) var(--af-ease-out);
+}
+html.af-settings .af-set-row-control .checkboxOutline::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--af-text-muted);
+  transition: transform var(--af-dur-ring-in) var(--af-ease-focus);
+}
+/* Out-specifies jf-web's own `.emby-checkbox:checked+span+.checkboxOutline>
+ * .checkboxIcon-checked{display:flex!important}`. */
+html.af-settings .af-set-row-control .checkboxOutline > .checkboxIcon,
+html.af-settings .af-set-row-control .emby-checkbox:checked + span + .checkboxOutline > .checkboxIcon {
+  display: none !important;
+}
+html.af-settings .af-set-row-control .emby-checkbox:checked + span + .checkboxOutline {
+  border-color: var(--af-accent-primary);
+  background: var(--af-accent-primary);
+}
+html.af-settings .af-set-row-control .emby-checkbox:checked + span + .checkboxOutline::after {
+  transform: translateX(22px);
+  background: var(--af-on-accent);
+}
+html.af-settings .af-set-row-control .emby-checkbox:focus + span + .checkboxOutline {
+  box-shadow: var(--af-focus-ring);
+}
+html.af-settings .af-set-row-control input[type="checkbox"]:not(.emby-checkbox) {
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  width: 52px;
+  height: 30px;
+  margin: 0;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-floor);
+  cursor: pointer;
+}
+html.af-settings .af-set-row-control input[type="checkbox"]:not(.emby-checkbox)::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--af-text-muted);
+  transition: transform var(--af-dur-ring-in) var(--af-ease-focus);
+}
+html.af-settings .af-set-row-control input[type="checkbox"]:not(.emby-checkbox):checked {
+  border-color: var(--af-accent-primary);
+  background: var(--af-accent-primary);
+}
+html.af-settings .af-set-row-control input[type="checkbox"]:not(.emby-checkbox):checked::after {
+  transform: translateX(22px);
+  background: var(--af-on-accent);
+}
+
+/* The passthrough codec widget carries its border and padding inline
+ * (client-settings.js renderCodecList), hence the !important. */
+html.af-settings .af-set-card .codecList {
+  width: 320px;
+  padding: var(--af-space-2) var(--af-space-3) !important;
+  border: 1px solid var(--af-edge-soft) !important;
+  border-radius: var(--af-radius-md) !important;
+  background: var(--af-glass-floor);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-card .codecList button {
+  min-width: 26px;
+  height: 26px;
+  border: 1px solid var(--af-edge-soft);
+  border-radius: var(--af-radius-sm);
+  background: var(--af-glass-fill-soft);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-card .codecList button:disabled {
+  opacity: .35;
+}
+
+/* The two real buttons keep their handlers; only the chrome is ours. */
+html.af-settings .af-set-row-control > .emby-button {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  margin: 0;
+  padding: 14px 24px;
+  border: 1px solid var(--af-edge-strong);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill-soft);
+  color: var(--af-text-primary);
+  font: var(--af-type-button-secondary);
+  box-shadow: none;
+  text-transform: none;
+  white-space: nowrap;
+}
+html.af-settings .af-set-row-control > .emby-button:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+}
+html.af-settings .af-set-row[data-af-row="reset-server"] .emby-button {
+  border-color: rgba(var(--af-accent-danger-rgb), .45);
+  color: var(--af-accent-danger);
+}
+
+/* --- Server: the read-only address ------------------------------------ */
+
+/* The one row whose *value* is the information, so it gets the room the 46%
+ * control cap denies: an elided host name tells the reader nothing. */
+html.af-settings .af-set-row[data-af-row="serverAddress"] .af-set-row-control {
+  max-width: 62%;
+}
+html.af-settings .af-set-address-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-3);
+  min-width: 0;
+}
+html.af-settings .af-set-address {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-2);
+  min-width: 0;
+  padding: 11px 16px;
+  border: 1px solid var(--af-edge-chip);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-fill);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-set-address-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--af-accent-primary);
+  box-shadow: 0 0 12px rgba(var(--af-accent-primary-rgb), .8);
+}
+html.af-settings .af-set-address-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.af-settings .af-set-address-kind {
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-muted);
+}
+
+/* --- Video mode: the segmented switch --------------------------------- */
+
+html.af-settings .af-video-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-6);
+  padding: 26px 0;
+}
+html.af-settings .af-mode-switch {
+  display: flex;
+  align-self: flex-start;
+  gap: var(--af-space-1);
+  max-width: 100%;
+  padding: 5px;
+  border: 1px solid var(--af-edge-soft);
+  border-radius: var(--af-radius-pill);
+  background: var(--af-glass-floor);
+}
+html.af-settings .af-mode-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--af-space-2);
+  box-sizing: border-box;
+  min-width: 0;
+  flex: 1 1 0;
+  height: 48px;
+  padding: 0 var(--af-space-6);
+  border: 0;
+  border-radius: var(--af-radius-pill);
+  background: transparent;
+  color: var(--af-text-muted);
+  font: 600 16px/1 var(--af-font-body);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--af-dur-tile) var(--af-ease-focus),
+    color var(--af-dur-tile) var(--af-ease-focus),
+    box-shadow var(--af-dur-tile) var(--af-ease-focus);
+}
+html.af-settings .af-mode-seg .af-set-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+html.af-settings .af-mode-seg.af-on {
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-primary-glow);
+}
+html.af-settings .af-mode-seg:focus-visible {
+  outline: none;
+  box-shadow: var(--af-focus-ring);
+}
+
+/* The live <select> stays in the DOM as the source of truth — the switch
+ * only writes to it — but it is never the thing you click. */
+html.af-settings .af-video-block > [data-af-setting="videoMode"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+html.af-settings .af-video-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--af-space-8);
+  align-items: start;
+}
+html.af-settings .af-mode-detail:only-child {
+  grid-column: 1 / -1;
+  max-width: 720px;
+}
+html.af-settings .af-mode-detail-title {
+  margin-bottom: var(--af-space-2);
+  font: 500 18px/24px var(--af-font-body);
+  color: var(--af-text-primary);
+}
+html.af-settings .af-mode-detail-body {
+  font: var(--af-type-body-lg);
+  color: var(--af-text-muted);
+}
+html.af-settings .af-mode-note {
+  padding-top: var(--af-space-6);
+  border-top: 1px solid var(--af-hairline);
+}
+
+/* --- Video mode: the now-playing resolve card ------------------------- */
+
+html.af-settings .af-resolve {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-4);
+  padding: 20px 24px;
+  border: 1px solid var(--af-edge-soft);
+  border-radius: var(--af-radius-md);
+  background: var(--af-glass-floor);
+}
+html.af-settings .af-resolve-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--af-space-4);
+}
+html.af-settings .af-resolve-eyebrow {
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--af-text-muted);
+}
+html.af-settings .af-resolve-title {
+  min-width: 0;
+  font: 400 15px/1.3 var(--af-font-body);
+  color: var(--af-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.af-settings .af-resolve-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--af-space-3);
+  font: 400 16px/1 var(--af-font-body);
+  color: var(--af-text-muted);
+}
+html.af-settings .af-resolve-mode {
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: uppercase;
+  color: var(--af-accent-primary);
+}
+/* The rule chain video-mode-resolver.js walked, as a constellation line. */
+html.af-settings .af-resolve-chain {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+}
+html.af-settings .af-resolve-chain::before {
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: var(--af-divider);
+}
+html.af-settings .af-resolve-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--af-space-2);
+  font: var(--af-type-meta-sm);
+  letter-spacing: var(--af-tracking-meta);
+  text-transform: uppercase;
+  color: rgba(var(--af-text-primary-rgb), .38);
+}
+html.af-settings .af-resolve-dot {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--af-surface-raised);
+  box-shadow: var(--af-focus-ring-rest);
+}
+html.af-settings .af-resolve-dot::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(var(--af-text-primary-rgb), .25);
+}
+html.af-settings .af-resolve-step.af-past .af-resolve-dot::after {
+  background: rgba(var(--af-text-primary-rgb), .5);
+}
+html.af-settings .af-resolve-step.af-on {
+  color: var(--af-text-primary);
+}
+html.af-settings .af-resolve-step.af-on .af-resolve-dot {
+  background: var(--af-accent-primary);
+  box-shadow: 0 0 0 3px rgba(var(--af-accent-primary-rgb), .28),
+    0 0 28px rgba(var(--af-accent-primary-rgb), .5);
+}
+html.af-settings .af-resolve-step.af-on .af-resolve-dot::after {
+  background: var(--af-on-accent);
+}
+html.af-settings .af-resolve-reason {
+  font: 400 14px/20px var(--af-font-body);
+  color: var(--af-text-muted);
+}
+
+/* --- About ------------------------------------------------------------ */
+
+html.af-settings .af-set-panel[data-af-panel="about"] .af-set-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--af-space-6);
+  padding: 28px;
+}
+html.af-settings .af-about-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-4);
+}
+html.af-settings .af-about-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border: 1.5px solid rgba(var(--af-accent-primary-rgb), .45);
+  border-radius: 50%;
+  color: var(--af-accent-primary);
+}
+html.af-settings .af-about-comet {
+  width: 34px;
+  height: 34px;
+}
+html.af-settings .af-about-wordmark {
+  font: var(--af-type-wordmark);
+  font-size: 26px;
+  letter-spacing: var(--af-tracking-wordmark);
+  text-transform: uppercase;
+  color: var(--af-text-primary);
+}
+html.af-settings .af-about-version {
+  margin-top: var(--af-space-2);
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-muted);
+}
+html.af-settings .af-about-blurb {
+  max-width: 520px;
+  font: var(--af-type-body-lg);
+  color: var(--af-text-muted);
+}
+html.af-settings .af-about-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--af-space-6);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--af-hairline);
+  font: var(--af-type-body);
+  color: var(--af-text-muted);
+}
+html.af-settings .af-about-row:last-child {
+  border-bottom: 0;
+}
+html.af-settings .af-about-value {
+  min-width: 0;
+  font: var(--af-type-meta);
+  letter-spacing: var(--af-tracking-meta);
+  color: var(--af-text-primary);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+/* --- The restart pill -------------------------------------------------- */
+
+html.af-settings .af-set-pill {
+  position: fixed;
+  right: var(--af-space-8);
+  bottom: var(--af-space-8);
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-3);
+  padding: 14px 24px;
+  border: 1px solid rgba(var(--af-accent-warm-rgb), .45);
+  border-radius: var(--af-radius-pill);
+  background: rgba(var(--af-accent-warm-rgb), .10);
+  -webkit-backdrop-filter: blur(var(--af-glass-blur));
+  backdrop-filter: blur(var(--af-glass-blur));
+  color: var(--af-accent-warm);
+  font: var(--af-type-button-secondary);
+  box-shadow: 0 0 36px rgba(var(--af-accent-warm-rgb), .18);
+}
+html.af-settings .af-set-pill[hidden] {
+  display: none !important;
+}
+html.af-settings .af-set-pill .af-set-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* --- Narrow: one column, the rail on its side ------------------------- */
+
+@media (max-width: 1099px) {
+  html.af-settings .settingsContainer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--af-space-6);
+  }
+  html.af-settings .af-set-rail {
+    grid-column: 1;
+    position: static;
+    flex-direction: row;
+    gap: var(--af-space-2);
+    overflow-x: auto;
+    padding-bottom: var(--af-space-2);
+  }
+  html.af-settings .af-set-tab {
+    flex: none;
+  }
+  html.af-settings .af-set-note {
+    display: none;
+  }
+  html.af-settings .af-set-panels {
+    grid-column: 1;
+  }
+  html.af-settings .af-video-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html.af-settings .af-set-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: var(--af-space-4);
+  }
+  html.af-settings .af-set-row-control {
+    justify-content: flex-start;
+  }
+}

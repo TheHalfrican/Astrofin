@@ -1119,6 +1119,233 @@ misc-info margin, the two stock group margins (`.detailsGroupItem` and
 disc padding, the icon font size, and the card box margin. Everything else in
 the section is plain specificity.
 
+## Settings
+
+Design target: `docs/design/canvas/Settings.dc.html` — a 300 px section rail on
+the left, one glass panel at a time on the right, video mode as a four-state
+segmented switch with a now-playing resolve card, a LIVE/RESTART tag per control
+and a floating "Restart to apply N changes" pill instead of one banner. Section
+(p) of `astrofin-theme.css` and the whole of `src/web/astrofin-settings.js` are
+the implementation; `src/web/client-settings.js` supplies the hooks.
+
+This is the one screen jellyfin-web does not own: the page is **ours**
+(`showSettingsPage()` builds it and inserts it into `.mainAnimatedPages`), so
+the work splits differently from the other screens — the markup is ours to
+stamp, and only the widgets inside it are jf-web's.
+
+### The gate
+
+`html.af-settings`, set in `showSettingsPage()` right after the page is
+appended and removed in `teardown()` just before `page.remove()`. Not derived
+from the route: `#clientSettingsPage` is not a jellyfin-web route at all
+(`history.pushState` puts an entry on the stack and the teardown hangs off
+`HISTORY_UPDATE`), so there is no hash to test and a DOM probe would only be a
+slower way of asking the same code that already knows.
+
+The same two places raise `af-settings-show` and `af-settings-hide` on
+`document` — `{ detail: { page }, bubbles: false }` — and
+`astrofin-settings.js` does everything off those. The class goes on *before*
+the show event, so a listener can read the gate; the hide event fires *before*
+the removal, so a listener still sees the page it decorated. Both are
+best-effort and guarded (`setSettingsGate` answers `false` with no
+`documentElement`, `dispatchSettingsEvent` answers `false` with no
+`CustomEvent`): the stock page has to work when the theme is not installed.
+
+### The `data-af-*` hooks
+
+The generated control ids are non-semantic — emby-select's
+`createdCallback` names every select `embyselect<n>` in upgrade order — so the
+sheet and the decorator address the page through attributes
+`buildSettingsForm()` stamps as it builds:
+
+| Attribute | On | Value |
+| --- | --- | --- |
+| `data-af-setting` | every per-setting container | `setting.key` |
+| `data-af-section` | every per-setting container **and** every `.verticalSection` | the jmpInfo section (`playback`, `audio`, `transcode`, `advanced`, plus `mpv` and `server` for the two synthetic groups) |
+| `data-af-applies` | every per-setting container | `live` for `videoMode`, `restart` for everything else |
+| `data-af-action` | the two buttons | `open-config-dir`, `reset-server` |
+| `data-af-notice` | the `.infoBanner` | — |
+
+`data-af-applies` is a statement about the native side, not a style: only
+`videoMode` is pushed into the running mpv (`src/playback/src/video_mode.rs`);
+every other setting is read at boot. It is the single source for both the
+per-row tag and the pill's count.
+
+These attributes are part of `client-settings.js`'s contract and are pinned by
+`src/web/client-settings.test.js`.
+
+### Key to panel
+
+`astrofin-settings.js` *moves* each `[data-af-setting]` container into a panel.
+Moved, never cloned: the `change` listener `client-settings.js` attached is the
+only path to `window.api.settings.setValue`, and a clone would look right and
+silently stop saving.
+
+| Panel | Keys |
+| --- | --- |
+| Server | `deviceName`, the `reset-server` button, and a read-only address row |
+| Playback | `hwdec`, `transcodeNotice`, `forceTranscoding` |
+| Video mode | `videoMode` |
+| Audio | `audioPassthrough`, `audioChannels`, `audioExclusive` |
+| Advanced | `windowDecorations`, `transparentTitlebar`, `hideScrollbar`, `logLevel`, the `open-config-dir` button |
+| About | nothing from the form |
+
+A key the map has never heard of — a setting added to `native-shim.js` and not
+here — falls back to its `data-af-section` (`transcode` → Playback, `mpv` →
+Advanced, `server`/`playback`/`audio`/`advanced` to the panel of the same name,
+anything else → Advanced). It lands somewhere visible rather than nowhere.
+
+Two keys move away from where jellyfin-web's section order puts them:
+`deviceName` (an `advanced` setting, but it is the name the *server* lists this
+client under) and `forceTranscoding` (its own one-entry `transcode` section,
+which is not worth a rail row). Emptied `.verticalSection`s — after the move
+every one of them is — are hidden; the `.infoBanner` is rewritten into the
+rail's one-line footnote, because the per-row tags now say the rest.
+
+### The segmented switch: the select is the source of truth
+
+The four segments are a view. Picking one sets `select.selectedIndex` and
+dispatches a bubbling `change`, which is exactly what a mouse on the select
+would raise, so `client-settings.js`'s own listener does the write and the
+`null`-option round trip it already handles keeps working. The switch never
+calls `setValue`, never touches `jmpNative`, and never stores a mode of its own;
+it re-reads `selectedIndex` on every sync. The select stays in the DOM,
+visually hidden (`clip-path: inset(50%)`, not `display:none`, so it is still a
+real form control), and a `change` from anywhere else resyncs the segments.
+
+`selectedIndex` rather than `select.value` deliberately: the descriptors may
+carry a `null` value (Window Decorations' "Auto"), which cannot round-trip
+through `value`, and `client-settings.js` reads the choice back by index.
+
+### The restart pill
+
+One delegated `change` listener on the `<form>` — which is why the rail and the
+panels are appended **inside** the form and the form is `display: contents`,
+rather than the panels being siblings of it. Each event walks
+`closest('[data-af-setting]')` and, if that container says `restart`, adds its
+key to a `Set`. The pill therefore counts *settings changed*, not events: ten
+edits of one select still read "1 change". It hides at zero and the set dies
+with the page (`af-settings-hide` drops the whole view).
+
+### The now-playing resolve card
+
+Only rendered when all three hold: the setting is `auto`, a title is loaded
+(`html.af-video` or a `.videoPlayerContainer` — the same probe
+`astrofin-theme.js`'s `updateVideoMode()` uses), and a resolution was actually
+recorded. `mpv-video-player.js`'s `_vmApply()` now stashes its last resolution
+on `window.__afVideoModeResolved` (`{ mode, reason, title }`) beside the
+`setPlaybackVideoMode` call it already makes — no new IPC, no fetch, and
+nothing the page could not already see in the log. The winning rule is read off
+the reason string video-mode-resolver.js built (`tag:` / `genre:` / `library…`
+/ `default`) and lights one node of the four-step chain; a reason it cannot
+classify (the post-error fallback) lights nothing rather than guessing. With
+nothing playing the card is absent, not empty.
+
+### Selectors depended on (verified 10.11.11)
+
+Read off the pinned bundle in `.cache/e2e/jellyfin-web/`.
+
+**The page** — ours: `#clientSettingsPage.mainAnimatedPage.page.libraryPage`
+`.userPreferencesPage.noSecondaryNavPage` > `.settingsContainer` > `form`.
+`.settingsContainer`, `.verticalSection` (bare) and `.infoBanner` carry **no
+stock CSS at all**, so the frame costs no specificity fight.
+
+**emby-select** (`1451.*.chunk.js`) upgrades in `attachedCallback`: it inserts a
+`label.selectLabel` **before** the select and appends
+`div.selectArrowContainer > span.selectArrow.material-icons` at the **end of
+the select's parent** — i.e. inside `.selectContainer`, not inside a wrapper of
+its own. So the pill lives on the select, the arrow is absolutely positioned
+against `.selectContainer`, and the generated label is hidden (our row already
+has one). The upgrade also adds the `.emby-select` class, which is how the
+sheet tells an upgraded control from a raw one.
+
+**emby-checkbox** upgrades to
+`label.emby-checkbox-label > input.emby-checkbox + span.checkboxLabel +
+span.checkboxOutline > span.checkboxIcon…`. The real input is
+`opacity:0;position:absolute;width:1px`, so `.checkboxOutline` is the visible
+control and therefore the switch's track; the knob is its `::after` and the
+state comes from the stock `:checked + span + .checkboxOutline` combinator. An
+**un-upgraded** checkbox (the element upgrade is route-lazy) has no
+`.emby-checkbox` class, and `input[type=checkbox]:not(.emby-checkbox)` draws
+the same switch on the input itself. Both paths are in the sheet.
+
+**The codec widget** is ours (`renderCodecList`), and carries its border,
+radius and padding **inline**.
+
+### Stock rules that had to be answered
+
+| Stock | Specificity | How |
+| --- | --- | --- |
+| `.selectContainer{margin:0 0 .5em!important}` (and a second `{margin:0 0 .3em!important}`) | (0,1,0) **!important** | `margin:0!important` at (0,3,1) on the moved container |
+| `.emby-checkbox:checked+span+.checkboxOutline>.checkboxIcon-checked{display:flex!important}` | (0,4,0) **!important** | `display:none!important` at (0,6,1) — the icons go, the track stays |
+| `.checkboxOutline{position:absolute;left:0;top:3px;width:1.83em;height:1.83em}` | (0,1,0) | `position:static` and a 52×30 pill at (0,3,1) |
+| `.emby-checkbox-label{padding-left:2.4em;height:2.35em;width:100%}` | (0,1,0) | `padding:0;height:auto;width:auto` at (0,3,1) — the row owns the layout now |
+| `.emby-input{width:100%;margin-bottom:0!important}` | (0,1,0) | a 320 px field at (0,3,1); the `!important` is on a margin we do not set |
+| `div.codecList` inline `border`/`border-radius`/`padding` | inline | the three answered with `!important` at (0,3,1) |
+| `.emby-button` glass-pill rule from section (f) | (0,1,0) + `:not()` chain | restated at (0,3,1) for the two buttons, which are `.raised` and would otherwise be accent-filled |
+
+**Six `!important` declarations**, each answering an `!important` or an inline
+style: the container margin, the checkbox icons, and the codec widget's three.
+Everything else is plain specificity.
+
+### Four deliberate deviations from the artboard
+
+1. **No 48 px "Settings" page title and no version meta beside it.**
+   jellyfin-web's own header already carries the page title, exactly as on a
+   library page (see [the library grid](#two-deliberate-deviations-from-the-artboard)).
+   The version lives in the About panel, which is where it was going to be read.
+2. **The stock widgets are restyled, not rebuilt.** The artboard draws the
+   transcode-warning and channel-layout pickers as segmented switches and the
+   passthrough codecs as chips. They stay a `<select>` and the codec widget,
+   dressed in the token vocabulary: a segmented control is worth its
+   bespoke JS for the one setting that is applied live and needs to read as a
+   decision, and is a liability for five that do not.
+3. **The About panel prints only what something already exposes** — version
+   (`jmpInfo.version`), platform (`navigator.platform`) and the Chromium build
+   parsed out of the user agent. The artboard's mpv version, config directory,
+   current log and the two link buttons have no source in the page: mpv's
+   version reaches JS only inside the Playback Info snapshot, and the paths are
+   native-side. The `app://` About layer already shows them.
+4. **The server row says the scheme, not "Connected · Direct".** Whether the
+   server is reachable is not something the settings page knows without asking
+   it, and it does not ask.
+
+### Verified live at 1280x698 (2026-09-10)
+
+The built app against the developer's own server, over CDP with
+`Emulation.setDeviceMetricsOverride` at 1280x698 (the 4K-at-300% viewport), one
+screenshot per rail section:
+
+* all ten controls present exactly once, each in its mapped panel, and both
+  buttons with their handlers intact; **zero** stock `.verticalSection`s still
+  visible (`offsetParent !== null`);
+* `documentElement.scrollWidth === clientWidth` (1280) and the page's own
+  1270 — no horizontal overflow at any section;
+* the switch writes live (`jmpInfo.settings.playback.videoMode` follows the
+  segment) and raises **no** pill; a RESTART select raises "Restart to apply 1
+  change"; back navigation removes the page and `html.af-settings`;
+* every setting was read before and written back after, and the two blobs
+  compare equal.
+
+Three things only the running app could say:
+
+1. **emby-select and emby-checkbox do upgrade on this page** — 5 selects with
+   5 `.selectArrowContainer`s, 3 checkboxes with 3 `.checkboxOutline`s — so the
+   switch is drawn on the outline and the `:not(.emby-checkbox)` fallback is
+   insurance, not the live path.
+2. **`.selectContainer` needs a definite width.** Left shrink-to-fit it
+   resolves against the longest option's max-content, the select's
+   `max-width:100%` then has nothing definite to resolve against, and "Software
+   transcodes only (default)" pushed its own text out from under the arrow.
+   280 px fixed, with the control column `flex: 0 0 auto` so the description
+   cannot squeeze it to three characters either.
+3. **The About panel's Chromium row never appears in the app.** CEF is started
+   with `user_agent: "Mozilla/5.0 Astrofin/<version>"`
+   (`src/jfn_cef/src/ffi.rs`), which carries no `Chrome/` token, so
+   `chromiumVersion()` answers `''` and the row is omitted — which is the rule
+   working, not a bug. The code stays: nothing else in the page knows the CEF
+   version, and a user-agent change would light it.
+
 ## Testing
 
 ### Static

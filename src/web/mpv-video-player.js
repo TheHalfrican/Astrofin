@@ -215,6 +215,10 @@
         _vmApply(mode, reason, item) {
             const name = item?.Name || item?.SeriesName || 'unknown';
             console.info(`[Media] [${this.logTag}] video mode auto -> ${mode} (${reason}) for "${name}"`);
+            // The last resolution, for the Settings page's now-playing card
+            // (src/web/astrofin-settings.js). Read-only state, no IPC: the
+            // card only shows it while a title is actually loaded.
+            window.__afVideoModeResolved = { mode, reason, title: name };
             window.jmpNative?.setPlaybackVideoMode?.(mode, reason, name);
         }
 

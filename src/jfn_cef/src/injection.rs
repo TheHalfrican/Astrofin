@@ -187,6 +187,7 @@ pub(crate) enum InjectedScript {
     Csd,
     SelectMenu,
     AstrofinTheme,
+    AstrofinSettings,
 }
 
 impl InjectedScript {
@@ -205,6 +206,7 @@ impl InjectedScript {
             "csd.js" => Self::Csd,
             "select-menu.js" => Self::SelectMenu,
             "astrofin-theme.js" => Self::AstrofinTheme,
+            "astrofin-settings.js" => Self::AstrofinSettings,
             _ => return None,
         })
     }
@@ -224,6 +226,7 @@ impl InjectedScript {
             Self::Csd => "csd.js",
             Self::SelectMenu => "select-menu.js",
             Self::AstrofinTheme => "astrofin-theme.js",
+            Self::AstrofinSettings => "astrofin-settings.js",
         }
     }
 
@@ -594,6 +597,10 @@ pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Optio
             // server panel and expects the shim's `<meta name="theme-color">`
             // observer to already be armed.
             extra_info.scripts.push(InjectedScript::AstrofinTheme);
+            // Right behind the theme: it decorates the Settings page
+            // client-settings.js builds and shares the theme's `--af-*`
+            // vocabulary, but nothing else on the page depends on it.
+            extra_info.scripts.push(InjectedScript::AstrofinSettings);
             Some(extra_info)
         }
         "overlay" => Some(build_extra_info(
@@ -706,6 +713,7 @@ mod tests {
             InjectedScript::Csd,
             InjectedScript::SelectMenu,
             InjectedScript::AstrofinTheme,
+            InjectedScript::AstrofinSettings,
             InjectedScript::MpvStats,
         ] {
             assert_eq!(InjectedScript::from_name(s.file_name()), Some(s));
@@ -801,13 +809,20 @@ mod tests {
     }
 
     #[test]
-    fn the_web_profile_carries_the_style_sheets_and_ends_with_the_theme_script() {
+    fn the_web_profile_carries_the_style_sheets_and_ends_with_the_theme_scripts() {
         crate::test_support::install_platform();
         let info = build_for_kind("web", false).expect("web is a known kind");
         assert_eq!(info.styles(), WEB_STYLES);
         // astrofin-theme.js reads window.jmpInfo and the shim's theme-color
-        // observer, so it has to be last in the single injected bundle.
-        assert_eq!(info.scripts().last(), Some(&InjectedScript::AstrofinTheme));
+        // observer, so it has to be at the end of the single injected bundle,
+        // with astrofin-settings.js (which decorates the page
+        // client-settings.js builds) immediately behind it.
+        let scripts = info.scripts();
+        assert_eq!(scripts.last(), Some(&InjectedScript::AstrofinSettings));
+        assert_eq!(
+            scripts.get(scripts.len() - 2),
+            Some(&InjectedScript::AstrofinTheme)
+        );
         assert!(info.scripts().contains(&InjectedScript::Csd));
         assert!(!info.functions().is_empty());
     }

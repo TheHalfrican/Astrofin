@@ -17,6 +17,26 @@
         target.dispatchEvent(new CustomEvent('pageshow', detail));
     }
 
+    // `html.af-settings` is the gate every Settings rule in astrofin-theme.css
+    // hangs off. Guarded because the test fakes (and a context this script can
+    // in principle run in before the document has a root) may have no
+    // documentElement.
+    function setSettingsGate(on) {
+        const root = document.documentElement;
+        if (!root || !root.classList) return false;
+        if (on) root.classList.add('af-settings');
+        else root.classList.remove('af-settings');
+        return true;
+    }
+
+    // Fired on `document` (not on the page: the listener is installed once, at
+    // injection time, long before any page exists).
+    function dispatchSettingsEvent(type, page) {
+        if (typeof CustomEvent !== 'function' || !document.dispatchEvent) return false;
+        document.dispatchEvent(new CustomEvent(type, { detail: { page }, bubbles: false }));
+        return true;
+    }
+
     function showSettingsPage() {
         const mainAnimatedPages = document.querySelector('.mainAnimatedPages');
         if (!mainAnimatedPages) return;
@@ -55,6 +75,14 @@
 
         mainAnimatedPages.appendChild(page);
 
+        // The Astrofin gate. astrofin-settings.js decorates the mounted page
+        // (rail, glass panels, segmented switch) and astrofin-theme.css keys
+        // every settings rule off `html.af-settings`, so the class goes on
+        // before the event fires. Both are best-effort: the stock page has to
+        // work when the theme is not installed at all.
+        setSettingsGate(true);
+        dispatchSettingsEvent('af-settings-show', page);
+
         // Push history so the back button navigates away from this page
         history.pushState({ clientSettings: true }, '');
 
@@ -70,6 +98,9 @@
             }
             page.dispatchEvent(new CustomEvent('viewbeforehide', { bubbles: true }));
             page.dispatchEvent(new CustomEvent('viewhide', { bubbles: true }));
+            // Before the removal: the listener reads the page it decorated.
+            dispatchSettingsEvent('af-settings-hide', page);
+            setSettingsGate(false);
             page.remove();
 
             if (reactContainer) reactContainer.classList.remove('hide');
@@ -174,6 +205,7 @@
 
         const notice = document.createElement('div');
         notice.className = 'infoBanner';
+        notice.setAttribute('data-af-notice', '');
         notice.textContent = 'Changes take effect after restarting the application.';
         form.appendChild(notice);
 
@@ -185,6 +217,7 @@
 
             const group = document.createElement('div');
             group.className = 'verticalSection';
+            group.setAttribute('data-af-section', section);
             form.appendChild(group);
 
             const sectionHeader = document.createElement('h2');
@@ -194,6 +227,16 @@
 
             for (const setting of descriptions) {
                 const container = document.createElement('div');
+                // Stable hooks for astrofin-settings.js and the theme sheet:
+                // the generated control ids are non-semantic (`embyselect0`),
+                // so the key and its section are stamped on the container.
+                // `data-af-applies` is the LIVE/RESTART tag — only videoMode
+                // is applied to the running mpv (see video_mode.rs); every
+                // other setting is read at boot.
+                container.setAttribute('data-af-setting', setting.key);
+                container.setAttribute('data-af-section', section);
+                container.setAttribute(
+                    'data-af-applies', setting.key === 'videoMode' ? 'live' : 'restart');
 
                 if (setting.options) {
                     container.className = 'selectContainer';
@@ -311,6 +354,7 @@
         if (jmpInfo.settings.main && jmpInfo.settings.main.userWebClient) {
             const group = document.createElement('div');
             group.className = 'verticalSection';
+            group.setAttribute('data-af-section', 'mpv');
             form.appendChild(group);
 
             const sectionHeader = document.createElement('h2');
@@ -320,6 +364,7 @@
 
             const btn = document.createElement('button');
             btn.className = 'raised button-cancel block emby-button';
+            btn.setAttribute('data-af-action', 'open-config-dir');
             btn.textContent = 'Open mpv config directory';
             btn.type = 'button';
             btn.addEventListener('click', () => {
@@ -335,6 +380,7 @@
         if (jmpInfo.settings.main && jmpInfo.settings.main.userWebClient) {
             const group = document.createElement('div');
             group.className = 'verticalSection';
+            group.setAttribute('data-af-section', 'server');
             form.appendChild(group);
 
             const sectionHeader = document.createElement('h2');
@@ -344,7 +390,10 @@
 
             const btn = document.createElement('button');
             btn.className = 'raised button-cancel block emby-button';
-            btn.textContent = 'Reset Saved Server';
+            btn.setAttribute('data-af-action', 'reset-server');
+            // "Reset Saved Server" read like a destructive server-side action;
+            // it only forgets the address this client connects to.
+            btn.textContent = 'Sign out of this server';
             // Without this it is a submit button inside the settings form.
             btn.type = 'button';
             btn.addEventListener('click', () => {
@@ -367,7 +416,9 @@
             showSettingsPage,
             buildSettingsForm,
             renderCodecList,
-            dispatchPageEvents
+            dispatchPageEvents,
+            setSettingsGate,
+            dispatchSettingsEvent
         };
     }
 })();
