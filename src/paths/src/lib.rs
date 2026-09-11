@@ -775,13 +775,25 @@ mod tests {
         }
     }
 
+    // Shape, not equality: the name now carries this machine's own user key
+    // between the prefix and the id, which no fixed string can spell out.
     #[cfg(windows)]
     #[test]
     fn instance_listener_path_names_a_pipe_under_the_app_prefix() {
-        let path = instance_listener_path("0123456789abcdef0123456789abcdef").expect("valid id");
-        assert_eq!(
-            path,
-            std::path::PathBuf::from(r"\\.\pipe\astrofin-0123456789abcdef0123456789abcdef")
+        const ID: &str = "0123456789abcdef0123456789abcdef";
+        let path = instance_listener_path(ID).expect("valid id");
+        let name = path.to_str().expect("the pipe name is utf-8");
+        let user = name
+            .strip_prefix(r"\\.\pipe\astrofin-")
+            .expect("under the app prefix");
+        let user = user
+            .strip_suffix(&format!("-{ID}"))
+            .expect("ends with the instance id");
+        assert!(!user.is_empty(), "{name:?}");
+        assert!(
+            user.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{name:?}"
         );
     }
 

@@ -157,6 +157,19 @@ project uses semantic versioning.
   opaque over the art; those are made transparent under the gate.
 
 ### Fixed
+- Every complaint a `settings.json` read can raise now reaches the log. The
+  read has to run before logging is initialized, because the log level is one
+  of the settings it reads, so the `windowScale` clamp, the "not a usable
+  scale" line, the over-1-MiB refusal, an unreadable file and a whole-document
+  parse failure all warned into no subscriber and were dropped: the file was
+  handled correctly and the user was never told. The read buffers its lines
+  instead and `jfn_app_main` replays them right after `init_logging`, the same
+  way the legacy-profile import's lines already were.
+- The Windows pipe-name test in jfn-paths passes on any account again. It
+  still spelled out the unscoped `\\.\pipe\astrofin-<id>` from before the name
+  carried a per-user key, so it failed on every machine; it now asserts the
+  prefix, the id suffix and that the middle is a non-empty run of the
+  sanitised alphabet.
 - The workspace test suite now passes on the GitHub macOS and Linux CI
   runners, not only on the Windows one. The jfn-cef test binary loads the
   CEF framework once per process on macOS before its first CEF call (a bare

@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -76,6 +77,62 @@ fn check_window_scale(raw: f64) -> ScaleCheck {
 /// Whether a settings file of `len` bytes is worth reading into memory.
 fn settings_size_ok(len: u64) -> bool {
     len <= MAX_SETTINGS_BYTES
+}
+
+// =====================================================================
+// Load notices
+// =====================================================================
+
+/// The level a buffered notice would have been logged at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warn,
+}
+
+/// One line a settings read wanted in the log, held until there is a log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadNotice {
+    pub level: NoticeLevel,
+    pub message: String,
+}
+
+/// Most a single thread buffers. A read produces at most a handful of lines,
+/// so the cap is only reached by a process that reloads a file that is still
+/// wrong and never drains (a CEF renderer re-reads `settings.json` on its
+/// own and has no subscriber to replay them to).
+const MAX_LOAD_NOTICES: usize = 32;
+
+thread_local! {
+    /// What the reads on this thread have complained about.
+    ///
+    /// [`settings_load`] runs *before* logging is initialized — the log level
+    /// the subscriber is built from is itself read from `settings.json` — so a
+    /// `tracing::warn!` raised during the read reaches no subscriber and is
+    /// dropped. The read buffers its lines here and the caller replays them
+    /// once logging is up, the same way `jfn_paths::MigrationReport` carries
+    /// the legacy import's lines across the same ordering problem.
+    ///
+    /// Per thread, not global: the notices belong to whoever did the read, and
+    /// the browser process both loads and replays on its main thread.
+    static LOAD_NOTICES: RefCell<Vec<LoadNotice>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Buffer one line for replay. Silently dropped past [`MAX_LOAD_NOTICES`].
+fn note(level: NoticeLevel, message: String) {
+    LOAD_NOTICES.with_borrow_mut(|buf| {
+        if buf.len() < MAX_LOAD_NOTICES {
+            buf.push(LoadNotice { level, message });
+        }
+    });
+}
+
+/// Take what the settings reads on this thread have buffered, leaving the
+/// buffer empty. Call it right after logging is initialized and emit each
+/// line at its own level; nothing else will.
+#[must_use]
+pub fn take_load_notices() -> Vec<LoadNotice> {
+    LOAD_NOTICES.with_borrow_mut(std::mem::take)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -381,16 +438,18 @@ impl SettingsData {
             match check_window_scale(v) {
                 ScaleCheck::Ok(scale) => self.window.scale = scale,
                 ScaleCheck::Clamped(scale) => {
-                    tracing::warn!(
-                        target: "Config",
-                        "windowScale {v} is outside {WINDOW_SCALE_MIN}..={WINDOW_SCALE_MAX}, \
-                         using {scale}"
+                    note(
+                        NoticeLevel::Warn,
+                        format!(
+                            "windowScale {v} is outside {WINDOW_SCALE_MIN}..={WINDOW_SCALE_MAX}, \
+                             using {scale}"
+                        ),
                     );
                     self.window.scale = scale;
                 }
-                ScaleCheck::Unusable => tracing::warn!(
-                    target: "Config",
-                    "windowScale {v} is not a usable scale, keeping the default"
+                ScaleCheck::Unusable => note(
+                    NoticeLevel::Warn,
+                    format!("windowScale {v} is not a usable scale, keeping the default"),
                 ),
             }
         }
@@ -572,6 +631,10 @@ pub fn settings_init(path: &Path) {
 
 /// Load settings from the configured path. Missing keys keep their defaults.
 /// Returns false if the file is missing or contains invalid JSON.
+///
+/// Everything the read has to complain about is buffered for
+/// [`take_load_notices`] rather than logged: the first call happens before
+/// logging exists, since the log level comes out of the file being read.
 pub fn settings_load() -> bool {
     let mut st = state().lock();
     let path = st.path.clone();
@@ -599,12 +662,14 @@ fn read_file(path: &Path) -> Option<SettingsFile> {
     if let Ok(meta) = fs::metadata(path)
         && !settings_size_ok(meta.len())
     {
-        tracing::warn!(
-            target: "Config",
-            "settings file {} is {} bytes, past the {MAX_SETTINGS_BYTES}-byte limit; ignoring it, \
-             every setting at its default",
-            path.display(),
-            meta.len()
+        let shown = path.display();
+        let len = meta.len();
+        note(
+            NoticeLevel::Warn,
+            format!(
+                "settings file {shown} is {len} bytes, past the {MAX_SETTINGS_BYTES}-byte limit; \
+                 ignoring it, every setting at its default"
+            ),
         );
         return None;
     }
@@ -612,21 +677,26 @@ fn read_file(path: &Path) -> Option<SettingsFile> {
         Ok(c) => c,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
         Err(e) => {
-            tracing::warn!(target: "Config", "settings file {} unreadable: {e}", path.display());
+            let shown = path.display();
+            note(
+                NoticeLevel::Warn,
+                format!("settings file {shown} unreadable: {e}"),
+            );
             return None;
         }
     };
     match serde_json::from_str::<SettingsFile>(&contents) {
         Ok(file) => Some(file),
         Err(e) => {
-            // Loud on purpose: the file is hand-edited, and a whole-document
+            // Loud on purpose, once there is a log to be loud in: the file is
+            // hand-edited, and a whole-document
             // failure (duplicate key, out-of-range number, truncation) means
             // every setting silently falls back to its default and the next
             // save overwrites the file with those defaults.
-            tracing::warn!(
-                target: "Config",
-                "settings file {} ignored, every setting at its default: {e}",
-                path.display()
+            let shown = path.display();
+            note(
+                NoticeLevel::Warn,
+                format!("settings file {shown} ignored, every setting at its default: {e}"),
             );
             None
         }
@@ -1375,6 +1445,91 @@ mod tests {
         body.extend_from_slice(br#""}"#);
         let (_tmp, path) = seed("settings.json", &body);
         assert!(read_file(&path).is_none());
+    }
+
+    // =================================================================
+    // Load notices
+    // =================================================================
+
+    use super::{LoadNotice, NoticeLevel, take_load_notices};
+
+    /// What loading `json` buffers. The thread's buffer is cleared first so
+    /// that a test sharing this thread with an earlier one cannot bleed into
+    /// the assertion (`--test-threads=1` runs them back to back).
+    fn notices_for(json: &str) -> Vec<LoadNotice> {
+        let _ = take_load_notices();
+        let _ = loaded(json);
+        take_load_notices()
+    }
+
+    /// The clamp is the point of the notice: without it the window silently
+    /// comes back at a size the file did not ask for.
+    #[test]
+    fn a_clamped_window_scale_buffers_a_warning_for_the_log() {
+        let notices = notices_for(r#"{"windowScale":9.0}"#);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].level, NoticeLevel::Warn);
+        assert!(notices[0].message.contains("windowScale 9"), "{notices:?}");
+        assert!(notices[0].message.contains("using 4"), "{notices:?}");
+    }
+
+    #[test]
+    fn an_unusable_window_scale_buffers_a_warning_for_the_log() {
+        let notices = notices_for(r#"{"windowScale":0.0}"#);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].message.contains("not a usable scale"),
+            "{notices:?}"
+        );
+    }
+
+    #[test]
+    fn a_clean_document_buffers_nothing() {
+        assert!(
+            notices_for(r#"{"serverUrl":"http://host","windowScale":1.5}"#).is_empty(),
+            "a file with nothing wrong with it must not produce a line"
+        );
+    }
+
+    #[test]
+    fn an_oversized_settings_file_buffers_a_warning_for_the_log() {
+        let _ = take_load_notices();
+        let mut body = br#"{"deviceName":"#.to_vec();
+        body.push(b'"');
+        body.extend(std::iter::repeat_n(b'x', MAX_SETTINGS_BYTES as usize));
+        body.extend_from_slice(br#""}"#);
+        let (_tmp, path) = seed("settings.json", &body);
+        assert!(read_file(&path).is_none());
+
+        let notices = take_load_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].level, NoticeLevel::Warn);
+        assert!(notices[0].message.contains("past the"), "{notices:?}");
+        assert!(notices[0].message.contains("limit"), "{notices:?}");
+    }
+
+    #[test]
+    fn an_unparseable_settings_file_buffers_a_warning_for_the_log() {
+        let _ = take_load_notices();
+        let (_tmp, path) = seed("settings.json", br#"{"serverUrl":"#);
+        assert!(read_file(&path).is_none());
+
+        let notices = take_load_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].message.contains("every setting at its default"),
+            "{notices:?}"
+        );
+    }
+
+    /// Taking is draining: the caller replays each line exactly once, so a
+    /// second call must come back empty rather than repeat the first.
+    #[test]
+    fn take_load_notices_empties_the_buffer() {
+        let _ = take_load_notices();
+        let _ = loaded(r#"{"windowScale":9.0}"#);
+        assert_eq!(take_load_notices().len(), 1);
+        assert!(take_load_notices().is_empty());
     }
 
     /// The four decoration accessors are reachable from the CEF renderer,

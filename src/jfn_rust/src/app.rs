@@ -691,6 +691,16 @@ pub fn jfn_app_main() -> c_int {
     for line in migration.warnings() {
         tracing::warn!(target: "Main", "{line}");
     }
+    // Same ordering problem, one layer up: the settings read above decides the
+    // log level, so it cannot log. It buffers instead, and this is the only
+    // place those lines are ever emitted.
+    for notice in jfn_config::take_load_notices() {
+        let msg = notice.message;
+        match notice.level {
+            jfn_config::NoticeLevel::Info => tracing::info!(target: "Config", "{msg}"),
+            jfn_config::NoticeLevel::Warn => tracing::warn!(target: "Config", "{msg}"),
+        }
+    }
 
     crate::platform_install::install_from_cli(&cli);
 
