@@ -1,168 +1,60 @@
-# Handoff 2026-09-10 (MacBook -> Windows, evening session)
+# Handoff 2026-09-10 (MacBook -> Windows, evening session) — DONE
 
-Written on the M3 Max MacBook at the end of the 2026-09-10 session. Memory
-files do not carry between machines, so this file plus `CLAUDE.md` is the
-briefing. Read it top to bottom, then start at §1. The previous handoff
-(`docs/handoff-2026-09-10-macos.md`) is a done-note now.
+Done-note. The evening Windows session ran the verification sweep this handoff
+asked for and acted on it. Kept only as a record; nothing here is still open
+that is not tracked below.
 
-## Where things stand
+## What landed (main, pushed to both remotes, CI green on 45fa2e9)
 
-- `main` = e830ef1 plus this docs commit, pushed to both remotes. Tree clean,
-  no worktrees, no stashes. GitHub CI on 6bb0538 was green on all seven
-  workflows (Flatpak included, for the first time ever); the run on e830ef1
-  (item detail restyle, web + docs only) was in progress when this was
-  written: check `gh run list -R TheHalfrican/Astrofin -L 8` first.
-- Landed today, in order: CI test fixes (05486fa), pinned frontend bugs
-  (1120488, aca6cd9), Flatpak icon fix + A-B band reset (1ac5589),
-  double-click on every platform (adf6a92), x11 §6 fixes (9a356fa), the
-  test-plan §6 security pass with owner-approved defaults (bdf1ac1 web/CEF,
-  632e47f ipc/paths/settings), library grid restyle (501ba7d), design canvas
-  working files (6bb0538, 063a50a), item detail restyle (e830ef1). CHANGELOG
-  `[Unreleased]` records all of it.
-- The UI redesign moved from "connect, Home, OSD" to also "library grid,
-  movie/series/season/episode detail", all verified live on the Mac against
-  the user's server. Design canvas: "Astrofin UI" (the URL is in the Mac
-  session's memory; the working files are `docs/design/canvas/`, re-seed from
-  there with the design skill; owner decisions on the canvas notes: no poster
-  on detail pages, backdrop + logo with the title as fallback).
+- **§1 verification, live on the Windows PC.** Second-instance IPC (per-user
+  pipe name carrying the SID, hand-off, stale rebind) PASS. Settings caps
+  clamp/refuse correctly. `just e2e` 10/10. Legacy import could only be
+  unit-tested (the Windows profile roots come from `SHGetKnownFolderPath`, not
+  an env var, so they cannot be redirected to a scratch dir without risking the
+  real profile). The library grid and detail pages were eyeballed at 300 % on
+  the 4K TV (1280x698).
+- **Fixes found by that sweep, all committed:**
+  - `d9ff773` — settings-read warnings (windowScale clamp, unusable scale,
+    over-1-MiB refusal, unreadable/unparseable file) were raised before logging
+    exists and dropped; `jfn-config` now buffers them and `jfn_app_main` replays
+    them after `init_logging`. Same commit fixes the Windows-only jfn-paths
+    pipe-name test that `632e47f` left asserting the old unscoped name (it was
+    red on every Windows `cargo test`).
+  - `c8e5c3c` — double-click on the video toggled fullscreen twice and
+    cancelled: `adf6a92` made Chromium deliver a real `dblclick`, so
+    jellyfin-web's own handler fired alongside the shim's now-redundant
+    mousedown-pair detector in `native-shim.js`. Detector removed. `csd.js`'s
+    titlebar detector deliberately kept (its first mousedown hands the pointer
+    grab to the compositor, so a native dblclick never reaches it).
+  - `45fa2e9` — six theme defects at 1280x698: grid 6->5 columns at 1280, the
+    A-Z rail's last seven letters off the bottom (max-height:916 query), uncapped
+    `.itemTags`/`.itemGenres`/`.tagline`/`.itemExternalLinks`/`.itemName`, the
+    series action stack below the fold (max-height:900 tighten), and two dead
+    header rules (`.skinHeader > .header` -> `.headerTop`; the glass blur is now
+    `!important` to beat stock's semiTransparent rule, and `.osdHeader` restates
+    `backdrop-filter:none !important` so the player banner stays blur-free).
+    `docs/design/theme-injection.md` gained the "Verified at 300 %" notes.
+- **§2 design.** The Astrofin Settings artboard (screen 7) is drafted
+  (`docs/design/canvas/Settings.dc.html`), added to `canvas.json` page-1, and
+  the "Astrofin UI" canvas is republished (version 7). A four-state video-mode
+  switch (Auto / Live-Action / Animation / Off) with a now-playing resolve card,
+  not the brief's two-option toggle.
 
-## 1. Verify today's cross-platform changes on Windows (first, ~30 min)
+## Still open (small)
 
-Everything below compiled and passed on the Windows x64 and arm64 runners,
-but only the Mac saw it live. Build (`pwsh -File dev\windows\build.ps1`), run
-with debug logging, and check:
-
-1. **Double-click** (adf6a92, `src/input/src/click_count.rs`): Windows has no
-   native count, so the shared counter derives it (under 500 ms, within 4 px,
-   same button, cap 3). Double-click the player: fullscreen must toggle.
-   Double-click a card title: nothing should misfire. Triple-click in a text
-   field should select the line (count 3).
-2. **Second-instance IPC** (632e47f, `src/instance_ipc/src/policy.rs`,
-   `src/paths/src/user_win.rs`): the pipe name now carries the user SID.
-   Launch the app, launch it again with a URL argument: the second instance
-   must hand off and exit as before. Quit and relaunch immediately: must not
-   say "already running" (stale-rebind classification, 5 x 50 ms).
-3. **Legacy import** (632e47f, `src/paths/src/migrate.rs`): with a fresh
-   profile dir and an old `jellium-desktop` profile present, import should
-   still work; symlinks in the source are skipped with a warn; a >2 GiB source
-   is skipped with a warn (only if easy to fake).
-4. **Settings caps** (632e47f, `src/config`): `windowScale` outside 0.5..=4.0
-   is clamped with a warn; a settings.json over 1 MiB is refused whole.
-5. **Library grid and detail pages at 300 % scaling** (501ba7d, e830ef1):
-   both were tuned at 1708-1920 CSS px. On the 4K TV at 300 % the CSS width is
-   1280: expect 5 grid columns and the single-column detail layout (<1600px).
-   Eyeball both, screenshot anything off, and note it in
-   `docs/design/theme-injection.md` under the relevant subsection. The
-   `--remote-debug-port 9223` CDP recipe in that doc's Testing section works
-   on Windows too.
-6. **E2E**: `just e2e` (manual Gitea workflow, or locally; takes the desktop
-   ~20 s, muted). The web layer changed a lot today; the suite should still be
-   green (it pins jellyfin-web 10.11.11 and drives Home only).
-
-Anything broken on Windows only: fix on `main` with a test, the usual
-`just fmt` + `just lint` (dot-source `dev\windows\env.ps1` first), push, check
-CI.
-
-## 2. Next design screen: Astrofin Settings (brief screen 7)
-
-Order agreed with the owner: Settings (ours) -> admin dashboard light pass ->
-component sheet + logo. The survey of the current Settings page is in §5
-below; the artboard has not been drafted yet. Recipe that worked today for
-each screen: (1) draft the artboard in `docs/design/canvas/<Name>.dc.html`
-in the Home/Library vocabulary (copy the header + tile markup from
-`Main.dc.html`; tokens from `src/web/astrofin-tokens.css`), add it to
-`canvas.json` on page-1, re-seed and republish the canvas, get the owner's
-OK; (2) survey the real selectors (for Settings they are ours, in
-`src/web/client-settings.js`); (3) implement as a gated section in
-`astrofin-theme.css`/`.js` with tests, a `theme-injection.md` subsection, a
-build and a live CDP check with screenshots; (4) commit with the changelog.
-
-## 3. Open todos (unchanged unless noted)
-
-- `OnBeforeBrowse` navigation pin: decided, written up in
-  `docs/test-plan.md` §6 (same-origin or `app://` allow; server-initiated
-  redirects allow; other cross-origin -> `Platform::open_external_url`). A
-  pure three-case decision function with tests; the hook stays thin.
-- Chapter markers not yet eyeballed on a chaptered title (fix 21209ff).
-- `jmpInfo.videoMode` stale after a script-driven mode switch.
-- Design-brief screens 7-9 (Settings, component sheet, logo board) and the
-  admin dashboard light pass.
-- Secret split across two log records: accepted as a known limit (documented).
-
-## 4. Gotchas learned today
-
-- Worktree-isolated agents must NOT share `build/cargo-target`: it poisons
-  the rlibs (a false "unresolved import" and a suspect green). Give each its
-  own `CARGO_TARGET_DIR`; after merging worktree patches, rerun verification
-  in the main tree.
-- Each push cancels the in-progress GitHub runs on `main` (concurrency group
-  per workflow + ref); batch pushes while a verdict is pending.
-  `gh run list -c <short-sha>` returns nothing; filter on `headSha` from
-  `--json`.
-- jellyfin-web's `themes/*/theme.css` paints `.detailPagePrimaryContainer`
-  and `.detailPageSecondaryContainer` `#101010`; Home's art treatment passes
-  ~4 % of source luminance and reads as "no backdrop" on a mostly empty
-  page. Both handled under `html.af-detail`; see theme-injection.md.
-- gdk-pixbuf sniffs an SVG's format from its first 256 bytes: keep any XML
-  comment INSIDE `<svg>` (that was the Flatpak appstream failure).
-- freedesktop.org serves the uchardet tarball again; the Flatpak job is
-  green and stays in the required set.
-
-## 5. Settings page survey (for the screen-7 artboard), 2026-09-10
-
-Read out of `src/web/client-settings.js` and `src/web/native-shim.js`.
-
-- **Mounting.** No hash route. jellyfin-web's user menu shows "Client
-  settings" because `NativeShell.AppHost.supports('clientsettings')` is true
-  (`native-shim.js:~445`); the click runs `showSettingsPage()`, which appends
-  `div#clientSettingsPage.mainAnimatedPage.page.libraryPage.userPreferencesPage.noSecondaryNavPage`
-  into `.mainAnimatedPages`, hides the visible pages, pushes history, fires
-  the view/page show events, and tears itself down on `HISTORY_UPDATE`.
-  Inside: `.settingsContainer.padded-left.padded-right.padded-bottom-page > form`,
-  generated from `window.jmpInfo.settingsDescriptions`, with jellyfin-web's
-  own controls (`.verticalSection` + `h2.sectionTitle`, `.selectContainer` +
-  `select[is=emby-select]`, `.inputContainer` + `.emby-input`,
-  `.checkboxContainer(-withDescription)` + `input[is=emby-checkbox]`,
-  `.fieldDescription`, `.raised.button-cancel.block.emby-button`). A leading
-  `.infoBanner` says changes take effect after a restart.
-- **Settings, in section order** (key -> options, default; live = applies
-  without restart):
-  - Playback: Hardware Decoding `hwdec` select (macOS auto/no/videotoolbox/
-    vulkan, default videotoolbox; Windows auto/no/d3d11va/nvdec/vulkan; Linux
-    auto/no/vaapi/nvdec/vulkan; default `no` off macOS); Video mode
-    `videoMode` select auto/live-action/animation/off, default auto, LIVE;
-    Transcode warning `transcodeNotice` off/cpu/any, default cpu.
-  - Audio: Audio Passthrough `audioPassthrough` textarea (comma list);
-    Exclusive Audio Output `audioExclusive` checkbox; Audio Channel Layout
-    `audioChannels` Auto/stereo/5.1/7.1.
-  - Transcode: Force Transcoding `forceTranscoding` checkbox.
-  - Advanced: Window Decorations `windowDecorations` (Auto/in-app/system/
-    system themed, only when more than one is available); Transparent
-    Titlebar `transparentTitlebar` (macOS only); Hide Scrollbar
-    `hideScrollbar`; Device Name `deviceName` text (64 max); Log Level
-    `logLevel` Default(Info)/verbose/debug/warn/error.
-  - MPV config: "Open mpv config directory" button. Server: "Reset Saved
-    Server" button (`saveServerUrl('')` then reload). Both only when a server
-    URL is saved.
-  - Writes go through `window.api.settings.setValue` ->
-    `jmpNative.setSettingValue(section, key, string)`
-    (`src/jfn_cef/src/business_common.rs:~89`); only `videoMode` calls
-    `apply_current` mid-playback.
-- **Design implications.** The brief's "Movies / Anime" two-option switch is
-  incomplete: the honest control is a four-state segmented mode switch
-  (Auto / Live-Action / Animation / Off) with Auto as the resolved default and
-  the current resolution shown ("Auto -> Anime for this title" when a title
-  is loaded). There is no Server section beyond the reset button: the design's
-  Server section should show the saved URL, the connection kind (direct play,
-  http/https note) and the reset action. No subtitle or UI-scale setting
-  exists; do not draw one. The restart banner is real for everything except
-  video mode; the design should mark live vs restart per control rather than
-  one banner.
-- **About** is a separate CEF layer (`app://resources/about.html`, reached
-  from the right-click context menu and the macOS App menu): a glass card
-  over the starfield with logo, wordmark, app version, CEF version, "Based
-  on Jellium Desktop (GPL-2.0)", config dir and log path with open-path
-  actions (now guarded to those roots). It is already in the theme
-  vocabulary; the brief's "About" section of Settings can link to it rather
-  than duplicate it. (The survey report was cut off after the GPL line;
-  read `src/web/about.js` for the rest.)
+- **Live 300 % eyeball.** The theme CSS is `include_str!`-embedded at compile
+  time, so confirming the header now blurs and the OSD is unchanged needs a
+  rebuilt binary; left for a human at the 4K TV. Low risk — the OSD's no-blur
+  behaviour was preserved deliberately.
+- **B2 (Home card-title double-click).** Two navigations (details, then the
+  freshly-rendered play button). Assessed as jellyfin-web's own single-click
+  behaviour with no clean fix in our layer; not touched. Revisit only if it
+  bothers you in use.
+- **A verification side effect:** the 300 % run started/stopped playback three
+  times and Jellyfin cleared two resume points below its minimum — "Dune: Part
+  Two" and "Dragon Ball Super: Broly" dropped out of Continue Watching. Not
+  recoverable (positions were not recorded).
+- **Design, remaining:** admin dashboard light pass, then the component sheet +
+  logo board (screens 8-9). Recipe unchanged: artboard in
+  `docs/design/canvas/`, re-seed, owner OK, implement as a gated section with a
+  `theme-injection.md` subsection and tests.
