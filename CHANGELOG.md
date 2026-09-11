@@ -5,6 +5,8 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-10
+
 ### Security
 - Audit of the untrusted-input surfaces (docs/test-plan.md phase 1), with
   tests pinning each fix:
