@@ -2002,6 +2002,26 @@ html.af-library .itemsContainer.vertical-wrap {
   }
 }
 
+/* An empty tab (Collections with no sets, an empty Favorites) drops a
+ * .noItemsMessage into the item grid, where it lands in a single track and
+ * wraps to one or two words a line. Span it across every column and cap the
+ * copy to a readable measure so it reads as a real empty state. It is a direct
+ * grid child, so grid-column applies. (Owner call 2026-09-10.) */
+html.af-library .itemsContainer.vertical-wrap > .noItemsMessage {
+  grid-column: 1 / -1;
+  max-width: 640px;
+}
+
+/* The header (88px) plus the section-tab strip under it (~70px) reach ~159px,
+ * but a tabbed library page reserved only 120px, tucking the view / sort / add
+ * toolbar up under the tabs where its buttons were clipped. That gap opened
+ * when the header took its intended 88px height; clear the full header + tabs.
+ * (0,4,1) with !important to answer stock's `.libraryPage{padding-top:7em
+ * !important}`. Owner-reported 2026-09-10. */
+html.af-library .page.libraryPage.pageWithAbsoluteTabs {
+  padding-top: calc(var(--af-header-height) + 84px) !important;
+}
+
 /* The track owns the width now. Stock sizes the card, not the box, and does
  * it per aspect class (.portraitCard, .squareCard, .backdropCard…) — none of
  * it !important, and all of it (0,1,0), so matching every layout the view
@@ -2530,9 +2550,15 @@ html.af-detail .itemBackdrop {
  * two stops are deepened (.94 -> .96, .72@42% -> .82@36%) even as its tail is
  * lifted (.42 -> .50). The art is bought at the right, where the page is
  * empty, not underneath the text. */
+/* Owner call 2026-09-10: bring the art forward — it read as too blurred and
+ * sat back behind the starfield. Blur 6px -> 3px, the horizontal tail .50 ->
+ * .40 and the art layer lifted (below). The two protected stops that sit over
+ * the blurb column — .96 at 0% and .82 at 36% (past the 640px text cap) — are
+ * unchanged, so blurb legibility holds; the lift lands at x > ~712px, the
+ * empty right of the page or the shelf column's own card surfaces. */
 html.af-detail {
-  --af-glass-blur-backdrop: 6px;
-  --af-scrim-horizontal: linear-gradient(90deg, rgba(7, 10, 20, .96) 0%, rgba(7, 10, 20, .82) 36%, rgba(7, 10, 20, .50) 100%);
+  --af-glass-blur-backdrop: 3px;
+  --af-scrim-horizontal: linear-gradient(90deg, rgba(7, 10, 20, .96) 0%, rgba(7, 10, 20, .82) 36%, rgba(7, 10, 20, .40) 100%);
   --af-scrim-vertical: linear-gradient(0deg, rgba(7, 10, 20, .94) 0%, rgba(7, 10, 20, .22) 44%, rgba(7, 10, 20, .52) 100%);
   --af-scrim-wash: rgba(var(--af-bg-base-rgb), .28);
 }
@@ -2542,10 +2568,10 @@ html.af-detail {
  * there is a real frame on screen instead of a blur field, so it can keep
  * more of its own colour and light. */
 html.af-detail .af-backdrop-layer {
-  filter: saturate(.62) brightness(.78) contrast(.96);
+  filter: saturate(.72) brightness(.86) contrast(1);
 }
 html.af-detail .af-backdrop-layer.af-on {
-  opacity: .84;
+  opacity: .92;
 }
 
 /* A poster is not a backdrop. When the item has neither its own Backdrop tag
@@ -2596,10 +2622,53 @@ html.af-detail .itemDetailPage .detailPageWrapperContainer {
 /* --- Left column: no poster, logo or title --------------------------- */
 
 /* Both copies — jf-web renders .detailImageContainer twice, once
- * .hide-mobile beside the ribbon and once .hide-desktop inside it. The
- * design has no poster on this page at all: the backdrop is the art. */
+ * .hide-mobile beside the ribbon and once .hide-desktop inside it. Hidden by
+ * default; the single-column layout below brings the .hide-mobile copy back. */
 html.af-detail .detailImageContainer {
   display: none;
+}
+
+/* Owner call 2026-09-10: the movie/series poster returns to the empty upper
+ * right. In the single-column layout (<=1599px, the 4K-at-300% case) the blurb
+ * caps at 640px on the left and the shelves stack far below, so the top-right
+ * of the ribbon is empty. The desktop copy (.hide-mobile) is a standard
+ * portraitCard whose .cardImageContainer lazy-loads the Primary image; park it
+ * top-right, its right edge on the content edge and dropped to sit centred
+ * against the action column (owner call: a little lower than the logo line).
+ * Two-column (>=1600px) keeps the no-poster treatment for now — the empty
+ * space there is the right shelf column, a separate spot. */
+@media (max-width: 1599px) {
+  html.af-detail[data-af-detail-type="movie"] .detailPageWrapperContainer,
+  html.af-detail[data-af-detail-type="series"] .detailPageWrapperContainer,
+  html.af-detail[data-af-detail-type="season"] .detailPageWrapperContainer {
+    position: relative;
+  }
+  html.af-detail[data-af-detail-type="movie"] .detailImageContainer.hide-mobile,
+  html.af-detail[data-af-detail-type="series"] .detailImageContainer.hide-mobile,
+  html.af-detail[data-af-detail-type="season"] .detailImageContainer.hide-mobile {
+    display: block;
+    position: absolute;
+    top: 210px;
+    right: var(--af-gutter);
+    width: 300px;
+    margin: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+  html.af-detail .detailImageContainer.hide-mobile .card,
+  html.af-detail .detailImageContainer.hide-mobile .cardBox,
+  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+  }
+  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+    border-radius: var(--af-radius-md);
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--af-edge-soft), 0 26px 70px rgba(0, 0, 0, .55);
+  }
 }
 
 /* Stock parks the logo at `right:25vw;top:10vh;width:25vw;height:16vh`,

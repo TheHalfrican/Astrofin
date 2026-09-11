@@ -72,6 +72,11 @@ project uses semantic versioning.
   a two-sided handshake no longer needs both sides to re-publish.
 
 ### Added
+- The movie, series and season poster returns to the top-right of the detail
+  page in the single-column layout (under 1600px, the 4K-at-300% case), where
+  the blurb caps on the left and the space was empty; dropped to sit centred
+  against the action column. The two-column desktop layout keeps no poster for
+  now.
 - Backend tests to one test per public function across every non-exempt
   Rust file (docs/test-plan.md phase 2): mpv option tables and command wire
   forms, playback sinks through recording fakes, paint-scheduler pacing,
@@ -157,6 +162,18 @@ project uses semantic versioning.
   opaque over the art; those are made transparent under the gate.
 
 ### Fixed
+- The detail-page backdrop art reads clearly instead of sitting back behind
+  the starfield: the blur drops from 6px to 3px and the art's brightness,
+  saturation and the right-edge scrim are lifted. The scrim over the blurb
+  column on the left is unchanged, so text legibility holds.
+- An empty library tab (Collections with no sets, an empty Favorites) no
+  longer wraps its placeholder to one or two words a line. The message was
+  landing in a single cell of the item grid; it now spans every column and
+  caps to a readable measure.
+- The view / sort / add toolbar on a library tab is no longer clipped under
+  the section tabs. The header taking its intended 88px height pushed the tab
+  strip down to ~159px, but the tabbed library page still reserved only 120px;
+  the clearance now covers the full header plus tabs.
 - Every complaint a `settings.json` read can raise now reaches the log. The
   read has to run before logging is initialized, because the log level is one
   of the settings it reads, so the `windowScale` clamp, the "not a usable

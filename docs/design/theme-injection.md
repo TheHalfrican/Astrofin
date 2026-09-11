@@ -641,6 +641,19 @@ the rail below 31.25 em (500 px), which this viewport clears. Fixed with an
 74 px of slack, so all 27 are reachable. The 1064/1080 desktop tuning heights
 never reach the query, so the tuned rail is untouched.
 
+**Owner revision (live review, 2026-09-10) — empty tabs and the toolbar.** An
+empty tab (Collections with no sets, an empty Favorites) drops a
+`.noItemsMessage` straight into the item grid, where it landed in one ~195 px
+track and wrapped to one or two words a line; it is a direct grid child, so
+`grid-column: 1 / -1` (plus `max-width: 640px`) spans it across every column as
+a real empty state. Separately, the view/sort/add toolbar (`.btnSelectView`,
+`.btnSort`, `.btnNewCollection`, 56 px discs) was clipped under the section
+tabs: once the header took its intended 88 px, the fixed `.skinHeader` + the
+70 px `.headerTabs` reached ~159 px, but `.libraryPage.pageWithAbsoluteTabs`
+still reserved 120 px. `padding-top: calc(var(--af-header-height) + 84px)
+!important` (≈172 px, (0,4,1) over stock's `.libraryPage{padding-top:7em
+!important}`) clears the full header plus tabs with a ~29 px gap.
+
 ## Item detail
 
 Design targets: `docs/design/canvas/MovieDetail.dc.html` and
@@ -824,6 +837,22 @@ was scoped, a season page showed nothing but the show's wordmark. With no logo,
 `.itemName` renders as the display title: `--af-type-display` (64/72 Sora 200),
 wrapping, clamped to two lines, against stock's `font-weight:600;
 white-space:nowrap` one-liner.
+
+**Owner revision (live review, 2026-09-10) — the poster comes back.** In the
+single-column layout only (`@media (max-width: 1599px)`, the 4K-at-300% case)
+the `.hide-mobile` copy is shown again for `movie`, `series` and `season`: the
+blurb caps at 640 px on the left and the shelves stack far below, leaving the
+top-right of the ribbon empty. It is a standard `portraitCard` whose
+`.cardImageContainer` lazy-loads the Primary image; parked
+`position: absolute; top: 210px; right: var(--af-gutter); width: 300px` on the
+wrapper (made `position: relative`), dropped from the logo line to sit centred
+against the action column, its right edge on the content edge, `z-index: 2`,
+`pointer-events: none`. The two-column layout (≥1600 px) keeps the no-poster
+treatment — the empty space there is the shelf column, a separate placement.
+Same review lifted the backdrop art forward (see *The art treatment* above):
+blur 6 px → 3 px, the horizontal scrim tail .50 → .40, the art layer to
+`saturate(.72) brightness(.86)` at `.92` opacity; the two protected stops over
+the blurb (.96 at 0 %, .82 at 36 %) are unchanged.
 
 ### The two columns
 
