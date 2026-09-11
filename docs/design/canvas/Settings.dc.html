@@ -1,0 +1,429 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&amp;family=Inter:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070A14;font-family:Inter,system-ui,sans-serif}
+a{color:#6FE3FF}a:hover{color:#a9efff}
+@keyframes drift1{from{transform:translate3d(0,0,0)}to{transform:translate3d(-60px,-24px,0)}}
+@keyframes drift2{from{transform:translate3d(0,0,0)}to{transform:translate3d(-140px,18px,0)}}
+</style>
+</helmet>
+<div style="width:1920px;height:1080px;position:relative;overflow:hidden;background:#070A14;color:#EAF0FF;font-family:Inter,system-ui,sans-serif">
+
+  <div style="position:absolute;inset:0;background:linear-gradient(115deg, hsl(230 40% 14%) 0%, hsl(214 44% 11%) 55%, hsl(250 38% 8%) 100%)"></div>
+  <div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,10,20,.96) 0%,rgba(7,10,20,.35) 38%,rgba(7,10,20,.55) 100%)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.7;animation:drift1 90s linear infinite alternate;background-image:radial-gradient(1.6px 1.6px at 12% 18%,#EAF0FF,transparent),radial-gradient(1.4px 1.4px at 32% 62%,#CFE0FF,transparent),radial-gradient(1.8px 1.8px at 58% 12%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 74% 44%,#BFD4FF,transparent),radial-gradient(1.5px 1.5px at 88% 72%,#EAF0FF,transparent),radial-gradient(1.2px 1.2px at 22% 84%,#AFC4FF,transparent),radial-gradient(1.6px 1.6px at 46% 34%,#FFFFFF,transparent),radial-gradient(1.3px 1.3px at 66% 88%,#DCE8FF,transparent)"></div>
+  <div style="position:absolute;inset:-40px;opacity:.35;animation:drift2 150s linear infinite alternate;background-image:radial-gradient(1px 1px at 8% 52%,#9AA6C8,transparent),radial-gradient(1px 1px at 28% 26%,#9AA6C8,transparent),radial-gradient(1px 1px at 52% 76%,#9AA6C8,transparent),radial-gradient(1px 1px at 71% 20%,#9AA6C8,transparent),radial-gradient(1px 1px at 84% 58%,#9AA6C8,transparent),radial-gradient(1px 1px at 94% 34%,#9AA6C8,transparent),radial-gradient(1px 1px at 38% 8%,#9AA6C8,transparent)"></div>
+  <div style="position:absolute;left:58%;top:-16%;width:900px;height:900px;border-radius:50%;background:radial-gradient(circle,rgba(139,108,255,.20),rgba(139,108,255,0) 62%);filter:blur(20px)"></div>
+
+  <div style="position:absolute;top:0;left:0;right:0;height:88px;display:flex;align-items:center;justify-content:space-between;padding:0 72px;box-sizing:border-box">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:28px;height:28px;position:relative"><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid #6FE3FF;opacity:.45"></div><svg viewBox="0 0 28 28" style="position:absolute;inset:0;width:28px;height:28px;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div>
+      <div style="font:300 20px/1 Sora,sans-serif;letter-spacing:.22em;text-transform:uppercase">Astrofin</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:28px;font:400 16px Inter,sans-serif;color:#9AA6C8">
+      <div>Search</div><div>Home</div><div>Movies</div><div>Series</div><div>Anime</div>
+      <div style="width:1px;height:22px;background:rgba(159,180,255,.22)"></div>
+      <div style="font:400 16px 'IBM Plex Mono',monospace;color:#EAF0FF">21:14</div>
+      <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(140deg,#8B6CFF,#6FE3FF);display:grid;place-items:center;font:600 14px Inter,sans-serif;color:#070A14;box-shadow:0 0 0 3px rgba(111,227,255,.28),0 0 24px rgba(111,227,255,.35)">A</div>
+    </div>
+  </div>
+
+  <div style="position:absolute;top:112px;left:72px;right:72px;display:flex;align-items:baseline;gap:18px">
+    <div style="font:300 48px/56px Sora,sans-serif;letter-spacing:.01em">Settings</div>
+    <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8;text-transform:uppercase">Astrofin 0.5.0-dev · Windows</div>
+  </div>
+
+  <div style="position:absolute;top:212px;left:72px;width:300px;display:flex;flex-direction:column;gap:6px">
+    <sc-for list="{{ rail }}" as="r" hint-placeholder-count="6">
+      <div onClick="{{ r.onPick }}" style="cursor:pointer;display:flex;align-items:center;gap:16px;height:60px;padding:0 20px;border-radius:14px;box-sizing:border-box;background:{{ r.bg }};box-shadow:{{ r.shadow }};color:{{ r.color }};transition:all 140ms ease-out">
+        <svg viewBox="0 0 24 24" style="width:22px;height:22px;flex:none;overflow:visible"><path d="{{ r.icon }}" fill="none" stroke="{{ r.iconColor }}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <div style="font:500 20px/26px Inter,sans-serif">{{ r.label }}</div>
+      </div>
+    </sc-for>
+    <div style="margin-top:22px;padding:0 20px;font:400 15px/22px Inter,sans-serif;color:#9AA6C8">Live settings apply at once. The ones marked <span style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B">RESTART</span> wait for the next launch.</div>
+  </div>
+
+  <div style="position:absolute;top:212px;left:420px;right:72px;bottom:64px;display:flex;flex-direction:column;gap:22px">
+
+    <!-- SERVER -->
+    <div style="display:{{ pane.server }};flex-direction:column;gap:22px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Server</div>
+        <div style="font:400 32px/40px Sora,sans-serif">Jellyfin server</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:8px 36px;box-sizing:border-box;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="font:500 20px/26px Inter,sans-serif">Server address</div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Where this client signs in. Plain http on the LAN is fine; a bare host name tries https first.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="display:flex;align-items:center;gap:10px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:13px 18px"><span style="width:8px;height:8px;border-radius:50%;background:#6FE3FF;box-shadow:0 0 12px rgba(111,227,255,.8)"></span>http://192.168.50.76:8096</div>
+            <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8;text-transform:uppercase">Connected · Direct</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Device name</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">How this client is listed on the server's dashboard and in remote-control pickers.</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;width:360px;height:52px;padding:0 20px;box-sizing:border-box;border-radius:14px;background:rgba(7,10,20,.62);border:1px solid rgba(159,180,255,.28);font:400 18px Inter,sans-serif;color:#EAF0FF"><span>Living room</span><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#9AA6C8">11 / 64</span></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="font:500 20px/26px Inter,sans-serif">Change server</div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Forgets the saved address and returns to the connect screen. Your library and watch history stay on the server.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:16px 26px;font:500 18px/1 Inter,sans-serif;color:#EAF0FF">
+            <svg viewBox="0 0 20 20" style="width:20px;height:20px"><path d="M12.5 4.5H15.5v11h-3M8.5 6.5 5 10l3.5 3.5M5 10h9" fill="none" stroke="#EAF0FF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            <div>Sign out of this server</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLAYBACK -->
+    <div style="display:{{ pane.playback }};flex-direction:column;gap:22px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Playback</div>
+        <div style="font:400 32px/40px Sora,sans-serif">Decoding and transcodes</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:8px 36px;box-sizing:border-box;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Hardware decoding</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Which decoder mpv asks the GPU for. Auto tries the platform's best; Off decodes on the CPU.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:15px 20px"><span>D3D11VA</span><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M4 6.5 8 10.5 12 6.5" fill="none" stroke="#9AA6C8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Transcode warning</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Toast when the server transcodes. CPU only warns for software encoding or a stream that falls behind; the OSD chip always shows the source.</div>
+          </div>
+          <div style="display:flex;gap:4px;padding:4px;border-radius:999px;background:rgba(7,10,20,.62);border:1px solid rgba(159,180,255,.16)">
+            <sc-for list="{{ noticeSegs }}" as="s" hint-placeholder-count="3">
+              <div onClick="{{ s.onPick }}" style="cursor:pointer;min-width:112px;height:44px;padding:0 20px;box-sizing:border-box;border-radius:999px;display:grid;place-items:center;font:500 15px/1 Inter,sans-serif;color:{{ s.color }};background:{{ s.bg }};box-shadow:{{ s.shadow }};transition:all 140ms ease-out">{{ s.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Force transcoding</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Debug aid. Removes every direct-play profile so the server transcodes everything.</div>
+          </div>
+          <div onClick="{{ toggles.force.onPick }}" style="cursor:pointer;width:56px;height:32px;border-radius:999px;position:relative;background:{{ toggles.force.bg }};border:1px solid {{ toggles.force.edge }};box-shadow:{{ toggles.force.shadow }};transition:all 140ms ease-out"><div style="position:absolute;top:3px;left:{{ toggles.force.knob }}px;width:24px;height:24px;border-radius:50%;background:{{ toggles.force.knobColor }};transition:left 140ms cubic-bezier(.2,.8,.2,1)"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIDEO MODE -->
+    <div style="display:{{ pane.video }};flex-direction:column;gap:22px">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:32px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Video mode</div>
+          <div style="font:400 32px/40px Sora,sans-serif">Upscaling preset</div>
+        </div>
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#6FE3FF;background:rgba(111,227,255,.10);border:1px solid rgba(111,227,255,.30);border-radius:999px;padding:7px 10px;margin-bottom:6px">LIVE · APPLIES MID-PLAYBACK</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:34px 36px;box-sizing:border-box;display:flex;flex-direction:column;gap:28px">
+        <div style="display:flex;gap:6px;padding:6px;border-radius:999px;background:rgba(7,10,20,.62);border:1px solid rgba(159,180,255,.16);align-self:flex-start">
+          <sc-for list="{{ modeSegs }}" as="m" hint-placeholder-count="4">
+            <div onClick="{{ m.onPick }}" style="cursor:pointer;width:200px;height:60px;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:12px;font:600 18px/1 Inter,sans-serif;color:{{ m.color }};background:{{ m.bg }};box-shadow:{{ m.shadow }};transition:all 180ms cubic-bezier(.2,.8,.2,1)">
+              <svg viewBox="0 0 24 24" style="width:22px;height:22px;overflow:visible"><path d="{{ m.icon }}" fill="none" stroke="{{ m.color }}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <span>{{ m.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:36px">
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="font:500 20px/26px Inter,sans-serif">{{ mode.title }}</div>
+            <div style="font:400 16px/26px Inter,sans-serif;color:#9AA6C8">{{ mode.body }}</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+              <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px">{{ mode.chipA }}</div>
+              <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:9px 14px">{{ mode.chipB }}</div>
+            </div>
+          </div>
+          <div style="border-radius:14px;border:1px solid rgba(159,180,255,.16);background:rgba(7,10,20,.50);padding:22px 26px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#9AA6C8;text-transform:uppercase">Now playing</div>
+              <div style="font:400 15px/1 Inter,sans-serif;color:#9AA6C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Perfect Blue · 1997</div>
+            </div>
+            <div style="display:flex;align-items:baseline;gap:12px">
+              <span style="font:400 16px/1 Inter,sans-serif;color:#9AA6C8">Resolved to</span>
+              <span style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6FE3FF;text-transform:uppercase">{{ resolved.mode }}</span>
+            </div>
+            <div style="position:relative;height:56px">
+              <div style="position:absolute;left:14px;right:14px;top:13px;height:1px;background:rgba(159,180,255,.22)"></div>
+              <div style="position:absolute;left:0;right:0;top:0;display:flex;justify-content:space-between">
+                <sc-for list="{{ chain }}" as="c" hint-placeholder-count="4">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:10px;width:96px">
+                    <div style="width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:{{ c.bg }};box-shadow:{{ c.shadow }}"><div style="width:8px;height:8px;border-radius:50%;background:{{ c.dot }}"></div></div>
+                    <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:{{ c.color }};text-transform:uppercase">{{ c.label }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="font:400 15px/22px Inter,sans-serif;color:#9AA6C8">{{ resolved.reason }}</div>
+          </div>
+        </div>
+        <div style="font:400 15px/22px Inter,sans-serif;color:#9AA6C8;border-top:1px solid rgba(159,180,255,.10);padding-top:22px">Both shader chains switch themselves off below their upscale ratio, so a mode costs nothing on content already at display resolution. Tag a title <span style="font:500 14px 'IBM Plex Mono',monospace;color:#EAF0FF">astrofin:anime</span> or <span style="font:500 14px 'IBM Plex Mono',monospace;color:#EAF0FF">astrofin:live</span> on the server to override Auto for that title alone.</div>
+      </div>
+    </div>
+
+    <!-- AUDIO -->
+    <div style="display:{{ pane.audio }};flex-direction:column;gap:22px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Audio</div>
+        <div style="font:400 32px/40px Sora,sans-serif">Output and passthrough</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:8px 36px;box-sizing:border-box;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:560px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Passthrough</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Codecs sent to the receiver as a bitstream instead of being decoded here. Pick only what the receiver lists.</div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;max-width:640px">
+            <sc-for list="{{ passChips }}" as="p" hint-placeholder-count="5">
+              <div onClick="{{ p.onPick }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;height:46px;padding:0 18px;box-sizing:border-box;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:{{ p.color }};background:{{ p.bg }};border:1px solid {{ p.edge }};border-radius:999px;box-shadow:{{ p.shadow }};transition:all 140ms ease-out"><span style="width:8px;height:8px;border-radius:50%;background:{{ p.dot }}"></span>{{ p.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Channel layout</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Auto follows the device. Set it when the receiver misreports its speakers.</div>
+          </div>
+          <div style="display:flex;gap:4px;padding:4px;border-radius:999px;background:rgba(7,10,20,.62);border:1px solid rgba(159,180,255,.16)">
+            <sc-for list="{{ channelSegs }}" as="s" hint-placeholder-count="4">
+              <div onClick="{{ s.onPick }}" style="cursor:pointer;min-width:96px;height:44px;padding:0 20px;box-sizing:border-box;border-radius:999px;display:grid;place-items:center;font:500 15px/1 Inter,sans-serif;color:{{ s.color }};background:{{ s.bg }};box-shadow:{{ s.shadow }};transition:all 140ms ease-out">{{ s.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:26px 0">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Exclusive output</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Takes the device in exclusive mode for bit-perfect output. Other apps go silent while a title plays.</div>
+          </div>
+          <div onClick="{{ toggles.exclusive.onPick }}" style="cursor:pointer;width:56px;height:32px;border-radius:999px;position:relative;background:{{ toggles.exclusive.bg }};border:1px solid {{ toggles.exclusive.edge }};box-shadow:{{ toggles.exclusive.shadow }};transition:all 140ms ease-out"><div style="position:absolute;top:3px;left:{{ toggles.exclusive.knob }}px;width:24px;height:24px;border-radius:50%;background:{{ toggles.exclusive.knobColor }};transition:left 140ms cubic-bezier(.2,.8,.2,1)"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADVANCED -->
+    <div style="display:{{ pane.advanced }};flex-direction:column;gap:22px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">Advanced</div>
+        <div style="font:400 32px/40px Sora,sans-serif">Window, logs and mpv</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:8px 36px;box-sizing:border-box;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:22px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Window decorations</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Auto picks the system title bar here; in-app draws its own.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:15px 20px"><span>Auto</span><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M4 6.5 8 10.5 12 6.5" fill="none" stroke="#9AA6C8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:22px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Hide scrollbar</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Pages still scroll with the wheel, keys and controller.</div>
+          </div>
+          <div onClick="{{ toggles.scroll.onPick }}" style="cursor:pointer;width:56px;height:32px;border-radius:999px;position:relative;background:{{ toggles.scroll.bg }};border:1px solid {{ toggles.scroll.edge }};box-shadow:{{ toggles.scroll.shadow }};transition:all 140ms ease-out"><div style="position:absolute;top:3px;left:{{ toggles.scroll.knob }}px;width:24px;height:24px;border-radius:50%;background:{{ toggles.scroll.knobColor }};transition:left 140ms cubic-bezier(.2,.8,.2,1)"></div></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:22px 0;border-bottom:1px solid rgba(159,180,255,.10)">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="font:500 20px/26px Inter,sans-serif">Log level</div><div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.10em;color:#FFB86B;background:rgba(255,184,107,.10);border:1px solid rgba(255,184,107,.28);border-radius:999px;padding:6px 9px">RESTART</div></div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Debug is chatty and safe to leave on for a bug report; the log rotates.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#EAF0FF;background:rgba(22,28,51,.72);border:1px solid rgba(159,180,255,.2);border-radius:999px;padding:15px 20px"><span>Default · Info</span><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M4 6.5 8 10.5 12 6.5" fill="none" stroke="#9AA6C8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:22px 0">
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:620px">
+            <div style="font:500 20px/26px Inter,sans-serif">mpv configuration</div>
+            <div style="font:400 16px/24px Inter,sans-serif;color:#9AA6C8">Your own <span style="font:500 14px 'IBM Plex Mono',monospace;color:#EAF0FF">mpv.conf</span> and shaders live here and layer under the video mode.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="font:400 15px/1 'IBM Plex Mono',monospace;color:#9AA6C8">%APPDATA%\astrofin\mpv</div>
+            <div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:14px 22px;font:500 16px/1 Inter,sans-serif;color:#EAF0FF">
+              <svg viewBox="0 0 20 20" style="width:18px;height:18px"><path d="M2.5 5.5a1 1 0 0 1 1-1h4l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z" fill="none" stroke="#EAF0FF" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+              <div>Open folder</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ABOUT -->
+    <div style="display:{{ pane.about }};flex-direction:column;gap:22px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#6FE3FF;text-transform:uppercase">About</div>
+        <div style="font:400 32px/40px Sora,sans-serif">This build</div>
+      </div>
+      <div style="border-radius:22px;border:1px solid rgba(159,180,255,.18);background:linear-gradient(160deg,rgba(22,28,51,.72),rgba(7,10,20,.62));backdrop-filter:blur(24px);padding:36px;box-sizing:border-box;display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:48px">
+        <div style="display:flex;flex-direction:column;gap:26px">
+          <div style="display:flex;align-items:center;gap:22px">
+            <div style="width:72px;height:72px;position:relative"><div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid #6FE3FF;opacity:.45"></div><div style="position:absolute;inset:-14px;border-radius:50%;border:1px solid rgba(139,108,255,.35)"></div><svg viewBox="0 0 28 28" style="position:absolute;inset:0;width:72px;height:72px;overflow:visible"><path d="M4 22.5 C11 21 18.5 15 23.5 4.5 C22.5 14 19 20 14.5 22.5 Z" fill="#6FE3FF"></path></svg></div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div style="font:300 34px/1 Sora,sans-serif;letter-spacing:.22em;text-transform:uppercase">Astrofin</div>
+              <div style="font:500 14px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#9AA6C8">0.5.0-dev · Windows x64</div>
+            </div>
+          </div>
+          <div style="font:400 16px/26px Inter,sans-serif;color:#9AA6C8;max-width:520px">A desktop client for Jellyfin with mpv underneath the web UI. Based on Jellium Desktop, GPL-2.0.</div>
+          <div style="display:flex;gap:12px">
+            <div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:14px 22px;font:500 16px/1 Inter,sans-serif;color:#EAF0FF">Release notes</div>
+            <div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(159,180,255,.28);background:rgba(22,28,51,.55);border-radius:999px;padding:14px 22px;font:500 16px/1 Inter,sans-serif;color:#EAF0FF">Licences</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:14px 0;border-bottom:1px solid rgba(159,180,255,.10);font:400 16px Inter,sans-serif;color:#9AA6C8"><span>Chromium (CEF)</span><span style="color:#EAF0FF;font-family:'IBM Plex Mono',monospace;font-size:15px">151.3.24</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:14px 0;border-bottom:1px solid rgba(159,180,255,.10);font:400 16px Inter,sans-serif;color:#9AA6C8"><span>mpv</span><span style="color:#EAF0FF;font-family:'IBM Plex Mono',monospace;font-size:15px">0.40.0 · astrofin fork</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:14px 0;border-bottom:1px solid rgba(159,180,255,.10);font:400 16px Inter,sans-serif;color:#9AA6C8"><span>Config directory</span><span style="display:flex;align-items:center;gap:14px"><span style="color:#EAF0FF;font-family:'IBM Plex Mono',monospace;font-size:15px">%APPDATA%\astrofin</span><span style="font:500 14px/1 Inter,sans-serif;color:#6FE3FF">Open</span></span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:14px 0;font:400 16px Inter,sans-serif;color:#9AA6C8"><span>Current log</span><span style="display:flex;align-items:center;gap:14px"><span style="color:#EAF0FF;font-family:'IBM Plex Mono',monospace;font-size:15px">astrofin.log</span><span style="font:500 14px/1 Inter,sans-serif;color:#6FE3FF">Open</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <sc-if value="{{ pending.show }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:auto;display:flex;justify-content:flex-end">
+        <div onClick="{{ pending.onRestart }}" style="cursor:pointer;display:flex;align-items:center;gap:14px;border:1px solid rgba(255,184,107,.45);background:rgba(255,184,107,.10);border-radius:999px;padding:16px 26px;font:500 18px/1 Inter,sans-serif;color:#FFB86B;box-shadow:0 0 36px rgba(255,184,107,.18)">
+          <svg viewBox="0 0 20 20" style="width:20px;height:20px"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3.5v3h-3" fill="none" stroke="#FFB86B" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          <div>{{ pending.label }}</div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":1920,"height":1080},"section":{"editor":"enum","default":"video","options":["server","playback","video","audio","advanced","about"],"section":"Settings"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      section: null, mode: 'auto', notice: 'cpu', channels: 'auto',
+      pass: { ac3: true, eac3: true, dts: true, dtshd: false, truehd: false },
+      force: false, exclusive: false, scroll: true, pending: 0
+    };
+  }
+  renderVals() {
+    const S = this.state;
+    const section = S.section ?? this.props.section ?? 'video';
+    const cyan = '#6FE3FF', ink = '#070A14', text = '#EAF0FF', muted = '#9AA6C8';
+    const ring = '0 0 0 3px rgba(111,227,255,.28), 0 0 24px rgba(111,227,255,.35)';
+    const rest = '0 0 0 1px rgba(159,180,255,.16)';
+    const bump = () => this.setState({ pending: S.pending + 1 });
+
+    const railDefs = [
+      ['server', 'Server', 'M4 6.5h16v5H4zM4 12.5h16v5H4zM7 9h.01M7 15h.01'],
+      ['playback', 'Playback', 'M5 4.5v15l14-7.5z'],
+      ['video', 'Video mode', 'M4 5.5h16v13H4zM4 10h16M9 5.5v13M15 5.5v13'],
+      ['audio', 'Audio', 'M4 9.5v5h3.5L12 18.5v-13L7.5 9.5zM15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12'],
+      ['advanced', 'Advanced', 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6'],
+      ['about', 'About', 'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM12 11v5.5M12 7.8v.01']
+    ];
+    const rail = railDefs.map(([id, label, icon]) => {
+      const on = id === section;
+      return {
+        id, label, icon,
+        bg: on ? 'linear-gradient(160deg,rgba(22,28,51,.85),rgba(7,10,20,.62))' : 'transparent',
+        shadow: on ? '0 0 0 1px rgba(159,180,255,.28), 0 0 32px rgba(111,227,255,.12)' : 'none',
+        color: on ? text : muted,
+        iconColor: on ? cyan : muted,
+        onPick: () => this.setState({ section: id })
+      };
+    });
+    const pane = Object.fromEntries(railDefs.map(([id]) => [id, id === section ? 'flex' : 'none']));
+
+    const seg = (defs, current, key, live) => defs.map(([id, label]) => {
+      const on = id === current;
+      return {
+        id, label,
+        color: on ? ink : muted,
+        bg: on ? cyan : 'transparent',
+        shadow: on ? ring : 'none',
+        onPick: () => { const next = { [key]: id }; if (!live && !on) next.pending = S.pending + 1; this.setState(next); }
+      };
+    });
+    const modeDefs = [
+      ['auto', 'Auto', 'M12 3.5 14.4 9.6 21 10.1 16 14.3 17.6 20.5 12 17.1 6.4 20.5 8 14.3 3 10.1 9.6 9.6z'],
+      ['live-action', 'Live-Action', 'M4 6.5h16v11H4zM4 10.5h16M8 6.5v11M16 6.5v11'],
+      ['animation', 'Animation', 'M5 17.5c2.5-7 5-10 8.5-11.5-1 4-3.5 8-8.5 11.5zM13.5 6c2 .5 4 2 5.5 4.5'],
+      ['off', 'Off', 'M12 3.5v8M6.7 7.2a7.5 7.5 0 1 0 10.6 0']
+    ];
+    const modeSegs = seg(modeDefs, S.mode, 'mode', true).map((m, i) => ({ ...m, icon: modeDefs[i][2] }));
+    const modes = {
+      'auto': { title: 'Auto picks a preset per title', body: 'Resolved just before each title loads, from its tags, then its genres, then the library it lives in. Nothing is stored; the next play resolves again.', chipA: 'TAGS › GENRES › LIBRARY', chipB: 'DEFAULT LIVE-ACTION' },
+      'live-action': { title: 'Sharper film and television', body: 'FSRCNNX x2 on the luma plane with ewa_lanczossharp upscaling and mitchell downscaling. Engages above about 1.3x upscale.', chipA: 'FSRCNNX_x2_16-0-4-1', chipB: 'EWA_LANCZOSSHARP · MITCHELL' },
+      'animation': { title: 'Clean lines for anime and cartoons', body: 'Anime4K v4 Mode A (high quality), six passes in order. Scalers stay as your mpv.conf sets them. Engages above about 1.2x upscale.', chipA: 'ANIME4K 4.0.1 · MODE A HQ', chipB: 'SCALERS FROM MPV.CONF' },
+      'off': { title: 'No shaders, mpv defaults', body: 'Clears the whole shader chain and restores mpv\'s built-in lanczos and hermite scalers, overriding anything mpv.conf set.', chipA: 'NO SHADERS', chipB: 'LANCZOS · HERMITE' }
+    };
+    const mode = modes[S.mode];
+    const auto = S.mode === 'auto';
+    const winner = 1; // Perfect Blue: no astrofin tag, genre Animation.
+    const chainLabels = ['Tag', 'Genre', 'Library', 'Default'];
+    const chain = chainLabels.map((label, i) => {
+      const lit = auto && i === winner;
+      const passed = auto && i < winner;
+      return {
+        label,
+        bg: lit ? cyan : (passed ? 'rgba(22,28,51,.9)' : 'rgba(22,28,51,.9)'),
+        dot: lit ? ink : (passed ? 'rgba(154,166,200,.5)' : 'rgba(154,166,200,.25)'),
+        shadow: lit ? '0 0 0 3px rgba(111,227,255,.28), 0 0 28px rgba(111,227,255,.5)' : rest,
+        color: lit ? text : 'rgba(154,166,200,.6)'
+      };
+    });
+    const resolved = auto
+      ? { mode: 'Animation', reason: 'No astrofin: tag on the title; the genre Animation matched, so the library and the default were not consulted.' }
+      : { mode: S.mode.replace('-', ' '), reason: 'Auto is off: every title uses this preset until you change it. Switch back to Auto to resolve per title again.' };
+
+    const noticeSegs = seg([['off', 'Off'], ['cpu', 'CPU only'], ['any', 'Any']], S.notice, 'notice', false);
+    const channelSegs = seg([['auto', 'Auto'], ['stereo', '2.0'], ['5.1', '5.1'], ['7.1', '7.1']], S.channels, 'channels', false);
+
+    const passDefs = [['ac3', 'AC3'], ['eac3', 'E-AC3'], ['dts', 'DTS'], ['dtshd', 'DTS-HD'], ['truehd', 'TrueHD']];
+    const passChips = passDefs.map(([id, label]) => {
+      const on = !!S.pass[id];
+      return {
+        id, label,
+        color: on ? text : muted,
+        bg: on ? 'rgba(111,227,255,.10)' : 'rgba(22,28,51,.55)',
+        edge: on ? 'rgba(111,227,255,.45)' : 'rgba(159,180,255,.16)',
+        dot: on ? cyan : 'rgba(154,166,200,.35)',
+        shadow: on ? '0 0 20px rgba(111,227,255,.18)' : 'none',
+        onPick: () => this.setState({ pass: { ...S.pass, [id]: !on }, pending: S.pending + 1 })
+      };
+    });
+
+    const toggle = (key) => {
+      const on = !!S[key];
+      return {
+        bg: on ? cyan : 'rgba(7,10,20,.62)',
+        edge: on ? cyan : 'rgba(159,180,255,.28)',
+        knob: on ? 27 : 3,
+        knobColor: on ? ink : muted,
+        shadow: on ? ring : 'none',
+        onPick: () => this.setState({ [key]: !on, pending: S.pending + 1 })
+      };
+    };
+    const toggles = { force: toggle('force'), exclusive: toggle('exclusive'), scroll: toggle('scroll') };
+
+    const pending = {
+      show: S.pending > 0,
+      label: S.pending === 1 ? 'Restart to apply 1 change' : `Restart to apply ${S.pending} changes`,
+      onRestart: () => this.setState({ pending: 0 })
+    };
+
+    return { rail, pane, modeSegs, mode, chain, resolved, noticeSegs, channelSegs, passChips, toggles, pending };
+  }
+}
+</script>
+</body>
+</html>

@@ -46,6 +46,16 @@
       "w": 2010,
       "h": 5600,
       "page": "page-2"
+    },
+    {
+      "file": "Settings.dc.html",
+      "title": "7 Settings",
+      "x": 7200,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "page": "page-1",
+      "is_interactive": true
     }
   ],
   "annotations": [
@@ -72,6 +82,14 @@
       "w": 300,
       "page": "page-1",
       "text": "Item detail, TV series, screen 5 of the brief. Same hub as the movie page: the action stack leads with Continue on the next unwatched episode and the progress line counts episodes. The right column replaces Cast with the season pills and the season's episode list: 16:9 thumbs, number in cyan mono, watched ticks, a progress bar on the one in progress, the focused row lifted. Next-up panel top-right. Cast and More-like-this sit below the fold on this page.\n\nOwner decision 2026-09-10: no poster on detail pages; backdrop plus logo (title text when the server has no logo)."
+    },
+    {
+      "id": "settings-notes",
+      "x": 9200,
+      "y": 0,
+      "w": 300,
+      "page": "page-1",
+      "text": "Astrofin Settings, screen 7 of the brief. Our own page (no jellyfin-web selectors), so the layout is free: PS5-style section rail on the left, one glass panel per section on the right. Click the rail to see every section.\n\nVideo mode is the headline: a four-state switch (Auto / Live-Action / Animation / Off) rather than the brief's two-option toggle, because that is what the setting really is. Auto is the default; the Now-playing card shows what Auto resolved to and which rule won (tag > genre > library > default) as a constellation line.\n\nNo restart banner. Each control carries LIVE or RESTART; toggling a RESTART control shows the restart pill bottom-right.\n\nMoved on purpose: Device name sits under Server (it is what the server sees); Reset saved server became 'Sign out of this server'. About mirrors the existing About layer (app://resources/about.html) so the page can simply open it.\n\nOpen questions for the owner: keep the codec chips for passthrough (today it is a comma list)? Show mpv's version in About (today only CEF's)?"
     }
   ],
   "launch": {
