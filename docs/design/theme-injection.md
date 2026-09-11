@@ -210,11 +210,26 @@ All confirmed present in 10.11.11 on a live Home page. Anything marked
 
 **Header**
 `.skinHeader`, `.skinHeader-withBackground`, `.skinHeader.semiTransparent`,
-`.skinHeader > .header`, `.headerLeft`, `.headerRight`, `.headerButton`,
+`.skinHeader > .headerTop`, `.headerLeft`, `.headerRight`, `.headerButton`,
 `h3.pageTitle.pageTitleWithLogo.pageTitleWithDefaultLogo` (the Jellyfin banner is
 a `background-image` on this element — replaced with the inline Astrofin mark and
 an `::after` wordmark), `.headerTabs`, `.emby-tab-button`,
 `.emby-tab-button-active`.
+
+**Verified on Windows at 300% (2026-09-10).** Two section-(d) rules were dead
+until this pass. `.skinHeader > .header` **does not exist in 10.11.11** — the
+live child is `div.flex.align-items-center.flex-grow.headerTop` — so the
+`min-height: var(--af-header-height)` / gutter `clamp()` never matched: the
+header measured 58.3 px against the 88 px the A-Z rail and the grid are
+positioned from, and the back button sat at x=4.6 against a 72 px gutter. Fixed
+to `.skinHeader > .headerTop` (the same name jf-web uses for the OSD banner,
+`.skinHeader.osdHeader .headerTop`, and present in the pinned e2e bundle). And
+the header never blurred: stock's
+`.skinHeader.semiTransparent{backdrop-filter:none!important}` beat the plain
+declaration, so scrolled detail content read straight through the home/menu
+icons while the glass gradient still painted. Both `backdrop-filter`s are now
+`!important`; the `.osdHeader` block restates `backdrop-filter: none !important`
+so the video banner still carries no blur.
 
 **Home**
 `#homeTab`, `.homeSectionsContainer`, `.verticalSection.section0…section13`,
@@ -589,8 +604,10 @@ Neither change touches the video gates: `html.af-video` and
   rail plus one `--af-rail-gap` beside it.
 * `padding-top` is `--af-space-6` (24 px), the artboard's own inset, so the first
   row's 1.06 scale and its 3 px ring are not clipped by the page's top edge.
-* Column count is 8, dropping to 6 below 1600 px and 5 below 1280 px. It is ours,
-  not jellyfin-web's nine-step ladder.
+* Column count is 8, dropping to 6 at 1281–1599 px and 5 at 1280 px and below
+  (`@media (max-width: 1280px)`). It is ours, not jellyfin-web's nine-step
+  ladder. The 5-column boundary is `1280px`, not `1279px`, so the 4K-at-300%
+  width lands in the 5-column band — see the verified note below.
 * The rail's `top` is `calc(var(--af-header-height) + 108px)` = 196 px, matching
   the artboard.
 * Unfocused tile labels sit at `.72` here against Home's `.55`. On Home the
@@ -599,6 +616,30 @@ Neither change touches the video gates: `html.af-video` and
 * Stock hides the rail entirely below a 500 px viewport height
   (`@media (max-height:31.25em){.alphaPicker-fixed{display:none!important}}`).
   That is left alone — at that height there is no room for 27 letters.
+
+### Verified on Windows at 300% (2026-09-10)
+
+`window.innerWidth` 1280, `devicePixelRatio` 3, `innerHeight` **698** — a
+maximised window on a 2160 px monitor keeps the ~22 px chrome inset, so the CSS
+viewport is 698 px tall, not 720.
+
+Before this pass the grid rendered **6 columns** at 1280: the ladder was
+`max-width:1599px` → 6 and `max-width:1279px` → 5, and 1280 was one pixel above
+the second. The 5-column boundary moved to `max-width:1280px`, so 1280 now lands
+in the 5-column band (`scrollWidth` = 1280, no horizontal overflow; the TV grid
+`#/tv` is identical). The 1599/1920 bands are unchanged.
+
+**The A-Z rail overflowed the viewport below 916 px of height.** The rail box is
+`top: calc(var(--af-header-height) + 108px)` = 196 px and `bottom: 72px`, so at
+698 px it is 430 px tall; its single `.alphaPickerRow-vertical` has a content
+min-height of 27 × 24 px = **648 px**, so `space-between` never compressed it and
+**T, U, V, W, X, Y, Z sat 146 px below the fold**. Stock's own guard only hides
+the rail below 31.25 em (500 px), which this viewport clears. Fixed with an
+`@media (max-height: 916px)` — the overflow onset, where 648 = viewport − 196 −
+72 — that drops the letters to 15 px (selected 22 px) and the bottom inset to
+`--af-space-4` (16 px). At 698 px the box is 486 px against a 412 px content min,
+74 px of slack, so all 27 are reachable. The 1064/1080 desktop tuning heights
+never reach the query, so the tuned rail is untouched.
 
 ## Item detail
 
@@ -834,6 +875,44 @@ clearfix (`content:""; display:table`) otherwise survived as a flex item at
 `order: 0`. Both are recorded here because they are real traps in
 `display: contents`, not because the sheet still carries them.
 
+#### Verified on Windows at 300% (2026-09-10)
+
+At 1280 CSS px the wrapper is single column as designed (one 1136 px track).
+`#af-detail-panel` takes the stacked treatment and lands at the head of
+`.detailPageSecondaryContainer` — two to three screens down; at this width it is
+a footer, not a facts panel beside the blurb.
+
+The single-column track exposed four things the 640 px column measure had been
+hiding, all fixed in section (o):
+
+* **`.itemTags` had no rule at all**, so the tag wall spanned the full 1136 px
+  track under a 600 px `.overview` — ragged (Dune: Part Two, overview 600×94,
+  tags 1136×48). `.itemGenres`, `.tagline` and `.itemExternalLinks` were
+  uncapped the same way. All four are now `max-width: 600px`, the overview's own
+  measure.
+* **`.itemName` had no `max-width`**, so a long episode title ran to 1017.9 px on
+  one 64 px line and the two-line clamp never engaged. Now capped to the 640 px
+  blurb-column measure (as the credits and track pickers already were).
+* **The action stack no longer cleared the fold on a series.** A movie stack
+  ends at y=690 (fits 698, 8 px spare); a series adds a `btnShuffle` pill and
+  ends at **y=756**, so the `btnUserRating` / `btnMoreCommands` disc row was
+  below the fold. An `@media (max-height: 900px)` tightens the gap
+  (`--af-space-2`), the top margin (22→12 px) and the 56 px pills/discs (→48 px)
+  just enough to bring the series stack back to y=690, matching the movie. The
+  Play/Resume pill was already well clear of the fold; the 1064/1080 desktop
+  tuning heights never reach the query.
+* **The 520 px logo does sit over a single-column page.** The single-column
+  breakpoint is 1599, not 1279, so every width in 1280–1599 shows the logo over
+  one column. It reads fine — the column takes its 164 px top padding and
+  `.itemName` is hidden on movie/series — so the fix was the misleading comment
+  on the `max-width:1279px` logo rule, not the rule.
+
+Not ours: `document.documentElement.scrollWidth` is 3508 on a movie detail (2008
+on a series), because the cast shelf's `.emby-scroller` computes
+`overflow-x: visible` and its ~23 person cards push the *document* sideways —
+with `html.af-detail` removed the same page measures 4978. Far more visible at
+1280 than at 1920.
+
 #### The track pickers
 
 `form.trackSelections` is the source / video / audio / subtitle picker. jf-web
@@ -1055,6 +1134,24 @@ window.__afInstallTheme = () => el;
 ```
 
 Hover a Home tile and the spotlight plus backdrop should come up.
+
+### Real OS input at 300% (2026-09-10)
+
+CDP `Input.dispatchMouseEvent` enters CEF **below** the platform layer, so it
+cannot exercise `src/input/src/click_count.rs` (the double/triple-click
+counter). To drive the Windows double-click path, move the real cursor: a
+DPI-aware PowerShell process (`SetProcessDpiAwarenessContext(-4)`),
+`ClientToScreen(hwnd, {0,0})` for the client origin, then `SetCursorPos` +
+`mouse_event`. On the 4K TV at 300 % the map is `physicalX = cssX * 3`,
+`physicalY = cssY * 3 + 67` while maximised and `cssY * 3` fullscreen. Confirm it
+once with a page-side `mousemove` recorder rather than `elementFromPoint`: move
+to a physical point and read the `clientX`/`clientY` the page saw.
+
+`MouseEvent.detail` on `mousedown` **is** the click count the platform handed
+CEF, so `MAX_CLICKS` can be asserted from the page. Measured: 1 then 2 for two
+presses 200 ms apart at one point, 1 then 1 for presses 800 ms apart, and 1/2/3
+for a triple click — `MAX_CLICKS` holding at 3. Nothing logs the count;
+`log_press` in `src/windows/src/input.rs` prints only the coordinates.
 
 ### Re-checking selectors after a server upgrade
 

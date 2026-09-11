@@ -215,6 +215,15 @@ project uses semantic versioning.
   showed `fullscreen=true` then `fullscreen=false` on every double-click. The
   JS detector is removed; the platform-delivered `dblclick` is now the one
   path.
+- Six theme layout defects at 4K/300% scale (CSS viewport 1280x698). The
+  library grid now shows five columns at 1280px rather than six; the A-Z jump
+  rail fits all twenty-seven letters on short viewports instead of running the
+  last seven off the bottom; the detail-page tag, genre, tagline and
+  external-link rows and the item title are capped to the blurb measure rather
+  than spanning the full track; the series action stack clears the fold; and
+  the header gutter and glass blur apply again (the rule named a jellyfin-web
+  element that does not exist in 10.11.11, and stock's transparent-header rule
+  beat the non-`!important` blur).
 - X11 glue hardened (docs/test-plan.md §6): the SHM allocator rejects a
   non-positive or overflowing extent itself instead of relying on checks two
   modules away; the mpv-proxy no-op rewrite no longer indexes past an empty

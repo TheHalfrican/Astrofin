@@ -331,7 +331,7 @@ html.af-video {
 
 /* ===================================================================== */
 /* (d) Header                                                             */
-/* jf-web 10.11.11: .skinHeader > .header > (.headerLeft | .headerRight)  */
+/* jf-web 10.11.11: .skinHeader > .headerTop > (.headerLeft | .headerRight) */
 /* ===================================================================== */
 
 .skinHeader,
@@ -339,15 +339,19 @@ html.af-video {
 .skinHeader.semiTransparent {
   background: var(--af-glass) !important;
   background-color: transparent !important;
-  -webkit-backdrop-filter: blur(var(--af-glass-blur));
-  backdrop-filter: blur(var(--af-glass-blur));
+  /* Stock ships `.skinHeader.semiTransparent{backdrop-filter:none!important}`
+   * (0,2,0)!, which beats a plain blur here and reads the page straight through
+   * the header — so the blur is !important too. The .osdHeader rule in section
+   * (h) restates `backdrop-filter: none !important` so it still wins over video. */
+  -webkit-backdrop-filter: blur(var(--af-glass-blur)) !important;
+  backdrop-filter: blur(var(--af-glass-blur)) !important;
   border-bottom: 1px solid var(--af-hairline);
   color: var(--af-text-primary);
   transition: background var(--af-dur-page) var(--af-ease-page);
 }
 
 /* Gutter: the design's 72px at >=1600px, shrinking so 1280px stays usable. */
-.skinHeader > .header {
+.skinHeader > .headerTop {
   min-height: var(--af-header-height);
   padding-left: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
   padding-right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
@@ -1191,8 +1195,10 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
     rgba(var(--af-bg-base-rgb), .52) 62%,
     rgba(var(--af-bg-base-rgb), 0) 100%) !important;
   background-color: transparent !important;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  /* !important because section (d)'s base blur is now !important; the OSD
+   * banner is a gradient scrim over mpv and must carry no blur. */
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
   border-bottom: 0;
 }
 .skinHeader.osdHeader .headerLeft .pageTitle {
@@ -1988,7 +1994,9 @@ html.af-library .itemsContainer.vertical-wrap {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
-@media (max-width: 1279px) {
+/* 1280px is the 4K-at-300% width (verified 2026-09-10); the boundary is
+ * max-width:1280px, not 1279px, so 1280 lands in the 5-column band. */
+@media (max-width: 1280px) {
   html.af-library .itemsContainer.vertical-wrap {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -2191,6 +2199,33 @@ html.af-library .alphaPicker .alphaPickerButton.show-focus:focus {
   outline: none;
   color: var(--af-text-primary);
   box-shadow: var(--af-focus-ring);
+}
+
+/* Short viewports (the 4K-at-300% case is 698px tall). The rail box is
+ * top:196px / bottom:72px = 430px tall at 698px, but its 27 letters have a
+ * content min-height of 27 x 24px = 648px, so the row's own `space-between`
+ * cannot compress it and T-Z fall 146px below the fold (measured 2026-09-10).
+ * Overflow begins at 916px of height (648 = viewport - 196 - 72), which is the
+ * query threshold. Shrink the letters and lift the bottom inset so all 27 fit;
+ * at 698px the box is 486px against a 412px min, 74px of slack. Only short
+ * windows reach this — the 1064/1080 desktop tuning heights never do — so the
+ * 1708/1920 rail is untouched. Modelled on section (k)'s max-height query. */
+@media (max-height: 916px) {
+  html.af-library .alphaPicker.alphaPicker-fixed.alphaPicker-vertical {
+    bottom: var(--af-space-4);
+  }
+  html.af-library .alphaPicker .alphaPickerButton {
+    width: 15px;
+    height: 15px;
+    min-width: 15px;
+    font-size: 11px;
+  }
+  html.af-library .alphaPicker .alphaPickerButton.alphaPickerButton-selected {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    font-size: 12px;
+  }
 }
 
 /* --------------------------------------------------------------------- */
@@ -2584,9 +2619,11 @@ html.af-detail .detailLogo {
   z-index: 3;
 }
 
-/* jf-web already hides the logo below 68.75em; this carries that up to the
- * 1280px the two-column layout needs, so between the two there is never a
- * 520px logo over a single-column page. */
+/* jf-web already hides the logo below 68.75em; this carries that up to 1280px.
+ * Note the single-column breakpoint is 1599px, not 1280px: every width in
+ * 1280-1599 DOES show the 520px logo over one column. Verified 2026-09-10 that
+ * this reads fine — the column takes its 164px top padding and .itemName is
+ * hidden on movie/series — so the fix is this comment, not the rule. */
 @media (max-width: 1279px) {
   html.af-detail .detailLogo {
     display: none;
@@ -2717,6 +2754,11 @@ html.af-detail .nameContainer .itemName {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  /* Cap to the blurb column's own 640px measure (as the credits and track
+   * pickers are). Without it, in the single-column layout (<=1599px, track
+   * 1136px) a long episode title ran to 1017px on one 64px line and the 2-line
+   * clamp never engaged (measured 2026-09-10). */
+  max-width: 640px;
   margin: 0;
   font: var(--af-type-display);
   letter-spacing: var(--af-tracking-display);
@@ -2823,11 +2865,13 @@ html.af-detail .trackSelections .selectArrowContainer {
 }
 
 html.af-detail .detailSectionContent .itemGenres {
+  max-width: 600px;
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body);
   color: var(--af-text-muted);
 }
 html.af-detail .detailSectionContent .tagline {
+  max-width: 600px;
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-tile);
   color: var(--af-text-primary);
@@ -2837,6 +2881,18 @@ html.af-detail .detailSectionContent .overview {
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body-lg);
   color: var(--af-text-muted);
+}
+/* The tag wall and the external-links row have no cap of their own, so in the
+ * single-column layout (<=1599px, track 1136px) they spanned the full track
+ * under a 600px overview — ragged (measured 2026-09-10: tags 1136px under a
+ * 600px overview at 1280px). Cap them to the same measure as the prose above.
+ * `.detailSectionContent`-scoped like their siblings; the links row also
+ * appears bare, so it is matched unscoped as well. */
+html.af-detail .detailSectionContent .itemTags,
+html.af-detail .detailSectionContent .itemExternalLinks,
+html.af-detail .itemTags,
+html.af-detail .itemExternalLinks {
+  max-width: 600px;
 }
 /* jf-web clamps the blurb by *adding* .detail-clamp-text and removes it when
  * "Show more" is clicked, so the 3-line clamp has to ride that class or the
@@ -3034,6 +3090,35 @@ html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay.show-focus:focus {
   html.af-detail .itemDetailPage .mainDetailButtons > .btnPlay:hover {
     background: var(--af-accent-primary);
     color: var(--af-on-accent);
+  }
+}
+
+/* Short viewports (the 4K-at-300% case is 698px tall). The order argument above
+ * keeps the whole stack above the fold at 1708x1064 and 1920x1080, and a movie
+ * still fits at 698px (its stack ends at y=690). A series adds a fourth pill
+ * (btnShuffle), which pushes the secondary disc row to y=756 — the Play/Resume
+ * pill is well clear of the fold, but the btnUserRating / btnMoreCommands row
+ * falls 58px below it (measured 2026-09-10). Rather than let the whole stack
+ * scroll, tighten the gap, the top margin and the 56px pills/discs to 48px just
+ * enough to bring the series stack back to y=690, matching the movie. Only
+ * short windows reach this; the 1064/1080 desktop tuning heights never do, so
+ * the signature 56px pills are untouched there. */
+@media (max-height: 900px) {
+  html.af-detail .itemDetailPage .mainDetailButtons {
+    gap: var(--af-space-2);
+    margin: 12px 0 6px;
+  }
+  html.af-detail .itemDetailPage .mainDetailButtons > .detailButton {
+    height: 48px;
+  }
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnDownload,
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnInstantMix,
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnUserRating,
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnSplitVersions,
+  html.af-detail .itemDetailPage .mainDetailButtons > .btnMoreCommands {
+    flex: 0 0 48px;
+    width: 48px;
+    height: 48px;
   }
 }
 
