@@ -1,162 +1,57 @@
-# Handoff: implement the Astrofin Settings page (screen 7), then cut v0.5.0
+# Done-note: the Astrofin Settings page and the 0.5.0 release
 
-Prep written at the end of the 2026-09-10 Windows session for a fresh session
-to pick up. Two parts, in order: **implement the Settings restyle**, then **cut
-the 0.5.0 release including it** (the owner chose Settings-first). Read this top
-to bottom.
+Written as a handoff at the end of the 2026-09-10 Windows session; executed
+in the next session on 2026-09-10/11 and shrunk to this note. The living
+description of the page is `docs/design/theme-injection.md` under "Settings".
 
-> Model note: the previous session was downgraded Fable 5.1 → Opus 4.8 mid-way
-> from a false flag; nothing about the plan depends on the model. Delegate the
-> bulky CSS/JS to Opus 5 subagents per the project rule; keep the design and JS
-> architecture decisions in the main session.
+## What landed
 
-## State of `main` at handoff
+- `83cec65` **feat(web): Astrofin Settings page** — design canvas screen 7
+  implemented: `client-settings.js` stamps `data-af-setting` /
+  `data-af-section` / `data-af-applies` hooks, toggles `html.af-settings` and
+  fires `af-settings-show` / `af-settings-hide` on `document`; the new
+  `src/web/astrofin-settings.js` (injected right after `astrofin-theme.js`)
+  builds the six-section rail (Server / Playback / Video mode / Audio /
+  Advanced / About), moves the stock controls into glass panels by a key→panel
+  map, draws the four-state video-mode segmented switch over the real
+  `<select>` (which stays the source of truth), the LIVE/RESTART tags, the
+  floating "Restart to apply N changes" pill and the now-playing resolve card
+  (`_vmApply` records its last resolution on `window.__afVideoModeResolved`).
+  Device Name moved under Server beside the read-only saved address; "Reset
+  Saved Server" became "Sign out of this server". +52 JS tests, test-ratio
+  2.27.
+- `2cc6e6c` **release: 0.5.0** — version bump and changelog roll.
+- `7c2bfd1` **fix: Windows dropdowns open in-page; settings chevron and menu
+  highlight** — found by the owner's live test of the page. No `<select>` had
+  ever opened on Windows (stock jellyfin-web pages included): CEF's composited
+  OSR popup is torn down by Chromium in the same UI-thread turn it opens
+  (`OnPopupShow(true)`, `OnPopupSize`, `OnPopupShow(false)`, measured with a
+  debug line on every step and with real and synthetic presses). Windows now
+  returns `MenuDelivery::Page` and `select-menu.js` draws the list in-page as
+  X11 does, tokenised with literal fallbacks. Also the select chevron centred
+  (stock `.selectArrow{margin-top:1.2em}`) and the user Settings menu
+  hover/focus following the pill radius with the token focus ring.
+- Tag `v0.5.0` = `7c2bfd1`; installers `Astrofin-0.5.0-x64-setup.exe`
+  (a22bb544…) and `Astrofin-0.5.0-x64.msi` (39406ef2…, ProductCode
+  `{6D5D713B-961D-4BC7-A1FF-05E922EF070B}`) built from it on the PC into
+  `dist/` with `SHA256SUMS.txt` appended; main then moved to `0.6.0-dev`.
 
-- HEAD is the UI-polish commit `feat(web): detail-page poster + backdrop, and
-  library-tab polish` (pushed to both remotes; CI expected green — check
-  `gh run list -R TheHalfrican/Astrofin -L 8`). Everything from 2026-09-10 is
-  in `CHANGELOG.md` `[Unreleased]`.
-- Version is `0.5.0-dev` in `src/Cargo.toml`. The last release was 0.4.0
-  (2026-09-09). The 0.5.0 release is Part 2 below and has NOT been done.
-- The Settings page in the app is still **stock jellyfin-web** — only the base
-  tokens touch it (a glass `.infoBanner`, dark selects). The artboard has not
-  been implemented.
+## Lessons
 
-## Part 1 — implement the Settings restyle
+- A CDP verification that sets `selectedIndex` programmatically never
+  exercises the popup path; click the control with `Input.dispatchMouseEvent`
+  and screenshot the open list.
+- The staging copy in `build.ps1` fails if `build\astrofin.exe` is running;
+  close the app before rebuilding.
+- Tag after the last fix, not at the version bump: the tag must point at the
+  commit the installers were built from.
 
-### The target
+## Open, not done here
 
-The artboard is `docs/design/canvas/Settings.dc.html` (on the "Astrofin UI"
-canvas, page-1, screen 7). Open it to see the intended design. In words:
-
-- A left **section rail** (Server / Playback / Video mode / Audio / Advanced /
-  About) with an icon per row; clicking a row shows that section's glass panel
-  on the right. One section visible at a time, PS5-style, not one long scroll.
-- Each section is a **glass panel** (the `--af-glass` vocabulary) with rows of
-  label + description + control, hairline dividers between rows.
-- **Video mode is the headline**: a four-state **segmented switch** (Auto /
-  Live-Action / Animation / Off), not a `<select>`, with a **now-playing
-  resolve card** that shows what Auto resolved to and which rule won
-  (tag → genre → library → default) as a constellation line.
-- Each control is tagged **LIVE** or **RESTART** (only `videoMode` is live;
-  everything else needs a restart). The restart banner becomes a per-control
-  tag plus a floating "Restart to apply N changes" pill, instead of one banner.
-- Owner decisions baked into the artboard: the four-state switch (not the
-  brief's two-option Movies/Anime toggle); **Device name** moved under Server;
-  "Reset Saved Server" reframed as **"Sign out of this server"** with the saved
-  URL and connection kind shown; **About** mirrors the existing `app://` About
-  layer rather than duplicating it.
-
-### The starting point (stock page)
-
-Confirmed live 2026-09-10 (screenshot in the session scratchpad, DOM in
-`settings-dom.json`). The page is built by `showSettingsPage()` in
-`src/web/client-settings.js`, triggered by `window._openClientSettings()`
-(also the user-menu "Client settings" item). It appends
-`div#clientSettingsPage … > .settingsContainer.padded-left.padded-right.padded-bottom-page > form`
-into `.mainAnimatedPages`, hides the other pages, and tears down on
-`HISTORY_UPDATE`. The form is generated by `buildSettingsForm(form)` from
-`window.jmpInfo.settingsDescriptions`, in six `.verticalSection`s:
-
-| Section    | Fields (in order)                                                        |
-|------------|--------------------------------------------------------------------------|
-| Playback   | Hardware Decoding (select), Video mode (select), Transcode warning (select) |
-| Audio      | Audio Passthrough (textarea/codecList), Exclusive Audio Output (checkbox), Audio Channel Layout (select) |
-| Transcode  | Force Transcoding (checkbox)                                             |
-| Advanced   | Window Decorations (select, only if >1 available), Transparent Titlebar (checkbox, macOS), Hide Scrollbar (checkbox), Device Name (text), Log Level (select) |
-| MPV config | "Open mpv config directory" (button)                                     |
-| Server     | "Reset Saved Server" (button, only when a URL is saved)                  |
-
-The `.infoBanner` says "Changes take effect after restarting the application."
-Controls are jellyfin-web widgets (`select[is=emby-select]`, `.emby-input`,
-`input[is=emby-checkbox]`, `.fieldDescription`). Writes go through
-`window.api.settings.setValue(section, key, value)` →
-`jmpNative.setSettingValue`; only `videoMode` applies mid-playback.
-
-### Key decision — stamp stable hooks in `client-settings.js`
-
-The generated control IDs are non-semantic (`embyselect0…`), so the theme
-cannot target fields reliably by ID. **We own `client-settings.js`**, so the
-clean fix is to stamp stable attributes when each field is built. In
-`buildSettingsForm`, right after `const container = document.createElement('div')`
-(≈ line 196), add:
-
-```js
-container.setAttribute('data-af-setting', setting.key);
-container.setAttribute('data-af-section', section);
-```
-
-and give each `group` a `data-af-section` too. Then the theme CSS/JS targets
-`[data-af-setting="videoMode"]`, `[data-af-section="server"]`, etc. This is a
-small, tested change and the foundation for everything below.
-
-### Recommended approach
-
-Gate everything on `html.af-settings`, set while `#clientSettingsPage` is
-mounted (add the class in `showSettingsPage`/teardown, or observe the node in
-`astrofin-theme.js` the way the other screens are gated). Then:
-
-1. **CSS (`astrofin-theme.css`)** under `html.af-settings`: lay the container
-   out as rail + panel (grid), glass-panel each `.verticalSection`, style rows
-   (label/`.fieldDescription`/control) to the token vocabulary, and add the
-   LIVE/RESTART tags via `[data-af-setting]` hooks. Most of the sections are a
-   straight CSS reskin once the hooks exist.
-2. **JS (`astrofin-theme.js`)** for the three behavioural pieces:
-   - the **section rail**: build it from the `data-af-section` groups, show one
-     panel at a time (toggle a class), default to Playback (or Video mode).
-   - the **video-mode segmented switch**: render a 4-segment control bound to
-     the real `videoMode` `<select>` — click a segment → set the select value
-     and dispatch `change` (the select stays the source of truth; do not
-     bypass `setValue`).
-   - the **restart pill**: count RESTART-tagged changes and show/hide the pill.
-   - Optional/deferrable: the **now-playing resolve card** (needs the resolved
-     mode + reason from `video-mode-resolver.js`/`jmpInfo`; only meaningful when
-     a title is loaded) and the **Server** URL/connection display (read the
-     saved server from `window.ApiClient`). Ship these last or as a follow-up
-     if time is short — the rail + panels + segmented switch are the core.
-3. **Tests**: `src/web/client-settings.test.js` exists — extend it for the
-   `data-af-*` hooks; add tests for the new theme JS logic (rail toggle,
-   segmented-switch → select sync) in the node:test style with the fakes in
-   `src/web/test/`. Keep `cargo xtask test-ratio --check` above the floor.
-4. **Docs**: a `theme-injection.md` subsection under a new "Settings" heading
-   (selectors depended on, the `data-af-*` hooks, the rail/segmented-switch JS,
-   anything stock had to be answered).
-
-### Verify
-
-Build (`pwsh -File dev\windows\build.ps1` — the theme is `include_str!`-embedded
-so a rebuild is required per change), relaunch with `--remote-debug-port 9223`,
-and drive over CDP (recipe in `theme-injection.md` Testing). Open the page with
-`window._openClientSettings()`. Check every section renders in its panel, the
-rail switches, the segmented switch writes `videoMode` live, RESTART controls
-show the pill, and nothing overflows at 1280×698 (the 4K-at-300% viewport).
-Screenshot each section. `just fmt` + `just lint` + `just test-js` clean.
-
-## Part 2 — cut v0.5.0 (after Settings lands)
-
-Follow the release flow (see `CLAUDE.md` "Release flow" and how 0.2–0.4 went):
-
-1. `src/Cargo.toml` workspace `version` `0.5.0-dev` → `0.5.0`; `cargo update`
-   to bump the lock (or the documented lock-bump).
-2. `CHANGELOG.md`: rename `[Unreleased]` to `## [0.5.0] - <date>` (it already
-   holds the whole 2026-09-10 body — security pass, library grid, item detail,
-   300% fixes, double-click, config warnings, poster/backdrop, toolbar, and the
-   Settings restyle you just added; add a Settings line). Start a fresh empty
-   `[Unreleased]`.
-3. Commit, push both remotes, confirm CI green, then `git tag v0.5.0` and push
-   the tag.
-4. Build installers from the staged tree: `just package` (→
-   `dev/windows/package.ps1`, NSIS setup.exe + WiX MSI into `dist/`). Generate
-   `SHA256SUMS` by hand as before.
-5. Move `main` to `0.6.0-dev` (`src/Cargo.toml` + lock), commit, push.
-6. Update the markdowns: shrink this doc to a done-note, drop the CLAUDE.md
-   pointer, and note the release in `CLAUDE.md` Release flow.
-
-## Files you will touch
-
-`src/web/client-settings.js` (data hooks), `src/web/astrofin-theme.css` (gated
-styles), `src/web/astrofin-theme.js` (rail / segmented switch / pill / cards),
-`src/web/client-settings.test.js` (+ any new `.test.js`),
-`docs/design/theme-injection.md` (Settings subsection),
-`docs/design/canvas/Settings.dc.html` (reference only), then the release files
-in Part 2.
+- macOS/Wayland host-menu path: a late `popupOptions` reply can leak the
+  previous popup's options into the next one (seen in logs while
+  instrumenting; untestable from the PC).
+- `--cache-dir` does not redirect the Windows log; `log_dir_path()` in
+  `src/paths/src/imp_windows.rs` hard-codes `%LOCALAPPDATA%\astrofin\Logs`.
+- The X11 look of the tokenised `select-menu.js` was not eyeballed.
+- Next design screens: admin dashboard light pass, component sheet + logo.
