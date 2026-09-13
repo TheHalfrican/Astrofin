@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use jfn_playback::shutdown::jfn_shutting_down;
 
-use crate::client_logic::after_created;
+use crate::client_logic::{after_created, zoom_level_for_factor};
 
 use super::{Inner, STATE_NORMAL, STATE_PENDING_RESET, STATE_RECREATING, platform_ops, tasks};
 
@@ -109,6 +109,18 @@ impl Inner {
             }
             return;
         }
+
+        // The saved interface scale, applied before the layer is published so
+        // the first paint is already at the user's size. Deliberately below
+        // the check above — a browser that is about to be closed again must
+        // not be touched — and deliberately for every layer, not just the web
+        // one: `settings.json` is read before any browser exists, so whatever
+        // was created here is entitled to the same scale. The live change
+        // from the settings page goes the other way, through
+        // `business_web::jfn_web_set_interface_scale`.
+        self.cef_set_zoom_level(zoom_level_for_factor(jfn_config::interface_scale_factor(
+            &jfn_config::interface_scale(),
+        )));
 
         let g = self.created_callback.lock();
         if let Some(f) = g.as_ref() {

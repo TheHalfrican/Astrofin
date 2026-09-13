@@ -98,6 +98,10 @@
                 forceTranscoding: !!_savedSettings.forceTranscoding
             },
             advanced: {
+                // Empty means never chosen; the Rust side reads that as 1.0.
+                // Not coerced to '1' here: the UI has to be able to show the
+                // stored value, and the native parser owns the fallback.
+                interfaceScale: _savedSettings.interfaceScale || '1',
                 transparentTitlebar: _savedSettings.transparentTitlebar !== false,
                 windowDecorations: __WINDOW_DECORATIONS__,
                 hideScrollbar: _savedSettings.hideScrollbar !== false,
@@ -137,6 +141,14 @@
                 { key: 'forceTranscoding', displayName: 'Force Transcoding', help: 'Always request a transcoded stream from the server, even when direct play would work.' }
             ],
             advanced: [
+                { key: 'interfaceScale', displayName: 'Interface Scale', help: 'Size of the whole interface, applied live. This is Astrofin\u2019s own zoom, not Windows display scaling \u2014 use it when a display\u2019s system scaling suits everything else but makes Astrofin too large. Below 100% the app also gains room: at 80% a 1280-wide screen lays out as if it were 1600.', options: [
+                    { value: '0.65', title: '65% \u2014 smallest' },
+                    { value: '0.75', title: '75%' },
+                    { value: '0.85', title: '85%' },
+                    { value: '1', title: '100% (default)' },
+                    { value: '1.15', title: '115%' },
+                    { value: '1.3', title: '130% \u2014 largest' }
+                ]},
                 { key: 'hideScrollbar', displayName: 'Hide Scrollbar', help: 'Hide scrollbars throughout the app. Scrolling with the wheel, trackpad, and keyboard still works. Requires restart.' },
                 { key: 'deviceName', displayName: 'Device Name', help: 'Identifies this machine to the server. Leave blank to use the system hostname.', inputType: 'text', maxLength: 64, placeholder: _savedSettings.deviceNameDefault },
                 { key: 'logLevel', displayName: 'Log Level', help: 'Set the application log verbosity level.', options: [

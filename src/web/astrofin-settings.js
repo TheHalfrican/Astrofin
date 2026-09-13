@@ -111,6 +111,7 @@
             audioPassthrough: 'audio',
             audioChannels: 'audio',
             audioExclusive: 'audio',
+            interfaceScale: 'advanced',
             windowDecorations: 'advanced',
             transparentTitlebar: 'advanced',
             hideScrollbar: 'advanced',

@@ -226,6 +226,33 @@ pub(crate) fn windowless_frame_rate(layer: i32, default: i32) -> i32 {
     if fr > 0 { fr } else { 60 }
 }
 
+// ---------------------------------------------------------------------------
+// Interface scale
+// ---------------------------------------------------------------------------
+
+/// The ratio between two of Chromium's zoom steps. Its zoom level is a count
+/// of these, so a factor is `1.2^level`.
+const ZOOM_STEP: f64 = 1.2;
+
+/// CEF's zoom level for a UI scale factor.
+///
+/// `set_zoom_level` takes Chromium's *logarithmic* scale — 0.0 is 100 % and
+/// each whole step is 20 % — so the linear factor the settings page works in
+/// has to be converted: `ln(factor) / ln(1.2)`. Page zoom is deliberately
+/// what the scale drives, not a CSS transform: Blink lays the page out at the
+/// zoomed size, so every measurement the theme's JS takes stays truthful,
+/// which a `zoom`/`scale` on the document breaks.
+///
+/// A factor of 1.0 gives exactly 0.0 — `ln(1.0)` is zero, so the division
+/// cannot drift — and a factor that is not a positive, finite number is not a
+/// scale at all and also maps to 0.0, rather than handing CEF an infinity.
+pub(crate) fn zoom_level_for_factor(factor: f64) -> f64 {
+    if !factor.is_finite() || factor <= 0.0 {
+        return 0.0;
+    }
+    factor.ln() / ZOOM_STEP.ln()
+}
+
 /// What `OnAfterCreated` does with a browser, given the layer's reset state.
 ///
 /// A reset is a close followed by a create, and the create is deferred to
@@ -757,6 +784,63 @@ mod tests {
     fn a_browser_never_starts_at_a_non_positive_frame_rate() {
         assert_eq!(windowless_frame_rate(0, 0), 60);
         assert_eq!(windowless_frame_rate(-1, -1), 60);
+    }
+
+    /// The one value that must be exact: a UI that has never been scaled has
+    /// to sit at CEF's own 100 %, not at a rounding of it, or the saved
+    /// geometry and the hit targets drift on every launch.
+    #[test]
+    fn a_full_size_interface_leaves_the_zoom_level_at_exactly_zero() {
+        assert_eq!(zoom_level_for_factor(1.0), 0.0);
+        assert!(zoom_level_for_factor(1.0).is_sign_positive(), "not -0.0");
+    }
+
+    /// Chromium's own steps: each whole level is a factor of 1.2.
+    #[test]
+    fn a_whole_zoom_step_is_a_fifth_larger() {
+        assert!((zoom_level_for_factor(1.2) - 1.0).abs() < 1e-12);
+        assert!((zoom_level_for_factor(1.0 / 1.2) + 1.0).abs() < 1e-12);
+        assert!((zoom_level_for_factor(1.44) - 2.0).abs() < 1e-12);
+    }
+
+    /// The values the settings page offers, against `ln(f) / ln(1.2)` worked
+    /// out by hand — so a sign flip or a swapped base cannot pass.
+    #[test]
+    fn every_offered_scale_maps_to_its_own_zoom_level() {
+        for (factor, want) in [
+            (0.65, -2.362_765),
+            (0.75, -1.577_883),
+            (0.85, -0.891_386),
+            (1.15, 0.766_568),
+            (1.3, 1.439_019),
+        ] {
+            let got = zoom_level_for_factor(factor);
+            assert!((got - want).abs() < 1e-5, "{factor} -> {got}, want {want}");
+        }
+    }
+
+    /// Smaller is negative, larger is positive, and the mapping is monotonic
+    /// across the whole clamped range.
+    #[test]
+    fn a_smaller_scale_zooms_out_and_a_larger_one_zooms_in() {
+        assert!(zoom_level_for_factor(0.5) < 0.0);
+        assert!(zoom_level_for_factor(2.0) > 0.0);
+        let mut last = f64::NEG_INFINITY;
+        for step in 5..=20 {
+            let level = zoom_level_for_factor(f64::from(step) / 10.0);
+            assert!(level > last, "not monotonic at {step}");
+            last = level;
+        }
+    }
+
+    /// CEF is handed a number it can use whatever arrives: an infinity or a
+    /// NaN would be a zoom level Chromium has to interpret, and a factor of
+    /// zero or below has no logarithm at all.
+    #[test]
+    fn an_unusable_factor_falls_back_to_full_size() {
+        for factor in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(zoom_level_for_factor(factor), 0.0, "{factor}");
+        }
     }
 
     #[test]

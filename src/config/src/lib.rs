@@ -79,6 +79,70 @@ fn settings_size_ok(len: u64) -> bool {
     len <= MAX_SETTINGS_BYTES
 }
 
+/// Bounds on a stored `interfaceScale`. The settings page offers 0.65..=1.3;
+/// the wider range is what a hand-edited file may ask for. Below the first
+/// the UI is too small to hit with a remote, above the second a single card
+/// fills the screen — and CEF's own zoom range is wider than either, so
+/// nothing but this clamp keeps the app usable.
+const INTERFACE_SCALE_MIN: f64 = 0.5;
+const INTERFACE_SCALE_MAX: f64 = 2.0;
+
+/// What an unset — or unusable — `interfaceScale` resolves to: the size the
+/// app has always rendered at.
+const INTERFACE_SCALE_DEFAULT: f64 = 1.0;
+
+/// What an `interfaceScale` read from the file resolves to. Same three-way
+/// shape as [`ScaleCheck`], because the same two things can be wrong with a
+/// hand-edited value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InterfaceScaleCheck {
+    /// Usable as written.
+    Ok(f64),
+    /// A real number, but outside the range; pulled to the nearer end.
+    Clamped(f64),
+    /// Not a scale at all: empty (which is how "never chosen" is spelled),
+    /// unparseable, NaN or an infinity. Resolves to
+    /// [`INTERFACE_SCALE_DEFAULT`] rather than clamping to a bound.
+    Unusable,
+}
+
+/// Validate the `interfaceScale` the page — or a hand-edited file — offers.
+///
+/// The value crosses IPC as a string, like every other setting, so parsing is
+/// part of validating it. Parsing is strict: no surrounding whitespace, no
+/// thousands separator, no percent sign.
+fn check_interface_scale(raw: &str) -> InterfaceScaleCheck {
+    let Ok(v) = raw.parse::<f64>() else {
+        return InterfaceScaleCheck::Unusable;
+    };
+    if !v.is_finite() {
+        return InterfaceScaleCheck::Unusable;
+    }
+    if v < INTERFACE_SCALE_MIN {
+        return InterfaceScaleCheck::Clamped(INTERFACE_SCALE_MIN);
+    }
+    if v > INTERFACE_SCALE_MAX {
+        return InterfaceScaleCheck::Clamped(INTERFACE_SCALE_MAX);
+    }
+    InterfaceScaleCheck::Ok(v)
+}
+
+/// The UI scale factor a stored `interfaceScale` resolves to.
+///
+/// Pure, and the one place the string becomes a number: the empty string
+/// ("never chosen"), a value that is not a number at all, a NaN and an
+/// infinity all resolve to [`INTERFACE_SCALE_DEFAULT`], while a value that
+/// really is a number is clamped into
+/// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]. The caller turns the
+/// factor into CEF's logarithmic zoom level; nothing here knows about CEF.
+#[must_use]
+pub fn interface_scale_factor(value: &str) -> f64 {
+    match check_interface_scale(value) {
+        InterfaceScaleCheck::Ok(v) | InterfaceScaleCheck::Clamped(v) => v,
+        InterfaceScaleCheck::Unusable => INTERFACE_SCALE_DEFAULT,
+    }
+}
+
 // =====================================================================
 // Load notices
 // =====================================================================
@@ -189,6 +253,11 @@ struct SettingsData {
     force_transcoding: bool,
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
+    /// The UI scale the browser zoom is driven from, as the string the
+    /// settings page sends (`0.65` .. `1.3`). Empty means "never chosen";
+    /// [`interface_scale_factor`] resolves that, and anything unusable, to
+    /// [`INTERFACE_SCALE_DEFAULT`].
+    interface_scale: String,
 }
 
 impl Default for SettingsData {
@@ -211,6 +280,7 @@ impl Default for SettingsData {
             force_transcoding: false,
             window_decorations: None,
             hide_scrollbar: true,
+            interface_scale: String::new(),
         }
     }
 }
@@ -298,6 +368,12 @@ struct SettingsFile {
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     hide_scrollbar: Option<bool>,
 
+    // A string, not a number: every setting crosses IPC as a string, and the
+    // file holds what the page sent. `check_interface_scale` is what turns it
+    // into a factor.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    interface_scale: Option<String>,
+
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     device_name: Option<String>,
 }
@@ -376,6 +452,9 @@ struct CliSettings<'a> {
     force_transcoding: bool,
 
     hide_scrollbar: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interface_scale: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     device_name: Option<&'a str>,
@@ -480,6 +559,33 @@ impl SettingsData {
         if let Some(v) = file.hide_scrollbar {
             self.hide_scrollbar = v;
         }
+        if let Some(v) = file.interface_scale {
+            // Stored verbatim, like `videoMode`: the resolution lives in
+            // `interface_scale_factor` so the page can read back exactly what
+            // it wrote. The notice is for the hand-edited case — the page
+            // only ever sends one of its own six values. Debug-formatted,
+            // since a file can put a newline inside the string.
+            if !v.is_empty() {
+                match check_interface_scale(&v) {
+                    InterfaceScaleCheck::Ok(_) => {}
+                    InterfaceScaleCheck::Clamped(f) => note(
+                        NoticeLevel::Warn,
+                        format!(
+                            "interfaceScale {v:?} is outside \
+                             {INTERFACE_SCALE_MIN}..={INTERFACE_SCALE_MAX}, using {f}"
+                        ),
+                    ),
+                    InterfaceScaleCheck::Unusable => note(
+                        NoticeLevel::Warn,
+                        format!(
+                            "interfaceScale {v:?} is not a usable scale, \
+                             using {INTERFACE_SCALE_DEFAULT}"
+                        ),
+                    ),
+                }
+            }
+            self.interface_scale = v;
+        }
     }
 
     fn to_file(&self) -> SettingsFile {
@@ -516,6 +622,8 @@ impl SettingsData {
             force_transcoding: self.force_transcoding.then_some(true),
             window_decorations: self.window_decorations,
             hide_scrollbar: (!self.hide_scrollbar).then_some(false),
+            interface_scale: (!self.interface_scale.is_empty())
+                .then(|| self.interface_scale.clone()),
             device_name: (!self.device_name.is_empty()).then(|| self.device_name.clone()),
         }
     }
@@ -538,6 +646,8 @@ impl SettingsData {
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
             force_transcoding: self.force_transcoding,
             hide_scrollbar: self.hide_scrollbar,
+            interface_scale: (!self.interface_scale.is_empty())
+                .then_some(self.interface_scale.as_str()),
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
             hwdec_options: hwdec_opts,
@@ -797,6 +907,11 @@ pub fn video_mode_migrated() -> bool {
 // start (`off` | `cpu` | `any`). Empty means "never chosen"; the web UI
 // resolves that to `cpu`.
 string_accessors!(transcode_notice, set_transcode_notice, transcode_notice);
+// interface_scale: the UI scale CEF's browser zoom is driven from, as the
+// string the settings page sends. Empty means "never chosen"; resolve it (and
+// anything a hand-edited file put there) with [`interface_scale_factor`]
+// rather than parsing it at the call site.
+string_accessors!(interface_scale, set_interface_scale, interface_scale);
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
@@ -941,9 +1056,10 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, MAX_SETTINGS_BYTES, ScaleCheck, SettingsData, SettingsFile, WINDOW_SCALE_MAX,
-        WINDOW_SCALE_MIN, WindowDecorations, check_window_scale, default_device_name,
-        normalize_device_name, settings_size_ok,
+        BTreeMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, InterfaceScaleCheck,
+        MAX_SETTINGS_BYTES, ScaleCheck, SettingsData, SettingsFile, WINDOW_SCALE_MAX,
+        WINDOW_SCALE_MIN, WindowDecorations, check_interface_scale, check_window_scale,
+        default_device_name, interface_scale_factor, normalize_device_name, settings_size_ok,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -1028,6 +1144,7 @@ mod tests {
             force_transcoding: true,
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
+            interface_scale: "0.85".into(),
         };
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
         assert_eq!(
@@ -1056,11 +1173,13 @@ mod tests {
                 "forceTranscoding",
                 "windowDecorations",
                 "hideScrollbar",
+                "interfaceScale",
                 "deviceName",
             ]
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
         assert!(text.contains(r#""windowScale":1.5"#));
+        assert!(text.contains(r#""interfaceScale":"0.85""#));
     }
 
     #[test]
@@ -1138,6 +1257,7 @@ mod tests {
             transcode_notice: "any".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
+            interface_scale: "0.75".into(),
             ..SettingsData::default()
         };
         let text = data.cli_json(&["no", "auto"]);
@@ -1151,6 +1271,7 @@ mod tests {
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
+                "interfaceScale",
                 "deviceName",
                 "deviceNameDefault",
                 "hwdecOptions",
@@ -1161,6 +1282,9 @@ mod tests {
         assert!(text.contains(r#""videoMode":"live-action""#));
         assert!(text.contains(r#""videoModeLibraries":{"lib1":"animation"}"#));
         assert!(text.contains(r#""transcodeNotice":"any""#));
+        // The settings page reads the scale back out of `jmpInfo` to draw the
+        // switch, so the raw string has to reach it unresolved.
+        assert!(text.contains(r#""interfaceScale":"0.75""#));
         assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,
@@ -1427,6 +1551,106 @@ mod tests {
         }
     }
 
+    // =================================================================
+    // Interface scale
+    // =================================================================
+
+    /// The six values the settings page offers, each as the factor the zoom
+    /// is computed from. `1` is spelled without a decimal point on the wire.
+    #[test]
+    fn every_offered_interface_scale_resolves_to_its_own_factor() {
+        for (raw, want) in [
+            ("0.65", 0.65),
+            ("0.75", 0.75),
+            ("0.85", 0.85),
+            ("1", 1.0),
+            ("1.15", 1.15),
+            ("1.3", 1.3),
+        ] {
+            assert!(
+                (interface_scale_factor(raw) - want).abs() < 1e-12,
+                "{raw} -> {}",
+                interface_scale_factor(raw)
+            );
+        }
+    }
+
+    /// Empty is how "never chosen" is spelled, and it must render at exactly
+    /// the size the app had before the setting existed.
+    #[test]
+    fn an_unset_interface_scale_is_full_size() {
+        assert_eq!(interface_scale_factor(""), 1.0);
+        assert_eq!(interface_scale_factor("1"), 1.0);
+        assert_eq!(interface_scale_factor("1.0"), 1.0);
+    }
+
+    /// Anything that is not a number resolves to full size rather than to a
+    /// bound: a typo in a hand-edited file must not leave the UI tiny.
+    #[test]
+    fn an_unparseable_interface_scale_falls_back_to_full_size() {
+        for raw in [
+            "abc", "1,3", " 1", "1 ", "130%", "1.3x", "--1", "", "1.2.3", "\u{2028}", "0x1", "1e",
+            "null",
+        ] {
+            assert_eq!(interface_scale_factor(raw), 1.0, "{raw:?}");
+            assert_eq!(check_interface_scale(raw), InterfaceScaleCheck::Unusable);
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_interface_scale_is_pulled_to_the_nearer_end() {
+        for raw in ["0.49", "0.1", "0", "-1", "-1e300"] {
+            assert_eq!(interface_scale_factor(raw), INTERFACE_SCALE_MIN, "{raw}");
+            assert_eq!(
+                check_interface_scale(raw),
+                InterfaceScaleCheck::Clamped(INTERFACE_SCALE_MIN)
+            );
+        }
+        for raw in ["2.01", "3", "1e300"] {
+            assert_eq!(interface_scale_factor(raw), INTERFACE_SCALE_MAX, "{raw}");
+            assert_eq!(
+                check_interface_scale(raw),
+                InterfaceScaleCheck::Clamped(INTERFACE_SCALE_MAX)
+            );
+        }
+        // Both bounds are inside the range, not outside it.
+        assert_eq!(interface_scale_factor("0.5"), INTERFACE_SCALE_MIN);
+        assert_eq!(interface_scale_factor("2"), INTERFACE_SCALE_MAX);
+        assert_eq!(
+            check_interface_scale("0.5"),
+            InterfaceScaleCheck::Ok(INTERFACE_SCALE_MIN)
+        );
+        assert_eq!(
+            check_interface_scale("2"),
+            InterfaceScaleCheck::Ok(INTERFACE_SCALE_MAX)
+        );
+    }
+
+    /// `"NaN"` and `"inf"` parse as `f64` — Rust's `FromStr` accepts both —
+    /// so the finiteness check, not the parse, is what catches them. An
+    /// infinity reaching the zoom conversion would be a level CEF cannot use.
+    #[test]
+    fn a_non_finite_interface_scale_falls_back_to_full_size() {
+        for raw in ["NaN", "nan", "inf", "-inf", "infinity", "-infinity"] {
+            assert_eq!(check_interface_scale(raw), InterfaceScaleCheck::Unusable);
+            assert_eq!(interface_scale_factor(raw), 1.0, "{raw}");
+        }
+    }
+
+    /// Stored as written, like `videoMode`: the page reads back what it sent.
+    #[test]
+    fn an_interface_scale_is_stored_verbatim_and_round_trips() {
+        let data = loaded(r#"{"interfaceScale":"0.65"}"#);
+        assert_eq!(data.interface_scale, "0.65");
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""interfaceScale":"0.65""#), "{text}");
+        assert_eq!(loaded(&text).interface_scale, "0.65");
+
+        // Unset is absent on save, not an empty string.
+        let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
+        assert!(!text.contains("interfaceScale"), "{text}");
+    }
+
     #[test]
     fn settings_size_ok_admits_a_real_file_and_refuses_a_grown_one() {
         assert!(settings_size_ok(0));
@@ -1489,6 +1713,41 @@ mod tests {
             notices_for(r#"{"serverUrl":"http://host","windowScale":1.5}"#).is_empty(),
             "a file with nothing wrong with it must not produce a line"
         );
+    }
+
+    /// The page only ever sends one of its own six values, so a notice here
+    /// means a hand-edited file — and the value is still stored verbatim.
+    #[test]
+    fn a_clamped_interface_scale_buffers_a_warning_for_the_log() {
+        let notices = notices_for(r#"{"interfaceScale":"8"}"#);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].level, NoticeLevel::Warn);
+        assert!(notices[0].message.contains(r#""8""#), "{notices:?}");
+        assert!(notices[0].message.contains("using 2"), "{notices:?}");
+    }
+
+    #[test]
+    fn an_unusable_interface_scale_buffers_a_warning_for_the_log() {
+        let notices = notices_for(r#"{"interfaceScale":"huge"}"#);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].message.contains("not a usable scale"),
+            "{notices:?}"
+        );
+        // Debug-formatted, so a newline in the file cannot forge a log line.
+        let notices = notices_for("{\"interfaceScale\":\"a\\nWARN forged\"}");
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(!notices[0].message.contains('\n'), "{notices:?}");
+    }
+
+    /// Empty is the documented "never chosen", not a broken value.
+    #[test]
+    fn an_empty_interface_scale_is_not_complained_about() {
+        assert!(
+            notices_for(r#"{"interfaceScale":""}"#).is_empty(),
+            "an unset scale must not produce a line"
+        );
+        assert!(notices_for(r#"{"interfaceScale":"1.3"}"#).is_empty());
     }
 
     #[test]
@@ -1678,6 +1937,7 @@ mod tests {
             force_transcoding: true,
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
+            interface_scale: "1.15".into(),
         };
 
         assert!(save_data(&path, &data));
@@ -1707,6 +1967,7 @@ mod tests {
             Some(WindowDecorations::ServerThemed)
         );
         assert!(!back.hide_scrollbar);
+        assert_eq!(back.interface_scale, "1.15");
     }
 
     /// The file is replaced, not written through: a symlink planted where

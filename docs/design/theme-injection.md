@@ -1384,10 +1384,52 @@ sheet and the decorator address the page through attributes
 | `data-af-action` | the two buttons | `open-config-dir`, `reset-server` |
 | `data-af-notice` | the `.infoBanner` | — |
 
-`data-af-applies` is a statement about the native side, not a style: only
-`videoMode` is pushed into the running mpv (`src/playback/src/video_mode.rs`);
-every other setting is read at boot. It is the single source for both the
-per-row tag and the pill's count.
+`data-af-applies` is a statement about the native side, not a style. Two
+settings are pushed into the running app — `videoMode` into mpv
+(`src/mpv/src/video_mode.rs`) and `interfaceScale` into CEF's page zoom
+(`business_web::jfn_web_set_interface_scale`) — and every other setting is read
+at boot. The set lives in `LIVE_SETTINGS` in `client-settings.js`, a table
+rather than a ternary since there is more than one of them. It is the single
+source for both the per-row tag and the pill's count.
+
+### Interface Scale
+
+Astrofin's own UI zoom, added 2026-09-13 because the owner's 85" panel runs at
+300 % Windows scaling — which hands the app a 1280×698 CSS viewport, so a theme
+built in fixed pixels for a 1600–2560 px desktop renders proportionally huge —
+and everything *else* on that display looks right at 300 %, so changing the
+system setting was the wrong lever.
+
+It is **CEF page zoom**, not a CSS transform, and the difference is the whole
+point: Blink lays the page out at the zoomed size, so `window.innerWidth`
+genuinely grows and every measurement the theme's JS takes stays truthful. A
+`zoom` on the document was measured first and rejected — under it
+`getBoundingClientRect()` returns zoom-scaled coordinates while `style.left`
+writes stay unscaled, so an element set to `left: 200px` reports `x: 160`, and
+the card popout (which reads rects and writes positions) would be misplaced by
+the zoom factor. Below 100 % the app also *gains room*: at 80 % a 1280 px
+screen lays out as 1600 px, which is the band section (o) is designed for.
+
+* Stored as a string, like `videoMode` — `CliSettings` has no numeric field.
+  `jfn_config::interface_scale_factor()` is the one place it becomes a number.
+* CEF's zoom level is logarithmic, `ln(factor) / ln(1.2)`, so 100 % is exactly
+  `0.0` — `client_logic::zoom_level_for_factor()`.
+* Applied at `OnAfterCreated` for every layer, deliberately *after* the
+  reset-state check, so a browser about to be closed again is never touched;
+  and live from the settings page to the web layer only. The overlay draws its
+  own fixed-size chrome over a UI the settings page is not in, so it takes the
+  new scale at its next creation rather than resizing underneath the viewer.
+* The page is strict — only the six offered values, anything else logs and
+  stores `"1"` — while `settings.json` is lenient, taking any number clamped to
+  0.5–2.0. A hand-edited file can therefore ask for a scale the UI does not
+  offer, the same escape hatch `videoModeLibraries` has.
+
+**Known, not fixed:** one scale does not suit every screen. Measured on the
+85" panel, Home reads well at 85 % (1506 px of effective width) while item
+detail wants 65 % (1969 px) — the detail page needs about 30 % more room than
+Home to feel the same, because it is built almost entirely from fixed pixels
+(a 520×140 logo, a 64 px display title, a 360 px action stack) where Home is
+mostly jellyfin-web's own em-based cards.
 
 These attributes are part of `client-settings.js`'s contract and are pinned by
 `src/web/client-settings.test.js`.
