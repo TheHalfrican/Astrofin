@@ -1282,10 +1282,39 @@
             detailPanel = null;
         }
 
-        /* First child of the right column, so the glass sits where the artboard
-         * puts it (top right, 300px) and the cast/similar shelves stack under
-         * it. Returns null while the page is still being built; the next
-         * refresh retries, which is what makes it safe to call early. */
+        /* The types that get a poster in the rail. An episode does not: its own
+         * art is a 16:9 still, and the season poster above it says nothing the
+         * page is not already showing. */
+        var POSTER_TYPES = { movie: 1, series: 1, season: 1 };
+
+        /* jellyfin-web renders .detailImageContainer twice — once .hide-mobile
+         * beside the ribbon and once .hide-desktop inside it — and neither copy
+         * is in the right column. Move the desktop one there so the poster and
+         * the facts panel read as a single rail.
+         *
+         * Owner call 2026-09-13: before this the poster existed only below
+         * 1600px, absolutely positioned over the top right of the ribbon, and
+         * the two-column layout had none at all. Moving the node rather than
+         * cloning it keeps jellyfin-web's own lazy-loading of the Primary image
+         * working, and keeps one poster on the page rather than two. */
+        function detailPosterNode() {
+            return doc.querySelector('.detailImageContainer.hide-mobile');
+        }
+
+        function placeDetailPoster(host, item) {
+            if (!host || !POSTER_TYPES[detailTypeFor(item)]) { return null; }
+            var poster = detailPosterNode();
+            if (!poster) { return null; }
+            if (poster.parentNode !== host || host.firstChild !== poster) {
+                host.insertBefore(poster, host.firstChild);
+            }
+            return poster;
+        }
+
+        /* The right column's rail: poster on top, facts panel under it, then
+         * jellyfin-web's own cast/similar shelves. Returns null while the page
+         * is still being built; the next refresh retries, which is what makes
+         * it safe to call early. */
         function renderDetailPanel(item) {
             var host = detailPanelHost();
             if (!host) { return null; }
@@ -1303,9 +1332,14 @@
                 panel.setAttribute('aria-hidden', 'true');
             }
             detailPanel = panel;
-            if (panel.parentNode !== host || host.children[0] !== panel) {
-                host.insertBefore(panel, host.firstChild);
-            }
+            /* The rail is poster then panel, so the panel's slot depends on
+             * whether there is a poster above it. Comparing against the node
+             * that should be there makes this a no-op once it is, which
+             * matters: syncDetail() calls this on every refresh and a page
+             * streams in for seconds. */
+            var poster = placeDetailPoster(host, item);
+            var want = poster ? poster.nextSibling : host.firstChild;
+            if (panel !== want) { host.insertBefore(panel, want); }
 
             panel.textContent = '';
             if (!facts.rows.length && !facts.headline) {
@@ -1723,6 +1757,8 @@
                 formatBytes: formatBytes,
                 resumeLabel: resumeLabel,
                 detailFacts: detailFacts,
+                detailPosterNode: detailPosterNode,
+                placeDetailPoster: placeDetailPoster,
                 renderDetailPanel: renderDetailPanel,
                 removeDetailPanel: removeDetailPanel,
                 markResumeButton: markResumeButton,

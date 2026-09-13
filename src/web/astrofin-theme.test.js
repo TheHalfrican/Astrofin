@@ -105,6 +105,19 @@ function buildDetail(win) {
     buttons.appendChild(play);
     ribbon.appendChild(buttons);
     primary.appendChild(ribbon);
+    // jf-web renders .detailImageContainer twice: .hide-mobile beside the
+    // ribbon and .hide-desktop inside it. The theme moves the desktop copy into
+    // the right column; the mobile copy must be left where it is.
+    const poster = doc.createElement('div');
+    poster.className = 'detailImageContainer hide-mobile';
+    const posterCard = doc.createElement('div');
+    posterCard.className = 'card portraitCard';
+    poster.appendChild(posterCard);
+    primary.appendChild(poster);
+    const posterMobile = doc.createElement('div');
+    posterMobile.className = 'detailImageContainer hide-desktop hide-tv';
+    ribbon.appendChild(posterMobile);
+
     const secondary = doc.createElement('div');
     secondary.className = 'detailPageSecondaryContainer padded-bottom-page';
     const content = doc.createElement('div');
@@ -116,7 +129,8 @@ function buildDetail(win) {
     page.appendChild(wrapper);
     pages.appendChild(page);
     doc.body.appendChild(pages);
-    return { pages, page, logo, wrapper, primary, ribbon, buttons, play, secondary, content };
+    return { pages, page, logo, wrapper, primary, ribbon, buttons, play, secondary,
+        content, poster, posterMobile };
 }
 
 // A window with the theme installed and a details route in the address bar.
@@ -2098,11 +2112,43 @@ test('detailFacts counts a season', () => {
     assert.deepStrictEqual(empty.rows, []);
 });
 
+test('detailPosterNode finds the desktop copy and never the mobile one', () => {
+    const { detail, theme } = onDetail();
+    assert.strictEqual(theme.detailPosterNode(), detail.poster);
+    assert.notStrictEqual(theme.detailPosterNode(), detail.posterMobile);
+});
+
+test('placeDetailPoster moves the poster to the head of the right column, once', () => {
+    const { detail, theme } = onDetail();
+    assert.strictEqual(detail.poster.parentNode, detail.primary, 'starts beside the ribbon');
+    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
+    assert.strictEqual(moved, detail.poster);
+    assert.strictEqual(detail.secondary.children[0], detail.poster);
+    // A page streams in for seconds and syncDetail() calls this on every
+    // refresh, so a second call has to be a no-op rather than a re-insert.
+    theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
+    assert.strictEqual(
+        detail.secondary.children.filter((el) => el === detail.poster).length, 1);
+    // The mobile copy is left exactly where jellyfin-web put it.
+    assert.strictEqual(detail.posterMobile.parentNode, detail.ribbon);
+});
+
+test('placeDetailPoster gives an episode no poster, and needs a host', () => {
+    const { detail, theme } = onDetail();
+    // An episode's own art is a 16:9 still; the season poster above it would
+    // say nothing the page is not already showing.
+    assert.strictEqual(theme.placeDetailPoster(detail.secondary, { Type: 'Episode' }), null);
+    assert.strictEqual(detail.poster.parentNode, detail.primary, 'left alone');
+    assert.strictEqual(theme.placeDetailPoster(null, { Type: 'Movie' }), null);
+});
+
 test('the facts panel is inserted once at the head of the right column and updated in place', () => {
     const { win, detail, theme } = onDetail();
     const first = theme.renderDetailPanel(fullMovie());
     assert.strictEqual(first.id, 'af-detail-panel');
-    assert.strictEqual(detail.secondary.children[0], first, 'first child of the right column');
+    // The poster leads the column and the panel sits under it.
+    assert.strictEqual(detail.secondary.children[0], detail.poster);
+    assert.strictEqual(detail.secondary.children[1], first);
     assert.strictEqual(win.document.querySelectorAll('#af-detail-panel').length, 1);
     assert.deepStrictEqual(panelRows(first)[0], ['Video', 'HEVC 4K · HDR10']);
 
@@ -2153,7 +2199,9 @@ test('entering a details route stamps the type, paints the panel and drives the 
     assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
     win.images[0].onload();
     assert.ok(html.classList.contains('af-backdrop'));
-    assert.strictEqual(detail.secondary.children[0].id, 'af-detail-panel');
+    // A movie gets a poster, so the column reads poster then panel.
+    assert.strictEqual(detail.secondary.children[0], detail.poster);
+    assert.strictEqual(detail.secondary.children[1].id, 'af-detail-panel');
     assert.strictEqual(detail.play.getAttribute('data-af-left'), '1h 32m left');
 
     // Leaving takes all of it back down: a stale type would keep the eyebrow

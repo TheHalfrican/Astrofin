@@ -836,10 +836,12 @@ still reserved 120 px. `padding-top: calc(var(--af-header-height) + 84px)
 
 Design targets: `docs/design/canvas/MovieDetail.dc.html` and
 `docs/design/canvas/SeriesDetail.dc.html` — a 640 px blurb column at the 72 px
-gutter starting 150 px down, an 88 px gap, then the shelves; no poster; the
-item's logo (or a 64/72 display title) top left under a cyan eyebrow; the
-actions as a 360 px stack of 56 px pills with Resume in accent; a 300 px glass
-facts panel top right; and, on a season page, episode rows of 208×117 stills.
+gutter starting 150 px down, an 88 px gap, then the shelves; the item's logo
+(or a 64/72 display title) top left under a cyan eyebrow; the actions as a
+360 px stack of 56 px pills with Resume in accent; and, on a season page,
+episode rows of 208×117 stills. The artboards draw no poster and put the facts
+panel top right at 300 px; both were overruled by the owner — see
+[The poster and the facts card](#the-poster-and-the-facts-card).
 Section (o) of `astrofin-theme.css` and section 8 of `astrofin-theme.js` are the
 whole of it.
 
@@ -993,16 +995,53 @@ which branch an item landed on, and the gate writes it to
 a wash (26 px, `brightness(.62)`): `background-size: cover` crops a 2:3 poster
 to a 16:9 canvas, which is a blown-up detail of somebody's chin.
 
-### No poster, logo or title
+### The poster and the facts card
 
-The poster is gone outright (`display: none` on both copies of
-`.detailImageContainer` — jf-web renders it twice, `.hide-mobile` beside the
-ribbon and `.hide-desktop` inside it): the backdrop is the art on this page.
+The artboards have no poster and a 300 px facts panel top right. Both were
+overruled live, in three passes on 2026-09-13:
+
+1. The poster came back (2026-09-10) but only below 1600 px, absolutely
+   positioned over the empty top right of the ribbon — so on a monitor, which
+   takes the two-column branch, there was no poster at all.
+2. `placeDetailPoster()` now moves the `.hide-mobile` copy into the **right
+   column**, ahead of `#af-detail-panel`, for `movie`/`series`/`season`. An
+   episode gets none: its own art is a 16:9 still. The mobile copy is left
+   where jellyfin-web put it, and both stay `display: none` by default.
+3. The facts card went from a 300 px column of stacked rows to the **full width
+   of the column with its rows in an auto-fit grid** — 1137×123 instead of
+   300×250 — so it sits directly above Cast & Crew and leaves the poster room.
+
+The poster is `clamp(260px, 21.5vw, 460px)` wide, centred, with
+`--af-detail-poster-gap` of air above and below it. The width is viewport-
+relative because a fixed one could not hold its proportion: 440 px is 21.5 % of
+the monitor's 2048 px viewport but 34 % of the 85" panel's 1280 px one, which
+the owner saw as "the scaling is off on the TV". The gap is one number for both
+sides — the poster pulls itself up out of `--af-detail-top` by the difference,
+so the left column keeps the full inset it is designed around while the poster
+sits with equal air above and below (measured 95/96 at both viewports).
+
+**Four stock declarations had to be answered**, all left over from
+jellyfin-web's own overlapping ribbon, and none of them visible until the
+poster moved into flow. They were found one at a time, each only after the
+previous was fixed:
+
+| stock | effect once the poster was in the column |
+|---|---|
+| `position: relative; top: -12.96em` | top edge at y=-8, under the header — "cut off at the top" |
+| `float: left` | **the load-bearing one.** A float gives its parent no height, so `.detailImageContainer` measured 0 tall and every margin on it was absorbed; and `#af-detail-panel` is a grid, so it establishes a BFC, refuses to overlap a float, and sat flush against the poster whatever margin it was given. Two spacing attempts measured a 0 px gap before this was found. |
+| `max-width: 25vw` | held the art to 320 px inside a 440 px container on the 85" panel — the container obeyed the theme and the picture did not |
+| `height: 0` on the container | the ribbon let the poster overflow it, so it reserved nothing |
+
+The lesson worth keeping: when a stock rule and a theme rule disagree, measure
+the *rendered* box of every element in the chain, not just the one being
+styled. Three of those four were invisible in the element we were editing.
 
 `.detailLogo` moves from stock's `right:25vw;top:10vh;width:25vw;height:16vh`
 to `left: var(--af-gutter); top: 150px; width: 520px; height: 140px`,
 `background-position: left center`. jf-web already hides it below 68.75 em; the
-sheet carries that up to the 1280 px the two-column layout needs. It stays
+sheet carries that up to 1280 px; since 2026-09-13 the layout is two-column
+down to 1024 px, with the blurb column on a `clamp(420px, 44vw, 640px)` so it
+shrinks instead of the layout collapsing. It stays
 `position: absolute`, so when it is present the left column takes a 164 px top
 padding to clear it and `.itemName` is hidden — both through
 `.detailLogo:not(.hide) ~ .detailPageWrapperContainer …`, which works because

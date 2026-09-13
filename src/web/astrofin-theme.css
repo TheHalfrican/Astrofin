@@ -2614,7 +2614,7 @@ html.af-library.af-backdrop .backgroundContainer.withBackdrop {
 /* (o) Item detail                                                        */
 /* Targets: docs/design/canvas/MovieDetail.dc.html and SeriesDetail.dc.   */
 /* html — a 640px blurb column at the 72px gutter starting 150px down, an */
-/* 88px gap, then the shelves; no poster; the logo (or a 64/72 display    */
+/* 88px gap, then the shelves; the logo (or a 64/72 display               */
 /* title) top left under a cyan eyebrow; the actions as a 360px stack of  */
 /* 56px pills with Resume in accent; a 300px glass facts panel top right; */
 /* and, on a season page, episode rows of 208x117 stills.                 */
@@ -2752,17 +2752,24 @@ html.af-detail.af-backdrop .backgroundContainer.withBackdrop {
  * put the right-hand column. */
 html.af-detail .itemDetailPage .detailPageWrapperContainer {
   display: grid;
-  grid-template-columns: 640px minmax(0, 1fr);
+  /* The blurb column shrinks instead of the layout collapsing. At 2048px the
+   * clamp lands on its 640px ceiling, so the wide layout is unchanged; at
+   * 1280px — the 85" panel at 300% — it is 563px, leaving 485px of right
+   * column, which holds the 300px rail and a shelf that scrolls. Owner call
+   * 2026-09-13: one layout language at both sizes was worth more than six
+   * un-scrolled tiles, and stacking cost 1000px of page height (measured:
+   * 2592px against 1568px on the monitor). */
+  grid-template-columns: clamp(420px, 44vw, 640px) minmax(0, 1fr);
   column-gap: 88px;
   align-items: start;
   box-sizing: border-box;
   margin: 0;
-  padding: 150px var(--af-gutter) var(--af-gutter);
+  padding: var(--af-detail-top) var(--af-gutter) var(--af-gutter);
 }
 
-/* One column below 1600px: 640 + 88 + a shelf of six 130px tiles does not
- * fit, and squeezing the blurb column is worse than stacking. */
-@media (max-width: 1599px) {
+/* One column below 1024px, where even the clamp's 420px floor plus the 88px
+ * gap leaves too little for the 300px rail. Above it the grid above holds. */
+@media (max-width: 1023px) {
   html.af-detail .itemDetailPage .detailPageWrapperContainer {
     grid-template-columns: minmax(0, 1fr);
     row-gap: var(--af-space-12);
@@ -2778,47 +2785,94 @@ html.af-detail .detailImageContainer {
   display: none;
 }
 
-/* Owner call 2026-09-10: the movie/series poster returns to the empty upper
- * right. In the single-column layout (<=1599px, the 4K-at-300% case) the blurb
- * caps at 640px on the left and the shelves stack far below, so the top-right
- * of the ribbon is empty. The desktop copy (.hide-mobile) is a standard
- * portraitCard whose .cardImageContainer lazy-loads the Primary image; park it
- * top-right, its right edge on the content edge and dropped to sit centred
- * against the action column (owner call: a little lower than the logo line).
- * Two-column (>=1600px) keeps the no-poster treatment for now — the empty
- * space there is the right shelf column, a separate spot. */
-@media (max-width: 1599px) {
-  html.af-detail[data-af-detail-type="movie"] .detailPageWrapperContainer,
-  html.af-detail[data-af-detail-type="series"] .detailPageWrapperContainer,
-  html.af-detail[data-af-detail-type="season"] .detailPageWrapperContainer {
-    position: relative;
-  }
-  html.af-detail[data-af-detail-type="movie"] .detailImageContainer.hide-mobile,
-  html.af-detail[data-af-detail-type="series"] .detailImageContainer.hide-mobile,
-  html.af-detail[data-af-detail-type="season"] .detailImageContainer.hide-mobile {
-    display: block;
-    position: absolute;
-    top: 210px;
-    right: var(--af-gutter);
-    width: 300px;
-    margin: 0;
-    z-index: 2;
-    pointer-events: none;
-  }
-  html.af-detail .detailImageContainer.hide-mobile .card,
-  html.af-detail .detailImageContainer.hide-mobile .cardBox,
-  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    border: 0;
-  }
-  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
-    border-radius: var(--af-radius-md);
-    overflow: hidden;
-    box-shadow: 0 0 0 1px var(--af-edge-soft), 0 26px 70px rgba(0, 0, 0, .55);
-  }
+/* The right column's head: poster, then a wide facts card, then jellyfin-web's
+ * own cast/similar shelves.
+ *
+ * Owner call 2026-09-10 put the poster back, but only in the single-column
+ * layout, absolutely positioned over the empty top right of the ribbon — so on
+ * a monitor, which takes the two-column branch, there was no poster at all.
+ * Owner call 2026-09-13 settles it for both: astrofin-theme.js moves the
+ * .hide-mobile copy into the right column ahead of `#af-detail-panel`, the
+ * poster is centred over the card, and the card is as wide as the column so it
+ * sits directly above Cast & Crew.
+ *
+ * Measured live at 2048x1130: poster 440x660 at x=1187 (the column runs
+ * 800-1976, so it straddles the page centre), 95px of air above it and 96px
+ * below, card 1137x123, cast shelf at y=1055, logo and action stack unmoved at
+ * y=198 and y=477. On the 85" panel's real 1280x698 viewport the same rules
+ * give 275x413 — 21.5% of the screen either way. The open space to the left and
+ * right of the poster is where the item's backdrop bleeds through, which is
+ * the point of it.
+ *
+ * Two stock rules had to be answered, both left over from jellyfin-web's own
+ * overlapping ribbon and both invisible until the poster moved into flow:
+ *   - `.detailImageContainer { height: 0 }` — the ribbon let the poster
+ *     overflow its container, so the container reserved nothing;
+ *   - `.card { position: relative; top: -12.96em }` — which pulled the poster
+ *     up over the ribbon. In the right column that put its top edge at y=-8,
+ *     under the header: the "cut off at the top" the owner reported. */
+html.af-detail[data-af-detail-type="movie"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile,
+html.af-detail[data-af-detail-type="series"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile,
+html.af-detail[data-af-detail-type="season"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile {
+  display: block;
+  /* Answers the stock `height: 0`. */
+  height: auto;
+  width: min(100%, var(--af-detail-poster-width));
+  /* auto both sides centres it over the card below. The negative top margin is
+   * the difference between the page's top inset and the gap wanted here, so
+   * the poster pulls itself up out of the inset and ends with the same air
+   * above as below — measured 95/96 at both target viewports — while the left
+   * column keeps the full inset it is designed around. */
+  margin: calc(var(--af-detail-poster-gap) - var(--af-detail-top)) auto var(--af-detail-poster-gap);
+  padding: 0;
+  /* The card inside is a real jellyfin-web link, and it points at the page the
+   * viewer is already on. */
+  pointer-events: none;
+}
+
+/* The three stock declarations on the poster's own card, all of them left over
+ * from jellyfin-web's overlapping ribbon and all invisible until the poster
+ * moved into flow. Measured live over CDP, in the order they were found:
+ *
+ *   position: relative; top: -12.96em   pulled the poster up over the ribbon.
+ *     In the right column that put its top edge at y=-8, under the header —
+ *     the "cut off at the top" the owner reported.
+ *
+ *   float: left                          the one that mattered. A float gives
+ *     its parent no height, so `.detailImageContainer` measured 0 tall and
+ *     every margin on it was absorbed; and `#af-detail-panel` is a grid, which
+ *     establishes a block formatting context and therefore refuses to overlap
+ *     a float, so it was pushed to exactly the float's bottom edge and sat
+ *     flush against the poster whatever margin it was given. Two attempts at
+ *     spacing them — a bottom margin on the poster, then a top margin on the
+ *     panel — both measured a 0px gap before this was found.
+ *
+ *   max-width                            stock sizes the card off the viewport
+ *     (25vw), which held it to 320px inside a 440px container at 1280px. */
+html.af-detail .detailImageContainer.hide-mobile .card {
+  position: static;
+  top: auto;
+  float: none;
+  max-width: none;
+}
+
+html.af-detail .detailImageContainer.hide-mobile .card,
+html.af-detail .detailImageContainer.hide-mobile .cardBox,
+html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+  width: 100%;
+  /* All three, not just the card: stock caps them off the viewport (25vw), and
+   * measured on the 85" panel that held the poster to 320px inside a 440px
+   * container — the container obeyed the theme and the art did not. */
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+  border-radius: var(--af-radius-md);
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--af-edge-soft), 0 26px 70px rgba(0, 0, 0, .55);
 }
 
 /* Stock parks the logo at `right:25vw;top:10vh;width:25vw;height:16vh`,
@@ -2839,10 +2893,10 @@ html.af-detail .detailLogo {
 }
 
 /* jf-web already hides the logo below 68.75em; this carries that up to 1280px.
- * Note the single-column breakpoint is 1599px, not 1280px: every width in
- * 1280-1599 DOES show the 520px logo over one column. Verified 2026-09-10 that
- * this reads fine — the column takes its 164px top padding and .itemName is
- * hidden on movie/series — so the fix is this comment, not the rule. */
+ * Since 2026-09-13 the layout is two-column down to 1024px, so the blurb
+ * column at 1280px is the clamp's 563px and the 520px logo still fits it with
+ * 43px to spare. Verified 2026-09-10 on the one-column layout this replaced,
+ * where it also read fine. */
 @media (max-width: 1279px) {
   html.af-detail .detailLogo {
     display: none;
@@ -2974,9 +3028,10 @@ html.af-detail .nameContainer .itemName {
   -webkit-line-clamp: 2;
   overflow: hidden;
   /* Cap to the blurb column's own 640px measure (as the credits and track
-   * pickers are). Without it, in the single-column layout (<=1599px, track
-   * 1136px) a long episode title ran to 1017px on one 64px line and the 2-line
-   * clamp never engaged (measured 2026-09-10). */
+   * pickers are). Without it a long episode title ran to 1017px on one 64px
+   * line and the 2-line clamp never engaged (measured 2026-09-10 on the
+   * single-column layout, whose 1136px track let it). The cap still earns its
+   * place: the column is only narrower than 640px below about 1455px. */
   max-width: 640px;
   margin: 0;
   font: var(--af-type-display);
@@ -3101,10 +3156,10 @@ html.af-detail .detailSectionContent .overview {
   font: var(--af-type-body-lg);
   color: var(--af-text-muted);
 }
-/* The tag wall and the external-links row have no cap of their own, so in the
- * single-column layout (<=1599px, track 1136px) they spanned the full track
- * under a 600px overview — ragged (measured 2026-09-10: tags 1136px under a
- * 600px overview at 1280px). Cap them to the same measure as the prose above.
+/* The tag wall and the external-links row have no cap of their own, so they
+ * spanned the full track under a 600px overview — ragged (measured 2026-09-10
+ * on the single-column layout: tags 1136px under a 600px overview at 1280px).
+ * Cap them to the same measure as the prose above.
  * `.detailSectionContent`-scoped like their siblings; the links row also
  * appears bare, so it is matched unscoped as well. */
 html.af-detail .detailSectionContent .itemTags,
@@ -3437,10 +3492,18 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
  * inserted as the first child of .detailPageSecondaryContainer, so
  * `margin-left:auto` lands it on the page's right gutter at the artboard's
  * 150px. Same glass as the panels in section (k). */
+/* Wide and short, directly above Cast & Crew — owner call 2026-09-13. It was a
+ * 300px column of stacked rows beside the shelves; at 1137px wide the same
+ * five rows flow into six columns and the card is 123px tall instead of 250,
+ * which is what let the poster above it grow without the page running away. */
 #af-detail-panel {
   box-sizing: border-box;
-  width: 300px;
-  margin-left: auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  column-gap: 28px;
+  align-content: start;
+  margin: 0 0 var(--af-space-8);
   padding: 22px 26px;
   border: 1px solid var(--af-edge-luminous);
   border-radius: var(--af-radius-panel);
@@ -3450,6 +3513,14 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 }
 #af-detail-panel[hidden] {
   display: none !important;
+}
+/* The eyebrow, headline and rule are the card's header, not facts, so they run
+ * the full width rather than taking a column each. */
+#af-detail-panel > .af-dp-eyebrow,
+#af-detail-panel > .af-dp-headline,
+#af-detail-panel > .af-dp-sub,
+#af-detail-panel > .af-dp-rule {
+  grid-column: 1 / -1;
 }
 .af-dp-eyebrow {
   margin-bottom: 14px;
@@ -3492,15 +3563,6 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 .af-dp-row > span.af-dp-accent {
   text-transform: uppercase;
   color: var(--af-accent-primary);
-}
-
-/* Stacked layout: the panel is no longer beside anything, so it spans. */
-@media (max-width: 1599px) {
-  #af-detail-panel {
-    width: 100%;
-    max-width: 420px;
-    margin-left: 0;
-  }
 }
 
 /* --- Season pages: the episode rows ---------------------------------- */
