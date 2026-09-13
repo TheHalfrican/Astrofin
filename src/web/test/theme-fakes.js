@@ -8,10 +8,11 @@
 // The gaps, all patched on the prototypes exported by player-fakes.js:
 //
 //   1. `textContent` is a plain data property there, so `el.textContent = ''`
-//      does not detach the children. The theme clears the chip strip and the
-//      server panel exactly that way, so without real semantics a second render
-//      would append to the first and the tests would be measuring the fake.
-//   2. `createDocumentFragment()` does not exist, and renderServerPanel()
+//      does not detach the children. The theme clears the popout's art slot
+//      and its badge row exactly that way, so without real semantics a second
+//      render would append to the first and the tests would be measuring the
+//      fake.
+//   2. `createDocumentFragment()` does not exist, and the detail facts panel
 //      builds its rows in one. A fragment appends its children, not itself.
 //   3. there is no box model at all — nothing has a position or a size and
 //      `getBoundingClientRect()` does not exist — but placePopout() is made of
@@ -263,9 +264,7 @@ function makeThemeApiClient(overrides = {}) {
                 + '?maxWidth=' + o.maxWidth + '&tag=' + o.tag;
         },
         // A function override stands in for the accessor itself, so a test can
-        // make serverName() throw the way a disconnected ApiClient does.
-        serverName() { return value(overrides.serverName); },
-        serverInfo() { return value(overrides.serverInfo); },
+        // make serverId() throw the way a disconnected ApiClient does.
         serverId() { return value(overrides.serverId); }
     };
     return Object.assign(client, overrides.extra || {});

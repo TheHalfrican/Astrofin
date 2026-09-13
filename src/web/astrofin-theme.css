@@ -215,8 +215,6 @@ html.transparentDocument #af-space,
 html.af-video #af-space,
 html.transparentDocument #af-popout,
 html.af-video #af-popout,
-html.transparentDocument #af-server-panel,
-html.af-video #af-server-panel,
 html.transparentDocument #af-hint,
 html.af-video #af-hint,
 html.transparentDocument #af-detail-panel,
@@ -1761,30 +1759,23 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before,
 }
 
 /* ===================================================================== */
-/* (k) Card popout, server panel, controller hint                         */
+/* (k) Card popout and controller hint                                    */
 /* Built by astrofin-theme.js. Fixed, below .skinHeader (999) and well     */
 /* below .videoPlayerContainer (1000).                                     */
 /* ===================================================================== */
 
-#af-server-panel,
 #af-hint {
   position: fixed;
   z-index: 900;
   /* Chrome that must never intercept a click meant for a card. */
   pointer-events: none;
-}
-
-#af-server-panel,
-#af-hint {
   box-sizing: border-box;
   opacity: 0;
   transition: opacity var(--af-dur-overlay-out) var(--af-ease-in);
 }
-#af-server-panel[hidden],
 #af-hint[hidden] {
   display: none !important;
 }
-#af-server-panel.af-show,
 #af-hint.af-show {
   opacity: 1;
   transition-duration: var(--af-dur-overlay-in);
@@ -2064,51 +2055,6 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before,
   box-shadow: var(--af-focus-ring-rest);
 }
 
-#af-server-panel {
-  position: fixed;
-  right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
-  bottom: clamp(24px, 6vh, var(--af-gutter));
-  width: 300px;
-  padding: 24px 26px;
-  border-radius: var(--af-radius-panel);
-  border: 1px solid var(--af-edge-luminous);
-  background: var(--af-glass);
-  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
-  backdrop-filter: blur(var(--af-glass-blur-panel));
-}
-.af-srv-eyebrow {
-  margin-bottom: var(--af-space-4);
-  font: var(--af-type-meta-sm);
-  letter-spacing: var(--af-tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--af-accent-primary);
-}
-.af-srv-name {
-  font: 500 18px/1.3 var(--af-font-body);
-  color: var(--af-text-primary);
-  overflow-wrap: anywhere;
-}
-.af-srv-rule {
-  height: 1px;
-  margin: 18px 0;
-  background: var(--af-edge-soft);
-}
-.af-srv-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--af-space-4);
-  font: 400 15px/1.6 var(--af-font-body);
-  color: var(--af-text-muted);
-}
-.af-srv-row > span:last-child {
-  font-family: var(--af-font-mono);
-  /* Metadata values read as machine state, not prose: uppercase mono, as in
-     the design brief. */
-  text-transform: uppercase;
-  letter-spacing: var(--af-tracking-meta);
-  color: var(--af-text-primary);
-}
-
 #af-hint {
   left: 0;
   right: 0;
@@ -2127,14 +2073,13 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before,
 /* Short viewports (720p and the like). The popout is clamped into the band
  * between the header and the bottom of the viewport, so on a short window it
  * grows less rather than being pushed off-screen, and the drawer tightens to
- * buy the art back some of that. The server panel comes off the cards. */
+ * buy the art back some of that. */
 @media (max-height: 900px) {
   :root { --af-popout-scale: 1.18; }
   .af-po-drawer {
     gap: 5px;
     padding: var(--af-space-2) var(--af-space-3) var(--af-space-3);
   }
-  #af-server-panel { display: none; }
 }
 /* The hint footer is fixed, so on a very short window it is the one thing
  * that can still sit on a card. */
@@ -3491,7 +3436,7 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 /* Built by astrofin-theme.js's detailFacts()/renderDetailPanel() and
  * inserted as the first child of .detailPageSecondaryContainer, so
  * `margin-left:auto` lands it on the page's right gutter at the artboard's
- * 150px. Same glass as #af-server-panel in section (k). */
+ * 150px. Same glass as the panels in section (k). */
 #af-detail-panel {
   box-sizing: border-box;
   width: 300px;

@@ -143,8 +143,8 @@ Two independent gates, both keyed in CSS:
 | `html.transparentDocument` | jellyfin-web's `setBackdropTransparency` (`Dashboard.setBackdropTransparency`) | `mpv-video-player.js` calls it on playback start (`setTransparency(2)`) and clears it on stop. Re-checked in the 10.11.11 bundle: **both** the `Full`/`2` and the `Backdrop`/`1` branches add the class; only level `0` removes it |
 | `html.af-video` | `astrofin-theme.js`, from a `MutationObserver` on `body` childList | while a `.videoPlayerContainer` exists |
 
-Either one sets `display: none !important` on `#af-space`, `#af-popout`,
-`#af-server-panel` and `#af-hint`.
+Either one sets `display: none !important` on `#af-space`, `#af-popout` and
+`#af-hint`.
 
 Rules that make this safe:
 
@@ -183,7 +183,7 @@ Every state below measured identical values:
 | Measured | Value |
 | --- | --- |
 | `html`, `body`, `.backgroundContainer`, `.backdropContainer`, `.videoPlayerContainer` background | `rgba(0, 0, 0, 0)` |
-| `#af-space`, `#af-popout`, `#af-server-panel`, `#af-hint` | `display: none` |
+| `#af-space`, `#af-popout`, `#af-hint` | `display: none` |
 | `html` classes | `af-video transparentDocument` (and `af-home` is dropped) |
 | `.backgroundContainer` classes | `backgroundContainer backgroundContainer-transparent` |
 
@@ -209,8 +209,9 @@ the root canvas transparent through it.
 After stop, everything is restored: `html` back to `rgb(7, 10, 20)`, classes
 back to `af-home af-backdrop`, `#af-space` `block`, `#af-popout` present, no
 `.videoPlayerContainer`, no stuck `af-video`, and the hover popout works
-again. (`#af-server-panel` stays `none` at 720 p — that is the documented
-`900px` viewport-height cut-off, not a video-mode leftover.)
+again. (The `#af-server-panel` caveat that used to sit here — it stayed `none`
+at 720 p under a `900px` viewport-height cut-off, which read like a video-mode
+leftover and was not — went with the panel itself.)
 
 Only two things paint anything at all during playback besides mpv: the two OSD
 bands. Both are sub-1 alpha by construction (see below); an automated sweep of
@@ -231,7 +232,7 @@ no opaque background other than the cyan progress fill itself.
 | `.backdropContainer` (jellyfin-web) | `-1` | its own value; faded under `html.af-backdrop` |
 | `.backgroundContainer` (jellyfin-web) | auto | forced transparent |
 | page content, `.mainAnimatedPage` | 0 | |
-| `#af-server-panel`, `#af-hint` | `900` | fixed, `pointer-events: none` |
+| `#af-hint` | `900` | fixed, `pointer-events: none` |
 | `#af-popout` | 900 | fixed in `<body>`, positioned over the focused card |
 | `.skinHeader` | `999` | jellyfin-web's own value; computes to `1` once `.osdHeader` is added during playback |
 | `.videoPlayerContainer` | `1000` | inline style from `mpv-video-player.js` when fullscreen |
@@ -629,15 +630,18 @@ the same reason.
 
 ### Home-only chrome
 
-`#af-server-panel` and `#af-hint` stay fixed (bottom-right and bottom) and are
-`pointer-events: none` so they can never swallow a click meant for a card. The
-server panel shows `ApiClient.serverName()` plus Mode/Decode rows sourced from
-`window.jmpInfo`; rows that cannot be sourced honestly are omitted (in a plain
-browser, where `jmpInfo` does not exist, only the name shows). It is dropped
-below `900px` viewport height so it never overlaps rail cards at 720p;
-`#af-hint` is dropped below `560px`. Both come up with the first card the
-pointer lands on rather than with the route, which is unchanged from the
-spotlight, and both hide when the route leaves Home or in video mode.
+`#af-hint` is all of it. It stays fixed to the bottom and is
+`pointer-events: none` so it can never swallow a click meant for a card. It is
+dropped below `560px` viewport height, comes up with the first card the pointer
+lands on rather than with the route — unchanged from the spotlight — and hides
+when the route leaves Home or in video mode.
+
+**`#af-server-panel` was removed at the owner's request (2026-09-13).** It was a
+glass card bottom-right on Home showing `ApiClient.serverName()` plus
+Mode/Decode rows sourced from `window.jmpInfo`. The element, `renderServerPanel()`,
+the `.af-srv-*` rules and its two tests are all gone rather than hidden; the
+fake `ApiClient`'s now-unused `serverName`/`serverInfo` accessors went with
+them. `videoModeLabel()` stays — the item detail facts panel uses it too.
 
 The `.mainAnimatedPages` subtree observer needs **no filter for the popout** —
 it lives in `<body>`, outside that subtree, and the `.af-popped` it writes onto
@@ -1167,8 +1171,9 @@ same way `#af-detail-panel` is.)
 `#af-detail-panel` is synthesised: `detailFacts(item, opts)` is a pure
 item-JSON-in, rows-out helper and `renderDetailPanel()` inserts the result as
 the first child of `.detailPageSecondaryContainer`, where `margin-left: auto`
-lands it on the page's right gutter at the artboard's 150 px. Same glass as
-`#af-server-panel`, and the same video gate.
+lands it on the page's right gutter at the artboard's 150 px. Glass built from
+the same `--af-glass` tokens the removed server card used, and the same video
+gate.
 
 | Item | Eyebrow | Rows |
 | --- | --- | --- |

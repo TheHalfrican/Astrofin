@@ -14,7 +14,7 @@
  *      backdrop art layers;
  *   3. track the focused/hovered card and drive the backdrop from it — on
  *      the card popout that stands in for it on Home and on the library
- *      grids, plus #af-server-panel and #af-hint, which are Home-only;
+ *      grids, plus #af-hint, which is Home-only;
  *   3b. gate the item detail pages: fetch the item once per route, stamp
  *      html[data-af-detail-type], drive the backdrop from it and synthesise
  *      the #af-detail-panel facts panel;
@@ -318,7 +318,7 @@
             if (ui || !doc.body) { return; }
             // Idempotent across a re-run in the same document: drop any panels a
             // previous execution left behind rather than shadowing them.
-            ['af-popout', 'af-server-panel', 'af-hint'].forEach(function (id) {
+            ['af-popout', 'af-hint'].forEach(function (id) {
                 var old = doc.getElementById(id);
                 if (old && old.parentNode) { old.parentNode.removeChild(old); }
             });
@@ -380,11 +380,6 @@
             popout.appendChild(art);
             popout.appendChild(drawer);
 
-            var server = doc.createElement('aside');
-            server.id = 'af-server-panel';
-            server.hidden = true;
-            server.setAttribute('aria-hidden', 'true');
-
             var hint = div('');
             hint.id = 'af-hint';
             hint.hidden = true;
@@ -396,7 +391,6 @@
             });
 
             doc.body.appendChild(popout);
-            doc.body.appendChild(server);
             doc.body.appendChild(hint);
 
             ui = {
@@ -410,7 +404,6 @@
                 genres: genres,
                 play: play,
                 details: details,
-                server: server,
                 hint: hint
             };
 
@@ -442,59 +435,6 @@
         function videoModeLabel(value) {
             var key = String(value || '').toLowerCase();
             return VIDEO_MODE_LABELS[key] || key;
-        }
-
-        function renderServerPanel() {
-            if (!ui) { return; }
-            var api = window.ApiClient;
-            var name = '';
-            try {
-                name = (api && api.serverName && api.serverName()) || '';
-            } catch (e) { /* ignore */ }
-            if (!name) {
-                try {
-                    var info = api && api.serverInfo && api.serverInfo();
-                    name = (info && (info.Name || info.name)) || '';
-                } catch (e2) { /* ignore */ }
-            }
-            if (!name) { ui.server.hidden = true; return; }
-
-            var frag = doc.createDocumentFragment();
-            var eyebrow = div('af-srv-eyebrow');
-            eyebrow.textContent = 'Server';
-            var nameEl = div('af-srv-name');
-            nameEl.textContent = name;
-            frag.appendChild(eyebrow);
-            frag.appendChild(nameEl);
-
-            // Rows only for values native-shim.js actually exposes; anything we
-            // cannot source honestly is omitted rather than invented.
-            var rows = [];
-            var jmp = window.jmpInfo;
-            if (jmp && jmp.settings) {
-                if (jmp.settings.playback && jmp.settings.playback.videoMode) {
-                    rows.push(['Mode', videoModeLabel(jmp.settings.playback.videoMode)]);
-                }
-                if (jmp.settings.playback && jmp.settings.playback.hwdec) {
-                    rows.push(['Decode', String(jmp.settings.playback.hwdec)]);
-                }
-            }
-            if (rows.length) {
-                frag.appendChild(div('af-srv-rule'));
-                rows.forEach(function (r) {
-                    var row = div('af-srv-row');
-                    var k = doc.createElement('span');
-                    k.textContent = r[0];
-                    var v = doc.createElement('span');
-                    v.textContent = r[1];
-                    row.appendChild(k);
-                    row.appendChild(v);
-                    frag.appendChild(row);
-                });
-            }
-
-            ui.server.textContent = '';
-            ui.server.appendChild(frag);
         }
 
         /* ------------------------------------------------------------------ */
@@ -1509,33 +1449,30 @@
         /* jellyfin-web rebuilds #homeTab on some navigations, which orphans the
          * panels. Rebuild rather than keep writing into detached nodes. */
         function ensureUi() {
-            if (ui && (!ui.popout.isConnected
-                || !ui.server.isConnected
-                || !ui.hint.isConnected)) {
+            if (ui && (!ui.popout.isConnected || !ui.hint.isConnected)) {
                 ui = null;
             }
             buildUi();
         }
 
-        /* Home-only chrome. The popout is not in here: it belongs to a card
-         * rather than to a route, shows on both Home and the library grids, and
-         * is driven by renderPopout/hidePopout. */
+        /* Home-only chrome: the controller hint, and nothing else since the
+         * server card was dropped. The popout is not in here — it belongs to a
+         * card rather than to a route, shows on both Home and the library
+         * grids, and is driven by renderPopout/hidePopout. */
         function showOverlays(wanted) {
             if (wanted !== undefined) { overlaysWanted = wanted; }
             if (!ui) { return; }
-            var visible = overlaysWanted && isHomeRoute();
-            [ui.server, ui.hint].forEach(function (el) {
-                if (visible) {
-                    el.hidden = false;
-                    // Flush layout so the opacity transition runs from 0. A rAF
-                    // would be throttled to nothing in a background tab.
-                    void el.offsetWidth;
-                    el.classList.add('af-show');
-                } else {
-                    el.classList.remove('af-show');
-                    el.hidden = true;
-                }
-            });
+            var el = ui.hint;
+            if (overlaysWanted && isHomeRoute()) {
+                el.hidden = false;
+                // Flush layout so the opacity transition runs from 0. A rAF
+                // would be throttled to nothing in a background tab.
+                void el.offsetWidth;
+                el.classList.add('af-show');
+            } else {
+                el.classList.remove('af-show');
+                el.hidden = true;
+            }
         }
 
         /* Tear the Home panels down. `keepSelection` is set only when the route
@@ -1611,7 +1548,6 @@
             if (home) {
                 root().classList.add('af-home');
                 ensureUi();
-                renderServerPanel();
                 decorateCards();
                 showOverlays(overlaysWanted);
                 /* Cards stream into the rails for seconds after the first
@@ -1741,7 +1677,6 @@
                 detailIdFromHash: detailIdFromHash,
                 videoModeLabel: videoModeLabel,
                 buildUi: buildUi,
-                renderServerPanel: renderServerPanel,
                 cacheItem: cacheItem,
                 minutes: minutes,
                 formatRuntime: formatRuntime,

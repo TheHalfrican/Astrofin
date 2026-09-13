@@ -234,7 +234,7 @@ test('a third and fourth run still leave exactly one of every panel', () => {
     const { win } = onHome();
     loadModule('astrofin-theme.js', win);
     loadModule('astrofin-theme.js', win);
-    for (const id of ['af-space', 'af-popout', 'af-server-panel', 'af-hint']) {
+    for (const id of ['af-space', 'af-popout', 'af-hint']) {
         assert.strictEqual(win.document.querySelectorAll('#' + id).length, 1, id);
     }
 });
@@ -271,7 +271,7 @@ test('buildUi drops panels a previous execution left behind', () => {
     // A fresh V8 context over a document jellyfin-web never tore down: the
     // handle is gone but the nodes are still there. Orphaning one panel is
     // what makes ensureUi() forget the handle and build again.
-    theme.state().ui.server.remove();
+    theme.state().ui.hint.remove();
     theme.ensureUi();
     assert.strictEqual(win.document.querySelectorAll('#af-popout').length, 1);
     assert.notStrictEqual(theme.state().ui.popout, stale, 'rebuilt, not shadowed');
@@ -985,7 +985,7 @@ test('focusing a card on a library route pops it out there too', async () => {
     assert.ok(card.classList.contains('af-popped'));
     assert.ok(theme.state().ui.popout.classList.contains('af-show'));
     // The Home-only chrome stays down all the same.
-    assert.strictEqual(theme.state().ui.server.hidden, true);
+    assert.strictEqual(theme.state().ui.hint.hidden, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -1500,35 +1500,6 @@ test('inPopout claims the popout subtree and nothing else', () => {
     assert.strictEqual(theme.inPopout(null), false);
 });
 
-test('renderServerPanel prints the server name and the mode rows it can source', () => {
-    const { win, theme } = onHome();
-    win.ApiClient = makeThemeApiClient({ serverName: 'Nebula' });
-    win.jmpInfo = { settings: { playback: { videoMode: 'anime', hwdec: 'd3d11va' } } };
-    theme.renderServerPanel();
-    const panel = theme.state().ui.server;
-    assert.deepStrictEqual(childTexts(panel).slice(0, 2), ['Server', 'Nebula']);
-    assert.match(panel.textContent, /ModeAnimation/);
-    assert.match(panel.textContent, /Decoded3d11va/);
-
-    // Rendering again replaces the rows instead of stacking them.
-    theme.renderServerPanel();
-    assert.strictEqual(panel.textContent.match(/Nebula/g).length, 1);
-});
-
-test('renderServerPanel falls back to serverInfo and hides with no name at all', () => {
-    const { win, theme } = onHome();
-    win.ApiClient = makeThemeApiClient({
-        serverName() { throw new Error('not connected'); },
-        serverInfo: { Name: 'From info' }
-    });
-    theme.renderServerPanel();
-    assert.match(theme.state().ui.server.textContent, /From info/);
-
-    win.ApiClient = makeThemeApiClient({});
-    theme.renderServerPanel();
-    assert.strictEqual(theme.state().ui.server.hidden, true);
-});
-
 // ---------------------------------------------------------------------------
 // The two buttons
 // ---------------------------------------------------------------------------
@@ -1742,24 +1713,23 @@ test('ensureUi rebuilds the panels when jellyfin-web has orphaned them', () => {
     assert.notStrictEqual(theme.state().ui, first, 'orphaned: rebuilt');
 });
 
-test('showOverlays shows the two Home panels and hides them elsewhere', () => {
+test('showOverlays shows the controller hint on Home and hides it elsewhere', () => {
     const { win, theme } = onHome();
     theme.showOverlays(true);
     const ui = theme.state().ui;
-    [ui.server, ui.hint].forEach((el) => {
-        assert.strictEqual(el.hidden, false);
-        assert.ok(el.classList.contains('af-show'));
-    });
-    // The popout is not Home chrome: it belongs to a card, shows on the
+    assert.strictEqual(ui.hint.hidden, false);
+    assert.ok(ui.hint.classList.contains('af-show'));
+    // The server card was dropped at the owner's request, so the hint is the
+    // whole of the Home-only chrome now.
+    assert.strictEqual(ui.server, undefined);
+    // The popout is not Home chrome either: it belongs to a card, shows on the
     // library grids too, and is driven by renderPopout/hidePopout alone.
     assert.strictEqual(ui.popout.hidden, true);
 
     win.location.hash = '#/details?id=1';
     theme.showOverlays();
-    [ui.server, ui.hint].forEach((el) => {
-        assert.strictEqual(el.hidden, true);
-        assert.ok(!el.classList.contains('af-show'));
-    });
+    assert.strictEqual(ui.hint.hidden, true);
+    assert.ok(!ui.hint.classList.contains('af-show'));
 });
 
 test('leaveHome tears the popout down and drops the selection and the art', () => {
@@ -1820,13 +1790,15 @@ test('decorateCards mirrors the item type onto the card and its tile, once', () 
     assert.strictEqual(movie.getAttribute('data-af-kind'), null, 'a scanned card is skipped');
 });
 
-test('refresh on Home marks the root and paints the panels', () => {
+test('refresh on Home marks the root and builds the panels', () => {
     const { win, theme } = onHome();
-    win.ApiClient = makeThemeApiClient({ serverName: 'Nebula' });
     theme.refresh();
     assert.ok(win.document.documentElement.classList.contains('af-home'));
     assert.ok(theme.state().ui, 'panels exist');
-    assert.match(theme.state().ui.server.textContent, /Nebula/);
+    assert.ok(theme.state().ui.popout.isConnected);
+    assert.ok(theme.state().ui.hint.isConnected);
+    // No server card is built at all any more, on any route.
+    assert.strictEqual(win.document.querySelectorAll('#af-server-panel').length, 0);
 });
 
 test('refresh off Home clears af-home and tears the selection down', () => {
