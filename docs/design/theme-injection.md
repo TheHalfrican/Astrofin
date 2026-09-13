@@ -1424,12 +1424,31 @@ screen lays out as 1600 px, which is the band section (o) is designed for.
   0.5–2.0. A hand-edited file can therefore ask for a scale the UI does not
   offer, the same escape hatch `videoModeLibraries` has.
 
-**Known, not fixed:** one scale does not suit every screen. Measured on the
-85" panel, Home reads well at 85 % (1506 px of effective width) while item
-detail wants 65 % (1969 px) — the detail page needs about 30 % more room than
-Home to feel the same, because it is built almost entirely from fixed pixels
-(a 520×140 logo, a 64 px display title, a 360 px action stack) where Home is
-mostly jellyfin-web's own em-based cards.
+**Why section (o) is viewport-relative.** The first live test of this setting
+found that no single scale suited every screen: on the 85" panel Home read well
+at 85 % (1506 px of effective width) while item detail wanted 65 % (1969 px) —
+the detail page needed about 30 % more room than Home to feel the same. The
+cause was that detail is built almost entirely from fixed pixels chosen against
+a wide desktop, where Home is mostly jellyfin-web's own em-based cards: a 520 px
+logo is 25 % of a 2048 px viewport but 35 % of a 1506 px one.
+
+The fix was not a per-view scale — the UI must not resize as you navigate — but
+to give the detail page's own measures the treatment the poster already had. The
+tokens below are each a clamp whose `vw` term lands on the artboard's number at
+2048 px, so the monitor is unchanged and everything shrinks beneath it:
+
+| token | 2048 | 1506 | 1280 |
+|---|---|---|---|
+| `--af-detail-top` | 150 | 110 | 96 |
+| `--af-detail-logo-width` × height | 520×140 | 383×103 | 325×88 |
+| `--af-detail-actions-width` | 360 | 280 | 280 |
+| `--af-detail-title-size` | 64 | 47 | 40 |
+| `--af-detail-poster-gap` | 96 | 71 | 64 |
+| `--af-detail-poster-width` | 440 | 324 | 275 |
+
+The blurb column's clearance is `calc(logo-height + 24px)` rather than the old
+literal 164 px, so a logo that shrinks takes its clearance with it instead of
+leaving a hole.
 
 These attributes are part of `client-settings.js`'s contract and are pinned by
 `src/web/client-settings.test.js`.

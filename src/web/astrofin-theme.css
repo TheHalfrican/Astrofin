@@ -2877,16 +2877,20 @@ html.af-detail .detailImageContainer.hide-mobile .cardScalable {
 
 /* Stock parks the logo at `right:25vw;top:10vh;width:25vw;height:16vh`,
  * centred, opposite the poster. It moves to the head of the blurb column,
- * left-aligned, at the artboard's 150px. It stays absolute, so it does not
+ * left-aligned, at the page's own top inset. It stays absolute, so it does not
  * take part in the column's flow — the padding-top below is what makes room
- * for it. */
+ * for it, and reads the same token so the two cannot drift.
+ *
+ * Its size is viewport-relative (2026-09-13): at 520px fixed it was a quarter
+ * of the monitor's width but a third of the 85" panel's, which is most of why
+ * the detail page needed a smaller Interface Scale than Home did. */
 html.af-detail .detailLogo {
   position: absolute;
   left: var(--af-gutter);
   right: auto;
-  top: 150px;
-  width: 520px;
-  height: 140px;
+  top: var(--af-detail-top);
+  width: var(--af-detail-logo-width);
+  height: var(--af-detail-logo-height);
   background-position: left center;
   background-size: contain;
   z-index: 3;
@@ -2903,13 +2907,15 @@ html.af-detail .detailLogo {
   }
 }
 
-/* With a logo up, the blurb column starts under it (140px + 24px) and the
- * name is redundant — jellyfin-web puts the same words in the artwork.
+/* With a logo up, the blurb column starts under it — the logo's own height
+ * plus a 24px gap, computed from the same token, so a logo that shrinks with
+ * the viewport takes its clearance with it rather than leaving a hole. The
+ * name is redundant there — jellyfin-web puts the same words in the artwork.
  * .detailLogo is a previous sibling of .detailPageWrapperContainer, and it
  * gains .hide when the item has neither ImageTags.Logo nor a
  * ParentLogoImageTag, so `:not(.hide)` is the whole test. */
 html.af-detail .detailLogo:not(.hide) ~ .detailPageWrapperContainer .detailPagePrimaryContainer {
-  padding-top: 164px;
+  padding-top: calc(var(--af-detail-logo-height) + var(--af-space-6));
 }
 /* Only where the logo really is the title. On a season or an episode the logo
  * is the *series* logo (jf-web falls back to ParentLogoImageTag), while
@@ -3035,6 +3041,11 @@ html.af-detail .nameContainer .itemName {
   max-width: 640px;
   margin: 0;
   font: var(--af-type-display);
+  /* After the shorthand, which carries the weight and family: the size alone
+   * is viewport-relative, landing on the token's 64/72 at 2048px. A 64px
+   * title is 3.1% of the monitor's width but 4.3% of the 85" panel's. */
+  font-size: var(--af-detail-title-size);
+  line-height: 1.125;
   letter-spacing: var(--af-tracking-display);
   color: var(--af-text-primary);
   white-space: normal;
@@ -3223,7 +3234,7 @@ html.af-detail .itemDetailPage .mainDetailButtons {
   align-items: center;
   align-content: flex-start;
   order: 2;
-  width: 360px;
+  width: var(--af-detail-actions-width);
   gap: 12px;
   margin: 22px 0 6px;
 }

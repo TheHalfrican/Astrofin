@@ -174,8 +174,31 @@
      a desk and from a couch. The clamp keeps it sane outside that range. */
   --af-detail-poster-width: clamp(260px, 21.5vw, 460px);
   /* The detail page's top inset: the wrapper's top padding, which is what sets
-     where the blurb column and the action stack begin. */
-  --af-detail-top: 150px;
+     where the blurb column and the action stack begin. Viewport-relative for
+     the same reason the poster is — see the block below. 7.3vw lands on the
+     artboard's 150px at 2048px. */
+  --af-detail-top: clamp(96px, 7.3vw, 150px);
+
+  /* ---- Item detail, viewport-relative ---------------------------------
+     Measured 2026-09-13: Home reads well on the 85" panel at 1506px of
+     effective width while item detail wanted 1969px — the detail page needed
+     about 30% more room than Home to feel the same, so no single Interface
+     Scale suited both. The cause was that detail is built almost entirely
+     from fixed pixels chosen against a wide desktop, where Home is mostly
+     jellyfin-web's own em-based cards: the 520px logo is 25% of a 2048px
+     viewport but 35% of a 1506px one.
+
+     Each value below is a clamp whose vw term lands on the artboard's number
+     at 2048px, so the monitor is unchanged, and which shrinks below that. */
+
+  /* 520/2048 = 25.4vw; the height keeps the artboard's 520x140 ratio. */
+  --af-detail-logo-width: clamp(320px, 25.4vw, 520px);
+  --af-detail-logo-height: calc(var(--af-detail-logo-width) * 0.2692);
+  /* 360/2048 = 17.6vw. The floor is two 56px discs plus their gaps, below
+     which the stack would wrap into something taller, not smaller. */
+  --af-detail-actions-width: clamp(280px, 17.6vw, 360px);
+  /* 64/2048 = 3.125vw, with 1.125 line-height as 72/64. */
+  --af-detail-title-size: clamp(40px, 3.125vw, 64px);
   /* The air above and below the detail poster. The poster pulls itself up out
      of the inset above by exactly the difference, so this one number is both
      gaps at once and they cannot drift apart. Deliberately smaller than the
@@ -184,7 +207,7 @@
      The left column keeps the full inset — the logo is absolutely positioned
      and the blurb column's own padding clears it, so moving the columns up
      would have walked the text into the logo. */
-  --af-detail-poster-gap: 96px;
+  --af-detail-poster-gap: clamp(64px, 4.7vw, 96px);
   --af-backdrop-scale-from: 1.04;
   --af-page-offset: 24px;
   --af-page-scale: .98;
