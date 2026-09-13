@@ -13,8 +13,8 @@
  *   2. build and maintain #af-space — starfield, nebula and the two crossfaded
  *      backdrop art layers;
  *   3. track the focused/hovered card and drive the backdrop from it — on
- *      Home, where it also drives #af-spotlight, #af-server-panel and
- *      #af-hint, and on the library grids, where it drives the art alone;
+ *      the card popout that stands in for it on Home and on the library
+ *      grids, plus #af-server-panel and #af-hint, which are Home-only;
  *   3b. gate the item detail pages: fetch the item once per route, stamp
  *      html[data-af-detail-type], drive the backdrop from it and synthesise
  *      the #af-detail-panel facts panel;
@@ -49,7 +49,7 @@
         var BG_BASE = '#070A14';
         var HOVER_DEBOUNCE_MS = 120;
 
-        /* Types the spotlight treats as containers rather than something to play:
+        /* Types the popout treats as containers rather than something to play:
          * no NEW / remaining-time chips, no Play, a single Browse action. */
         var FOLDER_TYPES = {
             CollectionFolder: 1,
@@ -104,7 +104,7 @@
         //     <body>, which no position in <head> can ever beat.
         // So the sheet lives at the end of <body> and is moved back there whenever
         // another stylesheet node ends up after it. Only stylesheet nodes count,
-        // which keeps this from ping-ponging with #af-spotlight and friends.
+        // which keeps this from ping-ponging with #af-popout and friends.
         function keepThemeLast() {
             var el = doc.getElementById('af-theme');
             if (!el) {
@@ -224,6 +224,10 @@
             root().classList.toggle('af-video', playing);
             if (playing) {
                 clearBackdrop();
+                /* The sheet hides the popout in video mode either way, but
+                 * leaving it up in state means it reappears over the card the
+                 * pointer left behind when playback ends. */
+                hidePopout();
             }
         }
 
@@ -305,7 +309,7 @@
         }
 
         /* ------------------------------------------------------------------ */
-        /* 5. Spotlight, server panel, controller hint                         */
+        /* 5. Card popout, server panel, controller hint                       */
         /* ------------------------------------------------------------------ */
 
         var ui = null;
@@ -314,61 +318,67 @@
             if (ui || !doc.body) { return; }
             // Idempotent across a re-run in the same document: drop any panels a
             // previous execution left behind rather than shadowing them.
-            ['af-spotlight', 'af-server-panel', 'af-hint'].forEach(function (id) {
+            ['af-popout', 'af-server-panel', 'af-hint'].forEach(function (id) {
                 var old = doc.getElementById(id);
                 if (old && old.parentNode) { old.parentNode.removeChild(old); }
             });
 
-            var spotlight = doc.createElement('section');
-            spotlight.id = 'af-spotlight';
-            spotlight.hidden = true;
-            spotlight.tabIndex = -1;
+            /* The popout is a body-level portal positioned over the card, not a
+             * child of it. The drawer grows a couple of hundred pixels past the
+             * bottom of the rail, and a fixed layer in <body> cannot be clipped
+             * by anything jellyfin-web puts between the card and <html> — which
+             * a child of the card would be the moment any one of those
+             * ancestors stopped being `overflow: visible`. One node serves every
+             * card on the page. */
+            var popout = div('');
+            popout.id = 'af-popout';
+            popout.hidden = true;
 
-            // Everything that changes with the item lives in one wrapper so an
-            // item swap is a single opacity transition.
-            var body = div('af-sp-body');
-
-            var title = doc.createElement('h2');
-            title.className = 'af-sp-title';
-            var chips = div('af-sp-chips');
-            var overview = doc.createElement('p');
-            overview.className = 'af-sp-overview';
-            var actions = div('af-sp-actions');
+            /* Clone target. writePopout() fills it with the card's own
+             * .cardScalable, so the art, the kind badge and the watched-progress
+             * bar are exactly what the card is already showing and no image URL
+             * has to be reconstructed. */
+            var art = div('af-po-art');
+            var drawer = div('af-po-drawer');
+            var actions = div('af-po-actions');
+            var title = div('af-po-title');
+            var badges = div('af-po-badges');
+            var meta = div('af-po-meta');
+            var genres = div('af-po-genres');
 
             // jf-web 10.11.11's focusManager builds its focusable set from
             //   INPUT/TEXTAREA/SELECT/BUTTON/A + ':not([tabindex="-1"]):not(:disabled)'
             //   plus '.focusable'
             // and autoFocus() additionally skips anything classed 'noautofocus'.
-            // tabindex -1 is therefore what keeps the panel out of controller and
+            // tabindex -1 is therefore what keeps the popout out of controller and
             // keyboard spatial navigation between the rails; noautofocus stops it
             // being chosen as a view's initial focus. Both buttons stay fully
             // usable with the mouse.
-            function panelButton(className, label) {
+            function discButton(className, glyphClass, label) {
                 var b = doc.createElement('button');
                 b.type = 'button';
                 b.className = className + ' noautofocus';
                 b.tabIndex = -1;
-                if (label) { b.textContent = label; }
+                // Icon-only, so the name has to come from the label.
+                b.setAttribute('aria-label', label);
+                b.title = label;
+                var g = div(glyphClass);
+                b.appendChild(g);
                 return b;
             }
 
-            var play = panelButton('af-btn af-btn-primary', null);
-            var glyph = doc.createElement('span');
-            glyph.className = 'af-btn-glyph';
-            var playLabel = doc.createElement('span');
-            playLabel.textContent = 'Play';
-            play.appendChild(glyph);
-            play.appendChild(playLabel);
-
-            var details = panelButton('af-btn af-btn-secondary', 'Details');
+            var play = discButton('af-po-btn af-po-btn-primary', 'af-po-glyph af-po-glyph-play', 'Play');
+            var details = discButton('af-po-btn af-po-btn-ghost', 'af-po-glyph af-po-glyph-info', 'Details');
 
             actions.appendChild(play);
             actions.appendChild(details);
-            body.appendChild(title);
-            body.appendChild(chips);
-            body.appendChild(overview);
-            body.appendChild(actions);
-            spotlight.appendChild(body);
+            drawer.appendChild(actions);
+            drawer.appendChild(title);
+            drawer.appendChild(badges);
+            drawer.appendChild(meta);
+            drawer.appendChild(genres);
+            popout.appendChild(art);
+            popout.appendChild(drawer);
 
             var server = doc.createElement('aside');
             server.id = 'af-server-panel';
@@ -385,29 +395,36 @@
                 hint.appendChild(s);
             });
 
-            // The spotlight is placed in the home sections container by
-            // placeSpotlight(); body is only its parking spot until then.
-            doc.body.appendChild(spotlight);
+            doc.body.appendChild(popout);
             doc.body.appendChild(server);
             doc.body.appendChild(hint);
 
             ui = {
-                spotlight: spotlight,
-                body: body,
+                popout: popout,
+                art: art,
+                drawer: drawer,
+                actions: actions,
                 title: title,
-                chips: chips,
-                overview: overview,
-                glyph: glyph,
-                playLabel: playLabel,
+                badges: badges,
+                meta: meta,
+                genres: genres,
                 play: play,
                 details: details,
                 server: server,
                 hint: hint
             };
-            spotlightPainted = false;
 
             play.addEventListener('click', guard(onPlayClick));
             details.addEventListener('click', guard(onDetailsClick));
+            /* The popout covers the card it is standing in for, so without this
+             * it would swallow the click that used to open the item. */
+            art.addEventListener('click', guard(onDetailsClick));
+            /* Leaving the popout for anything that is not a card closes it.
+             * The card underneath is covered, so its own mouseout never fires
+             * while the pointer is inside here. */
+            popout.addEventListener('mouseleave', guard(function (e) {
+                if (!cardFrom(e.relatedTarget)) { hidePopout(); }
+            }));
         }
 
         // Video-mode wire value -> panel label. The pre-rename spellings are
@@ -529,12 +546,32 @@
             return 'SD';
         }
 
-        function chipsFor(item) {
-            var out = [];
+        /* The drawer's three tiers. One chip strip was tried first and did not
+         * survive contact: `.af-chip` is a 14 px uppercase pill with 9/14
+         * padding, so at a poster's width three facts filled the strip and the
+         * rest was clipped. Plain dot-separated text costs roughly a quarter of
+         * the width per fact, which is what buys the extra detail back. Only
+         * the certification and the picture format stay boxed — those read as
+         * badges, and Netflix's hover card boxes exactly the same ones. */
 
-            // Containers get a child count and nothing else: a library has no
-            // year, runtime, rating, resume position or release date worth
-            // showing, and "New" on a library folder is meaningless.
+        function badgesFor(item) {
+            var out = [];
+            if (!item || isFolderLike(item)) { return out; }
+            if (item.OfficialRating) { out.push(String(item.OfficialRating)); }
+            var vs = videoStream(item);
+            var res = resolutionLabel(vs);
+            if (res) { out.push(res); }
+            var range = vs && (vs.VideoRangeType || vs.VideoRange);
+            if (range && range !== 'SDR') { out.push(String(range).replace(/_/g, ' ')); }
+            return out;
+        }
+
+        function metaFor(item) {
+            var out = [];
+            if (!item) { return out; }
+
+            /* Containers get a count and nothing else: a library has no year,
+             * runtime, rating or resume position worth showing. */
             if (isFolderLike(item)) {
                 if (item.ChildCount) {
                     out.push(item.ChildCount + (item.ChildCount === 1 ? ' item' : ' items'));
@@ -542,34 +579,48 @@
                 return out;
             }
 
-            if (item.Type === 'Episode' && item.Name) { out.push(item.Name); }
-            if (item.ParentIndexNumber != null && item.IndexNumber != null) {
-                out.push('S' + item.ParentIndexNumber + ' · E' + item.IndexNumber);
+            if (item.Type === 'Episode') {
+                if (item.ParentIndexNumber != null && item.IndexNumber != null) {
+                    out.push('S' + item.ParentIndexNumber + ' E' + item.IndexNumber);
+                }
+                // The title line shows the series, so the episode's own name
+                // has nowhere else to go.
+                if (item.Name) { out.push(item.Name); }
+            } else if (item.Type === 'Series' && item.ChildCount) {
+                out.push(item.ChildCount + (item.ChildCount === 1 ? ' season' : ' seasons'));
             }
+
             if (item.ProductionYear) { out.push(String(item.ProductionYear)); }
 
             var rt = formatRuntime(item.RunTimeTicks);
             if (rt) { out.push(rt); }
 
-            var vs = videoStream(item);
-            var res = resolutionLabel(vs);
-            if (res) { out.push(res); }
-            var range = vs && (vs.VideoRangeType || vs.VideoRange);
-            if (range && range !== 'SDR') { out.push(String(range).replace(/_/g, ' ')); }
-
             if (item.CommunityRating) {
-                out.push('★ ' + Number(item.CommunityRating).toFixed(1));
+                out.push('\u2605 ' + Number(item.CommunityRating).toFixed(1));
             }
 
             var ud = item.UserData || {};
             if (ud.PlaybackPositionTicks > 0 && item.RunTimeTicks > 0) {
                 var left = minutes(item.RunTimeTicks - ud.PlaybackPositionTicks);
-                if (left > 0) { out.push('left ' + left + ' m'); }
+                if (left > 0) { out.push(left + 'm left'); }
             } else if (item.DateCreated) {
                 var age = Date.now() - Date.parse(item.DateCreated);
                 if (age >= 0 && age < 14 * 864e5) { out.push('New'); }
             }
             return out;
+        }
+
+        /* Three is what one line holds at a poster's width, and the server
+         * returns them most-specific-first. An episode usually carries none —
+         * the genres live on its series — so the line hides rather than
+         * reserving space for nothing. */
+        var MAX_GENRES = 3;
+
+        function genresFor(item) {
+            if (!item || isFolderLike(item) || !item.Genres || !item.Genres.length) {
+                return [];
+            }
+            return item.Genres.slice(0, MAX_GENRES).map(String);
         }
 
         function titleFor(item) {
@@ -638,17 +689,16 @@
 
         var focusedCard = null;
         var focusedItem = null;
-        /* The card the panel is currently *showing*. setFocusedCard runs
-         * synchronously on hover/focus but the panel only repaints once
+        /* The card the popout is currently *showing*. setFocusedCard runs
+         * synchronously on hover/focus but the popout only repaints once
          * fetchItem() resolves, so the buttons must act on this, never on
          * focusedCard, or a slow server lets Play start the wrong item. */
         var shownCard = null;
         var shownItem = null;
-
-        var spotlightPainted = false;
-        var swapTimer = 0;
-        var pendingItem = null;
-        var pendingCard = null;
+        /* The card the popout is standing in for. Distinct from focusedCard:
+         * it is set only once the popout is actually up, and it is what
+         * carries .af-popped. */
+        var poppedCard = null;
 
         function setFocusedCard(card) {
             if (card === focusedCard) { return; }
@@ -656,144 +706,323 @@
             focusedCard = card;
             if (!card) { return; }
             card.classList.add('af-focused');
-            /* A library grid drives the same art bleed as Home, but not the
-             * spotlight: placeSpotlight() inserts the panel into #homeTab's
-             * section stream, and a library page has no such stream. Resolve
-             * the route once, synchronously - the fetch below can outlive a
-             * navigation, and the Home path must behave exactly as it did when
-             * this was a bare `if (!isHomeRoute()) return`. */
-            var home = isHomeRoute();
-            if (!home && !isLibraryRoute()) { return; }
+            /* Resolve the route once, synchronously - the fetch below can
+             * outlive a navigation. Home and the library grids behave
+             * identically; every other page keeps plain jellyfin-web hover. */
+            if (!isHomeRoute() && !isLibraryRoute()) { return; }
 
             var id = card.getAttribute('data-id');
             if (!id) { return; }
             var token = ++requestToken;
             fetchItem(id).then(guard(function (item) {
                 if (token !== requestToken || !item) { return; }
+                /* The pointer can leave the card while the fetch is out, and
+                 * hidePopout() drops the selection without bumping the token,
+                 * so the token alone does not cover it. */
+                if (card !== focusedCard) { return; }
                 focusedItem = item;
-                if (home) { renderSpotlight(item, card); }
+                renderPopout(item, card);
                 setBackdrop(backdropUrlFor(item));
             })).catch(function (e) { log(e); });
         }
 
         /* ------------------------------------------------------------------ */
-        /* 7b. In-flow placement                                               */
+        /* 7b. Popout geometry                                                 */
         /*                                                                     */
-        /* jellyfin-web stacks several rails where the design has one, so a    */
-        /* viewport-fixed panel always covers a rail. The spotlight is a normal */
-        /* block inserted after the section holding the focused card instead;   */
-        /* only the backdrop stays fixed and full-bleed.                        */
+        /* The popout is fixed to the viewport and positioned over the card it */
+        /* stands in for. It grows from the art's own centre, then shifts to   */
+        /* stay clear of the viewport edges and of the fixed header - which is */
+        /* what makes a card at either end of a rail open inwards rather than  */
+        /* half off-screen.                                                    */
         /* ------------------------------------------------------------------ */
 
-        function homeSectionsContainer() {
-            return doc.querySelector('#homeTab .homeSectionsContainer')
-                || doc.querySelector('#homeTab');
+        // Clearance from the viewport edges and from the header.
+        var POPOUT_EDGE = 16;
+        var POPOUT_SCALE_FALLBACK = 1.32;
+        var POPOUT_MIN_WIDTH_FALLBACK = 200;
+        // Below this the art has stopped being a poster and is just a strip.
+        var POPOUT_MIN_ART = 96;
+
+        function artOf(card) {
+            return (card && card.querySelector && card.querySelector('.cardScalable')) || card;
         }
 
-        function sectionOf(card) {
-            return card && card.closest ? card.closest('#homeTab .verticalSection') : null;
+        /* How much bigger than the card the popout is. Read from a token so the
+         * sheet owns it and a per-breakpoint override stays a CSS change. */
+        function popoutScale() {
+            return readToken('--af-popout-scale', 1, 3, POPOUT_SCALE_FALLBACK);
         }
 
-        /* jf-web 10.11.11 renders every home section up front and hides the empty
-         * ones with .hide, so pick the first that is actually showing cards. */
-        function defaultSection() {
-            var container = homeSectionsContainer();
-            if (!container) { return null; }
-            var kids = container.children;
-            var fallback = null;
-            for (var i = 0; i < kids.length; i++) {
-                var el = kids[i];
-                if (!el.classList || !el.classList.contains('verticalSection')) { continue; }
-                if (!fallback) { fallback = el; }
-                if (!el.classList.contains('hide') && el.querySelector('.card')) { return el; }
-            }
-            return fallback;
+        /* The drawer's floor, for cards small enough that a proportional popout
+         * could not hold a readable line. It is set low on purpose: widening
+         * past the card's proportion enlarges the art with it, so a floor that
+         * bit on ordinary rail cards would cost height everywhere to buy width
+         * in one place. */
+        function popoutMinWidth() {
+            return readToken('--af-popout-min-width', 0, 2000, POPOUT_MIN_WIDTH_FALLBACK);
         }
 
-        // Moving the panel reflows the rails under a stationary cursor, which
-        // fires a fresh mouseover on whatever slid beneath it. Accepting that
-        // would relocate the panel again and cascade down the page, so hover is
-        // ignored until the pointer genuinely moves.
-        var pointerMovedSincePlace = true;
+        /* Numeric token read with a sanity range. Anything outside it — a
+         * missing token, a junk value, `parseFloat` returning NaN — falls back,
+         * because every one of these is a geometry input and a bad one paints a
+         * popout nobody can read. */
+        function readToken(name, min, max, fallback) {
+            var v = NaN;
+            try {
+                v = parseFloat(getComputedStyle(root()).getPropertyValue(name));
+            } catch (e) { /* ignore */ }
+            return (v > min && v < max) ? v : fallback;
+        }
 
-        function placeSpotlight(section) {
-            if (!ui) { return; }
-            var target = (section && section.parentNode) ? section : defaultSection();
-            if (!target || !target.parentNode) {
-                if (!ui.spotlight.isConnected && doc.body) {
-                    doc.body.appendChild(ui.spotlight);
+        /* The header the popout has to clear. Two candidates, because Jellyfin
+         * 12 moved the header to a MUI AppBar and left the legacy .skinHeader
+         * in a `display: none` wrapper: on a 12.x server the old selector alone
+         * measures 0x0, `headerBottom()` returned 0, and the popout would tuck
+         * under a bar that outranks it — MUI sits at z-index 1100 to our 900.
+         *
+         * Whichever candidate is actually laid out wins, so one function serves
+         * both server generations. `height > 0` is what rejects the hidden one:
+         * a node inside a `display: none` ancestor still reports its own
+         * computed `display`, but every number on its rect is zero. */
+        function headerBottom() {
+            var els = doc.querySelectorAll('.skinHeader, header.MuiAppBar-root');
+            var bottom = 0;
+            for (var i = 0; i < els.length; i++) {
+                if (!els[i].getBoundingClientRect) { continue; }
+                var r = els[i].getBoundingClientRect();
+                // Only a header pinned over the top of the viewport is in the
+                // way; jellyfin-web lets some of them scroll away.
+                if (r.height > 0 && r.top <= 0 && r.bottom > bottom) {
+                    bottom = r.bottom;
                 }
-                return;
             }
-            if (ui.spotlight.previousElementSibling === target) { return; }
-            target.parentNode.insertBefore(ui.spotlight, target.nextSibling);
-            pointerMovedSincePlace = false;
+            return bottom;
+        }
+
+        /* Two passes by necessity: the width and the art height follow from the
+         * card, but the drawer's height is only knowable once it has been laid
+         * out, and the vertical clamp needs it. Callers unhide the popout
+         * first for that reason. Returns null when there is nothing to anchor
+         * to, which is the caller's signal to give up rather than paint a
+         * popout at 0,0. */
+        function placePopout(card) {
+            if (!ui || !card || !card.isConnected) { return null; }
+            var rect = artOf(card).getBoundingClientRect();
+            if (!rect.width || !rect.height) { return null; }
+
+            var vw = window.innerWidth || root().clientWidth || 0;
+            var vh = window.innerHeight || root().clientHeight || 0;
+            var scale = popoutScale();
+
+            /* Widen to the drawer's floor, then cap: an edge card's popout
+             * still has to have somewhere to shift to. The cap wins, so on a
+             * viewport narrower than the floor the popout simply fills it. */
+            var w = Math.max(Math.round(rect.width * scale), Math.round(popoutMinWidth()));
+            w = Math.min(w, Math.max(120, vw - POPOUT_EDGE * 2));
+
+            var left = rect.left + rect.width / 2 - w / 2;
+            left = Math.max(POPOUT_EDGE, Math.min(left, vw - w - POPOUT_EDGE));
+
+            ui.popout.style.left = Math.round(left) + 'px';
+            ui.popout.style.width = w + 'px';
+
+            /* Everything below needs the drawer's laid-out height, and the
+             * drawer's height depends on the width just written — so the width
+             * goes on first and this read is what flushes it. */
+            var drawerH = ui.drawer.offsetHeight || 0;
+            var band = vh - POPOUT_EDGE * 2 - headerBottom();
+
+            /* Art height follows the width, not the scale, so widening to the
+             * floor enlarges the poster instead of stretching it. Then it is
+             * capped to what is left of the band: the art is `cover`, so a
+             * popout too tall for the viewport crops its poster rather than
+             * hanging off the bottom of the screen. */
+            var artH = Math.round(rect.height * (w / rect.width));
+            artH = Math.max(POPOUT_MIN_ART, Math.min(artH, band - drawerH));
+            ui.art.style.height = artH + 'px';
+
+            var top = rect.top - (artH - rect.height) / 2;
+            var min = headerBottom() + POPOUT_EDGE;
+            var max = vh - POPOUT_EDGE - (artH + drawerH);
+            // Still taller than the band: pin to the top of it.
+            top = (max < min) ? min : Math.max(min, Math.min(top, max));
+            ui.popout.style.top = Math.round(top) + 'px';
+
+            return { left: left, top: top, width: w, artHeight: artH };
         }
 
         /* ------------------------------------------------------------------ */
         /* 7c. Rendering                                                       */
         /* ------------------------------------------------------------------ */
 
-        function writeSpotlight(item, card) {
+        /* A copy of the card's own tile, so the popout shows exactly the art,
+         * kind badge and watched-progress the card is already showing and no
+         * image URL has to be rebuilt.
+         *
+         * Two things come out of the clone:
+         *   - <canvas>: cloneNode never copies a canvas's pixels, so a cloned
+         *     blurhash placeholder paints as an empty box over the real image.
+         *   - .cardOverlayContainer: the card's own hover buttons, which the
+         *     drawer replaces.
+         *
+         * [data-action] is *disarmed* rather than dropped. jf-web 10.11.11
+         * resolves a delegated card click from the closest [data-action] plus
+         * the nearest [data-id] ancestor, and the clone has no .card[data-id]
+         * above it, so a live one would resolve against whatever the popout
+         * happens to be sitting over — but .cardImageContainer itself carries
+         * data-action="link" and *is* the art, so removing the node would
+         * remove the picture. The attribute comes off and the element stays;
+         * the popout's own buttons act on shownCard. */
+        function cloneArt(card) {
+            var src = card && card.querySelector && card.querySelector('.cardScalable');
+            if (!src) { return null; }
+            var clone = src.cloneNode(true);
+            clone.removeAttribute('id');
+            var drop = clone.querySelectorAll('canvas, .cardOverlayContainer');
+            for (var i = 0; i < drop.length; i++) {
+                if (drop[i].parentNode) { drop[i].parentNode.removeChild(drop[i]); }
+            }
+            var armed = clone.querySelectorAll('[data-action]');
+            for (var j = 0; j < armed.length; j++) {
+                armed[j].removeAttribute('data-action');
+            }
+            clone.removeAttribute('data-action');
+            // The sheet scales the real tile on hover; the clone is already the
+            // size it wants to be.
+            clone.style.transform = 'none';
+            return clone;
+        }
+
+        /* Icon-only buttons, so the name has to come from the label. */
+        function setDiscAction(btn, glyphClass, label) {
+            if (!btn) { return; }
+            btn.setAttribute('aria-label', label);
+            btn.title = label;
+            var g = btn.firstChild;
+            if (g && g.className !== undefined) { g.className = 'af-po-glyph ' + glyphClass; }
+        }
+
+        /* A dot-separated line, written as text rather than as a node per fact:
+         * the separator is punctuation here, not structure, and one text node
+         * is what lets the line ellipsize as prose when it overruns. */
+        function writeJoined(el, parts) {
+            var text = parts.join(' \u00b7 ');
+            el.textContent = text;
+            el.hidden = !text;
+        }
+
+        function writeBadges(el, labels) {
+            el.textContent = '';
+            labels.forEach(function (label) {
+                var b = div('af-po-badge');
+                b.textContent = label;
+                el.appendChild(b);
+            });
+            el.hidden = !labels.length;
+        }
+
+        function writePopout(item, card) {
             if (!ui) { return; }
             shownItem = item;
             shownCard = card;
             var folder = isFolderLike(item);
 
+            var clone = cloneArt(card);
+            ui.art.textContent = '';
+            if (clone) { ui.art.appendChild(clone); }
+
             ui.title.textContent = titleFor(item);
-
-            ui.chips.textContent = '';
-            chipsFor(item).forEach(function (label) {
-                var chip = div('af-chip');
-                chip.textContent = label;
-                ui.chips.appendChild(chip);
-            });
-
-            var overview = folder ? '' : (item.Overview || '');
-            ui.overview.textContent = overview;
-            ui.overview.hidden = !overview;
+            writeBadges(ui.badges, badgesFor(item));
+            writeJoined(ui.meta, metaFor(item));
+            writeJoined(ui.genres, genresFor(item));
 
             if (folder) {
                 // A library, box set or season is browsed, not played.
-                ui.playLabel.textContent = 'Browse';
-                ui.glyph.hidden = true;
+                setDiscAction(ui.play, 'af-po-glyph-browse', 'Browse');
                 ui.details.hidden = true;
             } else {
                 var resumable = item.UserData && item.UserData.PlaybackPositionTicks > 0;
-                ui.playLabel.textContent = resumable ? 'Resume' : 'Play';
-                ui.glyph.hidden = false;
+                setDiscAction(ui.play, 'af-po-glyph-play', resumable ? 'Resume' : 'Play');
                 ui.details.hidden = false;
             }
-
-            // Whatever queued this write, the content on screen is now current,
-            // so the fade must come off here rather than only in the timer that
-            // may since have been cleared.
-            ui.body.classList.remove('af-sp-swap');
         }
 
-        function renderSpotlight(item, card) {
+        var hideTimer = 0;
+
+        function renderPopout(item, card) {
             ensureUi();
-            if (!ui) { return; }
+            if (!ui || !card || !card.isConnected) { return; }
+            if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; }
 
-            placeSpotlight(sectionOf(card));
-
-            pendingItem = item;
-            pendingCard = card;
-            if (!spotlightPainted) {
-                writeSpotlight(pendingItem, pendingCard);
-                spotlightPainted = true;
-            } else if (!swapTimer) {
-                // Opacity-only swap; a later hover during the fade just replaces
-                // what the in-flight timer will write.
-                ui.body.classList.add('af-sp-swap');
-                swapTimer = setTimeout(guard(function () {
-                    swapTimer = 0;
-                    if (pendingItem) { writeSpotlight(pendingItem, pendingCard); }
-                    if (ui) { ui.body.classList.remove('af-sp-swap'); }
-                }), tokenMs('--af-dur-tile', 180));
+            if (poppedCard && poppedCard !== card) {
+                poppedCard.classList.remove('af-popped');
             }
+            poppedCard = card;
+            /* Cancels the card's own hover scale. The popout stands in for the
+             * tile, and a tile still scaled to 1.06 underneath peeks out past
+             * the popout's edges; it also means the rect read in placePopout()
+             * is a plain layout box rather than a transformed one. */
+            card.classList.add('af-popped');
 
-            showOverlays(true);
+            writePopout(item, card);
+
+            // placePopout() reads the drawer's laid-out height, which a hidden
+            // element does not have.
+            ui.popout.hidden = false;
+            if (!placePopout(card)) { hidePopout(); return; }
+            // Flush layout so the transition runs from the collapsed state. A
+            // rAF would be throttled to nothing in a background tab.
+            void ui.popout.offsetWidth;
+            ui.popout.classList.add('af-show');
+            // The Home-only chrome comes up with the first card the pointer
+            // lands on, not with the route — unchanged from before the popout.
+            if (isHomeRoute()) { showOverlays(true); }
+        }
+
+        /* Closes the popout and drops the selection, so re-entering the same
+         * card opens it again. The backdrop deliberately stays: it is the page
+         * background on both routes, and clearing it on every pointer exit
+         * would strobe the art across a rail. */
+        function hidePopout() {
+            if (poppedCard) { poppedCard.classList.remove('af-popped'); }
+            poppedCard = null;
+            shownCard = null;
+            shownItem = null;
+            if (focusedCard) { focusedCard.classList.remove('af-focused'); }
+            focusedCard = null;
+            if (!ui) { return; }
+            ui.popout.classList.remove('af-show');
+            if (hideTimer) { clearTimeout(hideTimer); }
+            hideTimer = setTimeout(guard(function () {
+                hideTimer = 0;
+                // A hover during the fade-out re-shows it; don't undo that.
+                if (ui && !ui.popout.classList.contains('af-show')) {
+                    ui.popout.hidden = true;
+                }
+            }), tokenMs('--af-dur-tile', 180));
+        }
+
+        /* Scrolling moves the card out from under a viewport-fixed popout.
+         * Following it rather than closing matters for the keyboard and
+         * controller path, where jellyfin-web scrolls the newly focused card
+         * into view and would otherwise close the popout it just opened. */
+        var syncQueued = false;
+
+        function syncPopout() {
+            if (syncQueued || !ui || ui.popout.hidden || !poppedCard) { return; }
+            syncQueued = true;
+            // setTimeout, not rAF, for the same reason as queueRefresh: rAF
+            // never fires while the window is hidden.
+            setTimeout(guard(function () {
+                syncQueued = false;
+                if (!ui || ui.popout.hidden || !poppedCard) { return; }
+                if (!poppedCard.isConnected) { hidePopout(); return; }
+                var r = artOf(poppedCard).getBoundingClientRect();
+                var vh = window.innerHeight || root().clientHeight || 0;
+                // Scrolled out of the viewport: nothing left to anchor to.
+                if (!r.width || r.bottom <= 0 || r.top >= vh) { hidePopout(); return; }
+                placePopout(poppedCard);
+            }), 0);
         }
 
         /* jf-web 10.11.11: the tile's own primary action button. Clicking it reuses
@@ -898,14 +1127,27 @@
             }
         }
 
-        function onPointerMove() {
-            pointerMovedSincePlace = true;
+        /* True for anything inside the popout, which is not a card but must not
+         * be treated as having left one either - the pointer crosses it on the
+         * way to the buttons. */
+        function inPopout(node) {
+            return !!(ui && node && ui.popout.contains(node));
         }
 
         function onPointerOver(e) {
-            if (!pointerMovedSincePlace) { return; }
             var card = cardFrom(e.target);
-            if (!card || card === focusedCard) { return; }
+            if (!card) {
+                /* Left for something that is neither a card nor the popout.
+                 * The popout covers its own card, so its mouseleave does not
+                 * fire for a pointer that crossed onto a rail heading or the
+                 * page background. */
+                if (!inPopout(e.target)) {
+                    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; }
+                    if (poppedCard) { hidePopout(); }
+                }
+                return;
+            }
+            if (card === focusedCard) { return; }
             if (hoverTimer) { clearTimeout(hoverTimer); }
             hoverTimer = setTimeout(guard(function () {
                 hoverTimer = 0;
@@ -1224,7 +1466,7 @@
             removeDetailPanel();
             /* The card that got us here belongs to a page on its way out; drop
              * it so a later return to Home cannot paint a stale item into the
-             * spotlight. The art it is driving stays up until this item's own
+             * popout. The art it is driving stays up until this item's own
              * backdrop replaces it, which is why the class goes but the
              * backdrop does not. */
             if (focusedCard) { focusedCard.classList.remove('af-focused'); }
@@ -1267,7 +1509,7 @@
         /* jellyfin-web rebuilds #homeTab on some navigations, which orphans the
          * panels. Rebuild rather than keep writing into detached nodes. */
         function ensureUi() {
-            if (ui && (!ui.spotlight.isConnected
+            if (ui && (!ui.popout.isConnected
                 || !ui.server.isConnected
                 || !ui.hint.isConnected)) {
                 ui = null;
@@ -1275,13 +1517,14 @@
             buildUi();
         }
 
-        // The spotlight is in flow now, so it hides only when it has nothing to
-        // say or the route left Home - no scroll rule needed.
+        /* Home-only chrome. The popout is not in here: it belongs to a card
+         * rather than to a route, shows on both Home and the library grids, and
+         * is driven by renderPopout/hidePopout. */
         function showOverlays(wanted) {
             if (wanted !== undefined) { overlaysWanted = wanted; }
             if (!ui) { return; }
             var visible = overlaysWanted && isHomeRoute();
-            [ui.spotlight, ui.server, ui.hint].forEach(function (el) {
+            [ui.server, ui.hint].forEach(function (el) {
                 if (visible) {
                     el.hidden = false;
                     // Flush layout so the opacity transition runs from 0. A rAF
@@ -1297,21 +1540,19 @@
 
         /* Tear the Home panels down. `keepSelection` is set only when the route
          * moved to a library grid, which keeps its own focused card and the art
-         * backdrop that card is driving; everything the spotlight is made of
-         * goes either way. With it falsy this is the original teardown. */
+         * backdrop that card is driving. The popout goes either way: it is
+         * anchored to a viewport rect that the outgoing page owns. With
+         * `keepSelection` falsy this is the original teardown. */
         function leaveHome(keepSelection) {
             overlaysWanted = false;
             if (!keepSelection) { focusedItem = null; }
-            shownItem = null;
-            shownCard = null;
-            pendingItem = null;
-            pendingCard = null;
-            if (swapTimer) { clearTimeout(swapTimer); swapTimer = 0; }
-            spotlightPainted = false;
-            if (ui) { ui.body.classList.remove('af-sp-swap'); }
-            if (!keepSelection) {
-                if (focusedCard) { focusedCard.classList.remove('af-focused'); }
-                focusedCard = null;
+            var card = focusedCard;
+            hidePopout();
+            if (keepSelection && card) {
+                // hidePopout() drops the selection; the library grid keeps it.
+                focusedCard = card;
+                card.classList.add('af-focused');
+            } else {
                 clearBackdrop();
             }
             showOverlays(false);
@@ -1352,9 +1593,9 @@
             // 10.11.11, so each test only runs once the ones above it are out.
             var library = !home && isLibraryRoute();
             var detail = !home && !library && isDetailRoute();
-            /* Leaving a library grid drops its selection outright. The card it
-             * points at belongs to no #homeTab .verticalSection, so carrying it
-             * into Home would paint a stale item into the spotlight. */
+            /* Leaving a library grid drops its selection outright: the card it
+             * points at is going away with the page, and the popout is anchored
+             * to that card's viewport rect. */
             if (!library && root().classList.contains('af-library')) { leaveHome(); }
             if (!detail && root().classList.contains('af-detail')) { leaveDetail(); }
             if (library) {
@@ -1372,17 +1613,12 @@
                 ensureUi();
                 renderServerPanel();
                 decorateCards();
-                if (focusedItem) {
-                    placeSpotlight(sectionOf(focusedCard));
-                    if (!spotlightPainted) {
-                        writeSpotlight(focusedItem, focusedCard);
-                        spotlightPainted = true;
-                    }
-                    showOverlays(true);
-                } else {
-                    placeSpotlight(null);
-                    showOverlays(overlaysWanted);
-                }
+                showOverlays(overlaysWanted);
+                /* Cards stream into the rails for seconds after the first
+                 * hover and every batch reflows the one the popout is anchored
+                 * to, so a refresh has to re-measure rather than leave it
+                 * hanging over whatever moved underneath. */
+                syncPopout();
             } else {
                 root().classList.remove('af-home');
                 /* Both art routes keep the backdrop across a refresh. Detail
@@ -1407,13 +1643,12 @@
             new MutationObserver(guard(function (records) {
                 for (var i = 0; i < records.length; i++) {
                     var t = records[i].target;
-                    // Both synthesised panels are in this subtree; their own
-                    // repaints must not schedule a refresh, or refresh and
-                    // repaint feed forever.
-                    if (ui && ui.spotlight
-                        && (t === ui.spotlight || ui.spotlight.contains(t))) {
-                        continue;
-                    }
+                    /* The detail panel is in this subtree; its own repaint must
+                     * not schedule a refresh, or refresh and repaint feed
+                     * forever. The popout needs no such filter — it lives in
+                     * <body>, outside .mainAnimatedPages, and the .af-popped it
+                     * writes onto a card is an attribute mutation, which this
+                     * observer does not ask for. */
                     if (detailPanel
                         && (t === detailPanel || detailPanel.contains(t))) {
                         continue;
@@ -1461,7 +1696,11 @@
 
             doc.addEventListener('focusin', guard(onFocusIn), true);
             doc.addEventListener('mouseover', guard(onPointerOver), { capture: true, passive: true });
-            doc.addEventListener('mousemove', guard(onPointerMove), { capture: true, passive: true });
+            /* Capture, because the rails scroll horizontally and Home scrolls
+             * vertically — the popout is fixed to the viewport and has to
+             * follow the card under either. */
+            doc.addEventListener('scroll', guard(syncPopout), { capture: true, passive: true });
+            window.addEventListener('resize', guard(syncPopout), { passive: true });
             window.addEventListener('hashchange', guard(queueRefresh), { passive: true });
             window.addEventListener('popstate', guard(queueRefresh), { passive: true });
             doc.addEventListener('viewshow', guard(queueRefresh), true);
@@ -1508,18 +1747,29 @@
                 formatRuntime: formatRuntime,
                 videoStream: videoStream,
                 resolutionLabel: resolutionLabel,
-                chipsFor: chipsFor,
+                badgesFor: badgesFor,
+                metaFor: metaFor,
+                genresFor: genresFor,
                 titleFor: titleFor,
                 backdropUrlFor: backdropUrlFor,
                 backdropSourceFor: backdropSourceFor,
                 fetchItem: fetchItem,
                 setFocusedCard: setFocusedCard,
-                homeSectionsContainer: homeSectionsContainer,
-                sectionOf: sectionOf,
-                defaultSection: defaultSection,
-                placeSpotlight: placeSpotlight,
-                writeSpotlight: writeSpotlight,
-                renderSpotlight: renderSpotlight,
+                artOf: artOf,
+                popoutScale: popoutScale,
+                popoutMinWidth: popoutMinWidth,
+                readToken: readToken,
+                headerBottom: headerBottom,
+                placePopout: placePopout,
+                cloneArt: cloneArt,
+                writeJoined: writeJoined,
+                writeBadges: writeBadges,
+                setDiscAction: setDiscAction,
+                writePopout: writePopout,
+                renderPopout: renderPopout,
+                hidePopout: hidePopout,
+                syncPopout: syncPopout,
+                inPopout: inPopout,
                 primaryCardButton: primaryCardButton,
                 cardLinkTarget: cardLinkTarget,
                 clickSyntheticAction: clickSyntheticAction,
@@ -1528,7 +1778,6 @@
                 onDetailsClick: onDetailsClick,
                 cardFrom: cardFrom,
                 onFocusIn: onFocusIn,
-                onPointerMove: onPointerMove,
                 onPointerOver: onPointerOver,
                 ensureUi: ensureUi,
                 showOverlays: showOverlays,
@@ -1559,11 +1808,11 @@
                         focusedItem: focusedItem,
                         shownCard: shownCard,
                         shownItem: shownItem,
-                        spotlightPainted: spotlightPainted,
-                        swapTimer: swapTimer,
+                        poppedCard: poppedCard,
+                        hideTimer: hideTimer,
+                        syncQueued: syncQueued,
                         hoverTimer: hoverTimer,
                         overlaysWanted: overlaysWanted,
-                        pointerMovedSincePlace: pointerMovedSincePlace,
                         itemCache: itemCache,
                         itemCacheKeys: itemCacheKeys,
                         pagesObserved: pagesObserved,
