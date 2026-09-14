@@ -5,8 +5,8 @@
  * and astrofin-fonts.css. Every value comes from a `--af-*` token; nothing is
  * redefined here.
  *
- * Companion script: src/web/astrofin-theme.js — it owns #af-space, the Home
- * spotlight, the `af-*` classes on <html>, and keeping this element last in
+ * Companion script: src/web/astrofin-theme.js — it owns #af-space, the card
+ * popout, the `af-*` classes on <html>, and keeping this element last in
  * <head> (jellyfin-web appends chunk stylesheets lazily and would otherwise
  * win the cascade at equal specificity).
  *
@@ -193,7 +193,7 @@ html.af-backdrop .backdropContainer {
 /* (c) Background: starfield, nebula, art backdrop                        */
 /*                                                                        */
 /* Stacking: html canvas < #af-space (-3) < .backdropContainer (-1)        */
-/* < page content (0) < #af-spotlight (900) < .skinHeader (999)           */
+/* < page content (0) < #af-popout (900) < .skinHeader (999)              */
 /* < .videoPlayerContainer (1000, inline style from mpv-video-player.js). */
 /* ===================================================================== */
 
@@ -213,10 +213,8 @@ html.af-backdrop .backdropContainer {
  * every Astrofin chrome layer so mpv shows through untouched. */
 html.transparentDocument #af-space,
 html.af-video #af-space,
-html.transparentDocument #af-spotlight,
-html.af-video #af-spotlight,
-html.transparentDocument #af-server-panel,
-html.af-video #af-server-panel,
+html.transparentDocument #af-popout,
+html.af-video #af-popout,
 html.transparentDocument #af-hint,
 html.af-video #af-hint,
 html.transparentDocument #af-detail-panel,
@@ -368,6 +366,38 @@ html.af-video {
   border-bottom: 1px solid var(--af-hairline);
   color: var(--af-text-primary);
   transition: background var(--af-dur-page) var(--af-ease-page);
+}
+
+/* Jellyfin 12 moved the header to a MUI AppBar and left the legacy .skinHeader
+ * in the DOM inside a `display: none` wrapper — so on a 12.x server every rule
+ * above lands on a node nobody can see, and the real header is stock MUI at
+ * rgb(32,32,32). That grey band is what the owner reported on 2026-09-13.
+ *
+ * Measured live over CEF's remote debugging port against a 12.0.0 server:
+ *   .skinHeader              1 in the DOM, 0 with a non-zero height
+ *   header.MuiAppBar-root    background-color rgb(32,32,32), z-index 1100,
+ *                            backdrop-filter none, plus MUI's elevation
+ *                            overlay (a white 5% gradient) and drop shadow
+ * The rails are untouched by that migration — 100 .card[data-id], 18
+ * .verticalSection, #homeTab all still the legacy DOM — which is why only the
+ * shell needed answering.
+ *
+ * The .skinHeader block above is kept, not replaced: a 10.11.x server still
+ * uses it, and the two selectors never both match a laid-out element.
+ *
+ * !important throughout for the same reason as .skinHeader: MUI paints
+ * elevation as a `background-image` overlay plus a `box-shadow`, and both
+ * fight the glass. `background` first sets the gradient importantly, which is
+ * what displaces that overlay; `background-color` then clears the grey the
+ * shorthand would otherwise leave at `initial`. */
+header.MuiAppBar-root {
+  background: var(--af-glass) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: blur(var(--af-glass-blur)) !important;
+  backdrop-filter: blur(var(--af-glass-blur)) !important;
+  border-bottom: 1px solid var(--af-hairline);
+  box-shadow: none !important;
+  color: var(--af-text-primary);
 }
 
 /* Gutter: the design's 72px at >=1600px, shrinking so 1280px stays usable. */
@@ -631,7 +661,11 @@ html.af-library .itemsContainer .card.af-focused .cardText {
  * data-af-kind, on the .card AND on its .cardScalable — attr() resolves
  * against the pseudo-element's own originating element, so with the attribute
  * only on the ancestor .card the badge rendered as an empty 0x0 box. */
-html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
+/* The second selector is the popout's clone of that same .cardScalable. It
+ * keeps data-af-kind but loses both ancestors the rule above needs, so without
+ * it the badge blinks off exactly when the card is enlarged. */
+html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before,
+#af-popout .af-po-art > .cardScalable[data-af-kind]::before {
   content: attr(data-af-kind);
   position: absolute;
   left: 14px;
@@ -1725,201 +1759,300 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
 }
 
 /* ===================================================================== */
-/* (k) Home spotlight, server panel, controller hint                      */
+/* (k) Card popout and controller hint                                    */
 /* Built by astrofin-theme.js. Fixed, below .skinHeader (999) and well     */
 /* below .videoPlayerContainer (1000).                                     */
 /* ===================================================================== */
 
-#af-server-panel,
 #af-hint {
   position: fixed;
   z-index: 900;
   /* Chrome that must never intercept a click meant for a card. */
   pointer-events: none;
-}
-
-#af-spotlight,
-#af-server-panel,
-#af-hint {
   box-sizing: border-box;
   opacity: 0;
   transition: opacity var(--af-dur-overlay-out) var(--af-ease-in);
 }
-#af-spotlight[hidden],
-#af-server-panel[hidden],
 #af-hint[hidden] {
   display: none !important;
 }
-#af-spotlight.af-show,
-#af-server-panel.af-show,
 #af-hint.af-show {
   opacity: 1;
   transition-duration: var(--af-dur-overlay-in);
   transition-timing-function: var(--af-ease-out);
 }
 
-/* In flow, inserted by astrofin-theme.js immediately after the section that
- * holds the focused card. jellyfin-web stacks several rails where the design
- * has one, so a viewport-fixed panel would always cover a rail; a block in the
- * rail stream covers nothing and needs no scrim.
+/* The popout: a body-level portal fixed over the card it stands in for.
  *
- * The min-height is what keeps moving the panel between sections from
- * jittering: the content is clamped (1-line title, 2-line overview) so it
- * always fits inside the band, and the band is the same height wherever the
- * panel lands. 3.3% matches jellyfin-web's own .emby-scroller gutter, so the
- * panel lines up with the rails rather than the design's nominal 72px. */
-#af-spotlight {
+ * Netflix and Prime Video both build this as an overlay rather than as
+ * anything in the page flow, and that is the whole point of it here — the
+ * panel this replaced was an in-flow band, so every hover shoved the rails
+ * below it down the page. Nothing here reflows anything.
+ *
+ * astrofin-theme.js owns `left`, `top`, `width` and the art's `height`: they
+ * come from the card's own measured box, clamped into the band between the
+ * header and the bottom of the viewport. The sheet owns everything else,
+ * including --af-popout-scale, which is how much bigger than the card it is.
+ *
+ * Not glass. The popout stands over rail art of every possible brightness and
+ * a translucent drawer leaves the meta unreadable over a pale poster; both
+ * reference apps use an opaque panel here for the same reason. */
+#af-popout {
+  position: fixed;
+  z-index: 900;
+  box-sizing: border-box;
+  /* Unlike the fixed chrome above, this one exists to be clicked. */
+  pointer-events: auto;
+  border-radius: var(--af-radius-tile);
+  background: var(--af-surface-raised);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, .62),
+    var(--af-focus-ring-rest);
+  /* Square-cornered art inside a rounded box without this. */
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(.94);
+  transform-origin: center center;
+  transition:
+    opacity var(--af-dur-overlay-out) var(--af-ease-in),
+    transform var(--af-dur-overlay-out) var(--af-ease-in);
+}
+#af-popout[hidden] {
+  display: none !important;
+}
+#af-popout.af-show {
+  opacity: 1;
+  transform: none;
+  transition-duration: var(--af-dur-tile), var(--af-dur-tile);
+  transition-timing-function: var(--af-ease-focus), var(--af-ease-focus);
+}
+
+/* Holds the clone of the card's own .cardScalable. placePopout() writes the
+ * height; the clone fills it. */
+.af-po-art {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--af-surface);
+}
+
+/* The clone arrives carrying section (e)'s tile rules — its own radius, its
+ * resting ring and the hover scale. Inside the popout the art is flush to
+ * three edges, so all three come back off. These are the same selector shapes
+ * section (e) uses, because the clone is the same subtree. */
+.af-po-art > .cardScalable,
+.af-po-art .cardImageContainer,
+.af-po-art .cardContent,
+.af-po-art .cardPadder,
+.af-po-art .blurhash-canvas {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+.af-po-art > .cardScalable {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* jf-web sizes card art with a percentage-padding spacer, which inside a
+ * fixed-height box would re-impose the card's aspect instead of filling the
+ * one placePopout() measured. */
+.af-po-art .cardPadder {
+  padding: 0 !important;
+  position: absolute;
+  inset: 0;
+}
+.af-po-art .cardImageContainer,
+.af-po-art .cardContent {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+}
+.af-po-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The extension below the art: the reason the popout exists. */
+.af-po-drawer {
   display: flex;
   flex-direction: column;
+  /* Tighter than --af-space-3: four tiers at 12px reflow badly at a 24px
+   * rhythm, and the actions row below carries its own clearance. */
+  gap: 6px;
+  padding: var(--af-space-3) var(--af-space-4) var(--af-space-4);
+}
+/* The discs are the only tier with real mass, so the gap after them is the one
+ * that has to be larger than the rhythm between the text lines. */
+.af-po-actions {
+  margin-bottom: 2px;
+}
+
+.af-po-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--af-space-2);
+}
+
+/* Round discs, as on both reference apps. Sized off the popout's own width so
+ * a small poster does not get buttons that crowd its drawer out. */
+.af-po-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  /* Comfortably above the tallest content the clamps below allow, so the
-   * band is the same height for a movie with an overview and a library
-   * without one - that is what stops the rails jumping as the panel moves. */
-  min-height: clamp(220px, 33vh, 360px);
-  padding: clamp(12px, 2.5vh, 32px) 3.3%;
+  width: clamp(34px, 18%, 44px);
+  height: clamp(34px, 18%, 44px);
+  aspect-ratio: 1;
+  padding: 0;
+  border-radius: var(--af-radius-pill);
+  border: 1px solid var(--af-edge-strong);
+  background: transparent;
+  color: var(--af-text-primary);
+  cursor: pointer;
+  transition:
+    box-shadow var(--af-dur-ring-out) var(--af-ease-out),
+    background-color var(--af-dur-ring-out) var(--af-ease-out);
+}
+.af-po-btn[hidden] {
+  display: none !important;
+}
+.af-po-btn:hover,
+.af-po-btn:focus-visible {
   outline: none;
+  box-shadow: var(--af-focus-ring);
+}
+.af-po-btn-primary {
+  border-color: transparent;
+  background: var(--af-accent-primary);
+  color: var(--af-on-accent);
+  box-shadow: var(--af-primary-glow);
+}
+.af-po-btn-ghost:hover {
+  background: var(--af-glass-fill-soft);
 }
 
-/* Item swap: opacity only, so the panel never changes height mid-fade. */
-.af-sp-body {
-  transition: opacity var(--af-dur-tile) var(--af-ease-out);
+/* CSS-drawn, so the popout needs no icon font: jellyfin-web's Material sheet
+ * is lazily loaded and would leave a blank square on a cold rail. */
+.af-po-glyph {
+  pointer-events: none;
 }
-.af-sp-body.af-sp-swap {
-  opacity: 0;
+.af-po-glyph-play {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-left: 11px solid currentColor;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+}
+/* Lower-case i: a dot over a stem. */
+.af-po-glyph-info {
+  position: relative;
+  width: 2px;
+  height: 9px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.af-po-glyph-info::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -6px;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* Browse: a right chevron, for the folder-like types that are opened rather
+ * than played. */
+.af-po-glyph-browse {
+  width: 8px;
+  height: 8px;
+  margin-left: -2px;
+  border-right: 2px solid currentColor;
+  border-top: 2px solid currentColor;
+  transform: rotate(45deg);
 }
 
-/* .af-btn is inline-flex and .af-sp-overview is -webkit-box, both of which
- * beat the UA `[hidden] { display: none }`, so restate it. */
-#af-spotlight [hidden] {
+/* Nothing in the drawer is `display: block`, so the UA's `[hidden]` rule loses
+ * to every author display below it. writeJoined()/writeBadges() hide the tiers
+ * that have nothing to say, and this is what makes that stick. */
+#af-popout [hidden] {
   display: none !important;
 }
 
-.af-sp-title {
-  margin: 0 0 var(--af-space-6);
-  font: var(--af-type-display);
-  letter-spacing: var(--af-tracking-display);
+/* The three fact tiers. Deliberately much smaller than `.af-chip`, the pill
+ * this replaced: at a poster's width three pills filled the drawer and
+ * everything after them was clipped. These are sized so the whole set —
+ * title, badges, meta, genres — costs less height than that one clipped strip
+ * did, and every tier ellipsizes rather than truncating mid-word.
+ *
+ * Sizes are in CSS px, so on the 85" panel at 300% they render 3x and stay a
+ * TV-legible ~36px; the short-viewport block at the end of the section is what
+ * that display actually trips, not these. */
+
+.af-po-title {
+  font: 600 15px/1.3 var(--af-font-body);
   color: var(--af-text-primary);
-  text-wrap: pretty;
-  display: -webkit-box;
-  /* One line: the band has a fixed height, so a title that could wrap to two
-   * would change it and make the panel jump as it moves between sections. */
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
+  /* One line: the drawer's height feeds the vertical clamp in placePopout(),
+   * and a title that could wrap to two would move the popout as it repaints. */
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.af-sp-chips {
+.af-po-badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 22px;
-  /* One row. Chips are ordered most-useful-first, so clipping the tail on a
-   * narrow window costs little and keeps the band height constant. */
-  max-height: 34px;
-  overflow: hidden;
+  gap: 6px;
 }
-.af-sp-chips:empty {
-  display: none;
+.af-po-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--af-radius-xs);
+  border: 1px solid var(--af-edge-chip);
+  font: var(--af-type-meta-sm);
+  font-size: 10px;
+  letter-spacing: var(--af-tracking-badge);
+  text-transform: uppercase;
+  color: var(--af-text-muted);
+  white-space: nowrap;
 }
 
-.af-sp-overview {
-  margin: 0 0 var(--af-space-8);
-  max-width: 640px;
-  font: var(--af-type-body-lg);
-  color: var(--af-text-muted);
+/* Up to two lines, because an episode's own name rides this line and is the
+ * one fact here that can be long. */
+.af-po-meta {
+  font: 400 12px/1.45 var(--af-font-body);
+  color: var(--af-text-primary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.af-sp-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.af-btn {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  border-radius: var(--af-radius-pill);
-  border: 1px solid transparent;
-  cursor: pointer;
-  font: var(--af-type-button);
-  transition: box-shadow var(--af-dur-ring-out) var(--af-ease-out);
-}
-.af-btn:focus-visible,
-.af-btn:hover {
-  outline: none;
-  box-shadow: var(--af-focus-ring);
-  transition-duration: var(--af-dur-ring-in);
-}
-.af-btn-primary {
-  padding: 17px 34px;
-  background: var(--af-accent-primary);
-  color: var(--af-on-accent);
-  box-shadow: var(--af-primary-glow);
-}
-.af-btn-secondary {
-  padding: 17px 28px;
-  background: var(--af-glass-fill-soft);
-  border-color: var(--af-edge-strong);
-  color: var(--af-text-primary);
-  font: var(--af-type-button-secondary);
-}
-.af-btn-glyph {
-  width: 0;
-  height: 0;
-  border-left: 13px solid var(--af-on-accent);
-  border-top: 8px solid transparent;
-  border-bottom: 8px solid transparent;
-}
-
-#af-server-panel {
-  position: fixed;
-  right: clamp(16px, calc(var(--af-gutter) - (1600px - 100vw) * .12), var(--af-gutter));
-  bottom: clamp(24px, 6vh, var(--af-gutter));
-  width: 300px;
-  padding: 24px 26px;
-  border-radius: var(--af-radius-panel);
-  border: 1px solid var(--af-edge-luminous);
-  background: var(--af-glass);
-  -webkit-backdrop-filter: blur(var(--af-glass-blur-panel));
-  backdrop-filter: blur(var(--af-glass-blur-panel));
-}
-.af-srv-eyebrow {
-  margin-bottom: var(--af-space-4);
-  font: var(--af-type-meta-sm);
-  letter-spacing: var(--af-tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--af-accent-primary);
-}
-.af-srv-name {
-  font: 500 18px/1.3 var(--af-font-body);
-  color: var(--af-text-primary);
-  overflow-wrap: anywhere;
-}
-.af-srv-rule {
-  height: 1px;
-  margin: 18px 0;
-  background: var(--af-edge-soft);
-}
-.af-srv-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--af-space-4);
-  font: 400 15px/1.6 var(--af-font-body);
+.af-po-genres {
+  font: 400 12px/1.45 var(--af-font-body);
   color: var(--af-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.af-srv-row > span:last-child {
-  font-family: var(--af-font-mono);
-  /* Metadata values read as machine state, not prose: uppercase mono, as in
-     the design brief. */
-  text-transform: uppercase;
-  letter-spacing: var(--af-tracking-meta);
-  color: var(--af-text-primary);
+
+/* The card underneath. .af-popped is on whichever card the popout is standing
+ * in for: its own hover scale has to come off or the tile peeks out past the
+ * popout's edges, and dropping the ring stops it glowing from behind. */
+.card.af-popped .cardScalable,
+.card.af-popped:hover .cardScalable,
+.card.af-popped:focus-within .cardScalable {
+  transform: none;
+  box-shadow: var(--af-focus-ring-rest);
 }
 
 #af-hint {
@@ -1937,22 +2070,19 @@ html.af-home #homeTab .card[data-af-kind] .cardScalable[data-af-kind]::before {
   color: var(--af-text-muted);
 }
 
-/* Short viewports (720p and the like): keep the in-flow band shallow so it
- * costs less of the rail stream, and keep the fixed server panel off the
- * cards entirely. */
+/* Short viewports (720p and the like). The popout is clamped into the band
+ * between the header and the bottom of the viewport, so on a short window it
+ * grows less rather than being pushed off-screen, and the drawer tightens to
+ * buy the art back some of that. */
 @media (max-height: 900px) {
-  .af-sp-title {
-    font: var(--af-type-title);
-    letter-spacing: var(--af-tracking-display);
-    -webkit-line-clamp: 1;
-    margin-bottom: var(--af-space-4);
+  :root { --af-popout-scale: 1.18; }
+  .af-po-drawer {
+    gap: 5px;
+    padding: var(--af-space-2) var(--af-space-3) var(--af-space-3);
   }
-  .af-sp-chips { margin-bottom: var(--af-space-4); }
-  .af-sp-overview { display: none; }
-  #af-server-panel { display: none; }
 }
 /* The hint footer is fixed, so on a very short window it is the one thing
- * that can still sit on a card. The in-flow spotlight never needs hiding. */
+ * that can still sit on a card. */
 @media (max-height: 560px) {
   #af-hint { display: none !important; }
 }
@@ -2066,8 +2196,8 @@ html.af-library .itemsContainer > .card > .cardBox {
 
 /* Unfocused labels recede, as they do on the Home rails (section (e) carries
  * the shared dim/un-dim pair). The library grid sits a step brighter than
- * Home's .55: on Home the spotlight panel owns the attention and the rails
- * are peripheral, whereas here the tiles are the whole page. .72 is the
+ * Home's .55: on Home the popout and the art bleed own the attention and the
+ * rails are peripheral, whereas here the tiles are the whole page. .72 is the
  * artboard's value.
  *
  * (0,4,1), equal to the dim rule in section (e) and later in source, so it
@@ -2484,7 +2614,7 @@ html.af-library.af-backdrop .backgroundContainer.withBackdrop {
 /* (o) Item detail                                                        */
 /* Targets: docs/design/canvas/MovieDetail.dc.html and SeriesDetail.dc.   */
 /* html — a 640px blurb column at the 72px gutter starting 150px down, an */
-/* 88px gap, then the shelves; no poster; the logo (or a 64/72 display    */
+/* 88px gap, then the shelves; the logo (or a 64/72 display               */
 /* title) top left under a cyan eyebrow; the actions as a 360px stack of  */
 /* 56px pills with Resume in accent; a 300px glass facts panel top right; */
 /* and, on a season page, episode rows of 208x117 stills.                 */
@@ -2622,17 +2752,28 @@ html.af-detail.af-backdrop .backgroundContainer.withBackdrop {
  * put the right-hand column. */
 html.af-detail .itemDetailPage .detailPageWrapperContainer {
   display: grid;
-  grid-template-columns: 640px minmax(0, 1fr);
+  /* The blurb column shrinks instead of the layout collapsing. Owner call
+   * 2026-09-13: one layout language at both sizes was worth more than six
+   * un-scrolled tiles, and stacking cost 1000px of page height (measured:
+   * 2592px against 1568px on the monitor).
+   *
+   * The coefficient is 31.25vw, not the 44vw it started at, so the column is
+   * the same *fraction* of the screen at every width — 640px at 2048px, and
+   * 31.25% of anything narrower. At 44vw the clamp pinned it to 640px from
+   * 1455px upward, which made it 42.5% of the 85" panel's width against 31%
+   * of the monitor's, and that was most of why the detail page needed a
+   * smaller Interface Scale than Home did. */
+  grid-template-columns: var(--af-detail-column) minmax(0, 1fr);
   column-gap: 88px;
   align-items: start;
   box-sizing: border-box;
   margin: 0;
-  padding: 150px var(--af-gutter) var(--af-gutter);
+  padding: var(--af-detail-top) var(--af-gutter) var(--af-gutter);
 }
 
-/* One column below 1600px: 640 + 88 + a shelf of six 130px tiles does not
- * fit, and squeezing the blurb column is worse than stacking. */
-@media (max-width: 1599px) {
+/* One column below 1024px, where even the clamp's 420px floor plus the 88px
+ * gap leaves too little for the 300px rail. Above it the grid above holds. */
+@media (max-width: 1023px) {
   html.af-detail .itemDetailPage .detailPageWrapperContainer {
     grid-template-columns: minmax(0, 1fr);
     row-gap: var(--af-space-12);
@@ -2648,84 +2789,137 @@ html.af-detail .detailImageContainer {
   display: none;
 }
 
-/* Owner call 2026-09-10: the movie/series poster returns to the empty upper
- * right. In the single-column layout (<=1599px, the 4K-at-300% case) the blurb
- * caps at 640px on the left and the shelves stack far below, so the top-right
- * of the ribbon is empty. The desktop copy (.hide-mobile) is a standard
- * portraitCard whose .cardImageContainer lazy-loads the Primary image; park it
- * top-right, its right edge on the content edge and dropped to sit centred
- * against the action column (owner call: a little lower than the logo line).
- * Two-column (>=1600px) keeps the no-poster treatment for now — the empty
- * space there is the right shelf column, a separate spot. */
-@media (max-width: 1599px) {
-  html.af-detail[data-af-detail-type="movie"] .detailPageWrapperContainer,
-  html.af-detail[data-af-detail-type="series"] .detailPageWrapperContainer,
-  html.af-detail[data-af-detail-type="season"] .detailPageWrapperContainer {
-    position: relative;
-  }
-  html.af-detail[data-af-detail-type="movie"] .detailImageContainer.hide-mobile,
-  html.af-detail[data-af-detail-type="series"] .detailImageContainer.hide-mobile,
-  html.af-detail[data-af-detail-type="season"] .detailImageContainer.hide-mobile {
-    display: block;
-    position: absolute;
-    top: 210px;
-    right: var(--af-gutter);
-    width: 300px;
-    margin: 0;
-    z-index: 2;
-    pointer-events: none;
-  }
-  html.af-detail .detailImageContainer.hide-mobile .card,
-  html.af-detail .detailImageContainer.hide-mobile .cardBox,
-  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    border: 0;
-  }
-  html.af-detail .detailImageContainer.hide-mobile .cardScalable {
-    border-radius: var(--af-radius-md);
-    overflow: hidden;
-    box-shadow: 0 0 0 1px var(--af-edge-soft), 0 26px 70px rgba(0, 0, 0, .55);
-  }
+/* The right column's head: poster, then a wide facts card, then jellyfin-web's
+ * own cast/similar shelves.
+ *
+ * Owner call 2026-09-10 put the poster back, but only in the single-column
+ * layout, absolutely positioned over the empty top right of the ribbon — so on
+ * a monitor, which takes the two-column branch, there was no poster at all.
+ * Owner call 2026-09-13 settles it for both: astrofin-theme.js moves the
+ * .hide-mobile copy into the right column ahead of `#af-detail-panel`, the
+ * poster is centred over the card, and the card is as wide as the column so it
+ * sits directly above Cast & Crew.
+ *
+ * Measured live at 2048x1130: poster 440x660 at x=1187 (the column runs
+ * 800-1976, so it straddles the page centre), 95px of air above it and 96px
+ * below, card 1137x123, cast shelf at y=1055, logo and action stack unmoved at
+ * y=198 and y=477. On the 85" panel's real 1280x698 viewport the same rules
+ * give 275x413 — 21.5% of the screen either way. The open space to the left and
+ * right of the poster is where the item's backdrop bleeds through, which is
+ * the point of it.
+ *
+ * Two stock rules had to be answered, both left over from jellyfin-web's own
+ * overlapping ribbon and both invisible until the poster moved into flow:
+ *   - `.detailImageContainer { height: 0 }` — the ribbon let the poster
+ *     overflow its container, so the container reserved nothing;
+ *   - `.card { position: relative; top: -12.96em }` — which pulled the poster
+ *     up over the ribbon. In the right column that put its top edge at y=-8,
+ *     under the header: the "cut off at the top" the owner reported. */
+html.af-detail[data-af-detail-type="movie"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile,
+html.af-detail[data-af-detail-type="series"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile,
+html.af-detail[data-af-detail-type="season"] .detailPageSecondaryContainer > .detailImageContainer.hide-mobile {
+  display: block;
+  /* Answers the stock `height: 0`. */
+  height: auto;
+  width: min(100%, var(--af-detail-poster-width));
+  /* auto both sides centres it over the card below. The negative top margin is
+   * the difference between the page's top inset and the gap wanted here, so
+   * the poster pulls itself up out of the inset and ends with the same air
+   * above as below — measured 95/96 at both target viewports — while the left
+   * column keeps the full inset it is designed around. */
+  margin: calc(var(--af-detail-poster-gap) - var(--af-detail-top)) auto var(--af-detail-poster-gap);
+  padding: 0;
+  /* The card inside is a real jellyfin-web link, and it points at the page the
+   * viewer is already on. */
+  pointer-events: none;
+}
+
+/* The three stock declarations on the poster's own card, all of them left over
+ * from jellyfin-web's overlapping ribbon and all invisible until the poster
+ * moved into flow. Measured live over CDP, in the order they were found:
+ *
+ *   position: relative; top: -12.96em   pulled the poster up over the ribbon.
+ *     In the right column that put its top edge at y=-8, under the header —
+ *     the "cut off at the top" the owner reported.
+ *
+ *   float: left                          the one that mattered. A float gives
+ *     its parent no height, so `.detailImageContainer` measured 0 tall and
+ *     every margin on it was absorbed; and `#af-detail-panel` is a grid, which
+ *     establishes a block formatting context and therefore refuses to overlap
+ *     a float, so it was pushed to exactly the float's bottom edge and sat
+ *     flush against the poster whatever margin it was given. Two attempts at
+ *     spacing them — a bottom margin on the poster, then a top margin on the
+ *     panel — both measured a 0px gap before this was found.
+ *
+ *   max-width                            stock sizes the card off the viewport
+ *     (25vw), which held it to 320px inside a 440px container at 1280px. */
+html.af-detail .detailImageContainer.hide-mobile .card {
+  position: static;
+  top: auto;
+  float: none;
+  max-width: none;
+}
+
+html.af-detail .detailImageContainer.hide-mobile .card,
+html.af-detail .detailImageContainer.hide-mobile .cardBox,
+html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+  width: 100%;
+  /* All three, not just the card: stock caps them off the viewport (25vw), and
+   * measured on the 85" panel that held the poster to 320px inside a 440px
+   * container — the container obeyed the theme and the art did not. */
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+html.af-detail .detailImageContainer.hide-mobile .cardScalable {
+  border-radius: var(--af-radius-md);
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--af-edge-soft), 0 26px 70px rgba(0, 0, 0, .55);
 }
 
 /* Stock parks the logo at `right:25vw;top:10vh;width:25vw;height:16vh`,
  * centred, opposite the poster. It moves to the head of the blurb column,
- * left-aligned, at the artboard's 150px. It stays absolute, so it does not
+ * left-aligned, at the page's own top inset. It stays absolute, so it does not
  * take part in the column's flow — the padding-top below is what makes room
- * for it. */
+ * for it, and reads the same token so the two cannot drift.
+ *
+ * Its size is viewport-relative (2026-09-13): at 520px fixed it was a quarter
+ * of the monitor's width but a third of the 85" panel's, which is most of why
+ * the detail page needed a smaller Interface Scale than Home did. */
 html.af-detail .detailLogo {
   position: absolute;
   left: var(--af-gutter);
   right: auto;
-  top: 150px;
-  width: 520px;
-  height: 140px;
+  top: var(--af-detail-top);
+  width: var(--af-detail-logo-width);
+  height: var(--af-detail-logo-height);
   background-position: left center;
   background-size: contain;
   z-index: 3;
 }
 
 /* jf-web already hides the logo below 68.75em; this carries that up to 1280px.
- * Note the single-column breakpoint is 1599px, not 1280px: every width in
- * 1280-1599 DOES show the 520px logo over one column. Verified 2026-09-10 that
- * this reads fine — the column takes its 164px top padding and .itemName is
- * hidden on movie/series — so the fix is this comment, not the rule. */
+ * Since 2026-09-13 the layout is two-column down to 1024px, so the blurb
+ * column at 1280px is the clamp's 563px and the 520px logo still fits it with
+ * 43px to spare. Verified 2026-09-10 on the one-column layout this replaced,
+ * where it also read fine. */
 @media (max-width: 1279px) {
   html.af-detail .detailLogo {
     display: none;
   }
 }
 
-/* With a logo up, the blurb column starts under it (140px + 24px) and the
- * name is redundant — jellyfin-web puts the same words in the artwork.
+/* With a logo up, the blurb column starts under it — the logo's own height
+ * plus a 24px gap, computed from the same token, so a logo that shrinks with
+ * the viewport takes its clearance with it rather than leaving a hole. The
+ * name is redundant there — jellyfin-web puts the same words in the artwork.
  * .detailLogo is a previous sibling of .detailPageWrapperContainer, and it
  * gains .hide when the item has neither ImageTags.Logo nor a
  * ParentLogoImageTag, so `:not(.hide)` is the whole test. */
 html.af-detail .detailLogo:not(.hide) ~ .detailPageWrapperContainer .detailPagePrimaryContainer {
-  padding-top: 164px;
+  padding-top: calc(var(--af-detail-logo-height) + var(--af-space-6));
 }
 /* Only where the logo really is the title. On a season or an episode the logo
  * is the *series* logo (jf-web falls back to ParentLogoImageTag), while
@@ -2844,12 +3038,18 @@ html.af-detail .nameContainer .itemName {
   -webkit-line-clamp: 2;
   overflow: hidden;
   /* Cap to the blurb column's own 640px measure (as the credits and track
-   * pickers are). Without it, in the single-column layout (<=1599px, track
-   * 1136px) a long episode title ran to 1017px on one 64px line and the 2-line
-   * clamp never engaged (measured 2026-09-10). */
+   * pickers are). Without it a long episode title ran to 1017px on one 64px
+   * line and the 2-line clamp never engaged (measured 2026-09-10 on the
+   * single-column layout, whose 1136px track let it). The cap still earns its
+   * place: the column is only narrower than 640px below about 1455px. */
   max-width: 640px;
   margin: 0;
   font: var(--af-type-display);
+  /* After the shorthand, which carries the weight and family: the size alone
+   * is viewport-relative, landing on the token's 64/72 at 2048px. A 64px
+   * title is 3.1% of the monitor's width but 4.3% of the 85" panel's. */
+  font-size: var(--af-detail-title-size);
+  line-height: 1.125;
   letter-spacing: var(--af-tracking-display);
   color: var(--af-text-primary);
   white-space: normal;
@@ -2954,34 +3154,38 @@ html.af-detail .trackSelections .selectArrowContainer {
 }
 
 html.af-detail .detailSectionContent .itemGenres {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body);
   color: var(--af-text-muted);
 }
 html.af-detail .detailSectionContent .tagline {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-tile);
   color: var(--af-text-primary);
 }
 html.af-detail .detailSectionContent .overview {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body-lg);
+  /* After the shorthand: the size alone is viewport-relative. The token stays
+   * 16px and is shared with the OSD and the about box, which are not on this
+   * page and are not being re-scaled. */
+  font-size: var(--af-detail-body);
   color: var(--af-text-muted);
 }
-/* The tag wall and the external-links row have no cap of their own, so in the
- * single-column layout (<=1599px, track 1136px) they spanned the full track
- * under a 600px overview — ragged (measured 2026-09-10: tags 1136px under a
- * 600px overview at 1280px). Cap them to the same measure as the prose above.
+/* The tag wall and the external-links row have no cap of their own, so they
+ * spanned the full track under a 600px overview — ragged (measured 2026-09-10
+ * on the single-column layout: tags 1136px under a 600px overview at 1280px).
+ * Cap them to the same measure as the prose above.
  * `.detailSectionContent`-scoped like their siblings; the links row also
  * appears bare, so it is matched unscoped as well. */
 html.af-detail .detailSectionContent .itemTags,
 html.af-detail .detailSectionContent .itemExternalLinks,
 html.af-detail .itemTags,
 html.af-detail .itemExternalLinks {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
 }
 /* jf-web clamps the blurb by *adding* .detail-clamp-text and removes it when
  * "Show more" is clicked, so the 3-line clamp has to ride that class or the
@@ -3038,7 +3242,7 @@ html.af-detail .itemDetailPage .mainDetailButtons {
   align-items: center;
   align-content: flex-start;
   order: 2;
-  width: 360px;
+  width: var(--af-detail-actions-width);
   gap: 12px;
   margin: 22px 0 6px;
 }
@@ -3065,6 +3269,9 @@ html.af-detail .itemDetailPage .mainDetailButtons > .detailButton {
   border-radius: var(--af-radius-pill);
   background: var(--af-glass-fill-soft);
   font: var(--af-type-button-secondary);
+  /* After the shorthand, as everywhere else on this page: the size follows the
+   * viewport while the weight and family stay the token's. */
+  font-size: var(--af-detail-pill);
   text-align: left;
   text-transform: none;
   color: var(--af-text-primary);
@@ -3245,6 +3452,9 @@ html.af-detail .detailPageContent .sectionTitle,
 html.af-detail .detailPagePrimaryContent .sectionTitle {
   margin: 0 0 14px;
   padding: 0;
+  /* Scoped to the detail page: `.sectionTitle` is Home's shelf heading too,
+   * and Home is comfortable at a width this page is not. */
+  font-size: var(--af-detail-shelf);
 }
 html.af-detail .detailPageContent .sectionTitleContainer,
 html.af-detail .detailPagePrimaryContent .sectionTitleContainer {
@@ -3306,11 +3516,19 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 /* Built by astrofin-theme.js's detailFacts()/renderDetailPanel() and
  * inserted as the first child of .detailPageSecondaryContainer, so
  * `margin-left:auto` lands it on the page's right gutter at the artboard's
- * 150px. Same glass as #af-server-panel in section (k). */
+ * 150px. Same glass as the panels in section (k). */
+/* Wide and short, directly above Cast & Crew — owner call 2026-09-13. It was a
+ * 300px column of stacked rows beside the shelves; at 1137px wide the same
+ * five rows flow into six columns and the card is 123px tall instead of 250,
+ * which is what let the poster above it grow without the page running away. */
 #af-detail-panel {
   box-sizing: border-box;
-  width: 300px;
-  margin-left: auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  column-gap: 28px;
+  align-content: start;
+  margin: 0 0 var(--af-space-8);
   padding: 22px 26px;
   border: 1px solid var(--af-edge-luminous);
   border-radius: var(--af-radius-panel);
@@ -3320,6 +3538,14 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 }
 #af-detail-panel[hidden] {
   display: none !important;
+}
+/* The eyebrow, headline and rule are the card's header, not facts, so they run
+ * the full width rather than taking a column each. */
+#af-detail-panel > .af-dp-eyebrow,
+#af-detail-panel > .af-dp-headline,
+#af-detail-panel > .af-dp-sub,
+#af-detail-panel > .af-dp-rule {
+  grid-column: 1 / -1;
 }
 .af-dp-eyebrow {
   margin-bottom: 14px;
@@ -3348,6 +3574,7 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
   justify-content: space-between;
   gap: var(--af-space-4);
   font: 400 15px/1.7 var(--af-font-body);
+  font-size: var(--af-detail-facts);
   color: var(--af-text-muted);
 }
 .af-dp-row > span:last-child {
@@ -3362,15 +3589,6 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
 .af-dp-row > span.af-dp-accent {
   text-transform: uppercase;
   color: var(--af-accent-primary);
-}
-
-/* Stacked layout: the panel is no longer beside anything, so it spans. */
-@media (max-width: 1599px) {
-  #af-detail-panel {
-    width: 100%;
-    max-width: 420px;
-    margin-left: 0;
-  }
 }
 
 /* --- Season pages: the episode rows ---------------------------------- */

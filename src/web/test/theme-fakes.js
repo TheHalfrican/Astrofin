@@ -5,14 +5,19 @@
 // gaps astrofin-theme.js walks into, then adds the jellyfin-web-shaped scaffolds
 // the theme reads (a Home page with rails and cards, an ApiClient with images).
 //
-// The two gaps, both patched on the prototypes exported by player-fakes.js:
+// The gaps, all patched on the prototypes exported by player-fakes.js:
 //
 //   1. `textContent` is a plain data property there, so `el.textContent = ''`
-//      does not detach the children. The theme clears the chip strip and the
-//      server panel exactly that way, so without real semantics a second render
-//      would append to the first and the tests would be measuring the fake.
-//   2. `createDocumentFragment()` does not exist, and renderServerPanel()
+//      does not detach the children. The theme clears the popout's art slot
+//      and its badge row exactly that way, so without real semantics a second
+//      render would append to the first and the tests would be measuring the
+//      fake.
+//   2. `createDocumentFragment()` does not exist, and the detail facts panel
 //      builds its rows in one. A fragment appends its children, not itself.
+//   3. there is no box model at all — nothing has a position or a size and
+//      `getBoundingClientRect()` does not exist — but placePopout() is made of
+//      nothing else. See `setRect` below: every box is one the test wrote.
+//   4. `cloneNode()` does not exist, and cloneArt() deep-clones the card tile.
 //
 // Nothing here touches the real DOM, the network or a profile dir; the
 // prototype patches are process-local and `node --test` gives each test file
@@ -58,29 +63,6 @@ Object.defineProperty(FakeElement.prototype, 'textContent', {
     }
 });
 
-// placeSpotlight() inserts the panel at `section.nextSibling` and then asks
-// whether it already sits right after that rail. Without these two the insert
-// lands at the end of the container and the check never holds, so the panel
-// moves on every refresh — which the fake's synchronous observers turn into an
-// endless refresh loop.
-Object.defineProperty(FakeElement.prototype, 'nextSibling', {
-    configurable: true,
-    get() {
-        if (!this.parentNode) return null;
-        const sibs = this.parentNode.childNodes;
-        return sibs[sibs.indexOf(this) + 1] || null;
-    }
-});
-
-Object.defineProperty(FakeElement.prototype, 'previousElementSibling', {
-    configurable: true,
-    get() {
-        if (!this.parentNode) return null;
-        const sibs = this.parentNode.children;
-        return sibs[sibs.indexOf(this) - 1] || null;
-    }
-});
-
 // The theme drives jellyfin-web's delegated handlers by clicking real nodes
 // (the card's own overlay button, or a throwaway .itemAction it appends), so
 // `click()` has to dispatch a bubbling event rather than be a stub.
@@ -103,6 +85,65 @@ FakeDocument.prototype.createDocumentFragment = function createDocumentFragment(
     return frag;
 };
 
+// cloneArt() deep-clones the card's own .cardScalable into the popout. A real
+// clone copies attributes, classes and inline style but never listeners, and
+// belongs to the same document — which is what lets the theme drop the canvas
+// and disarm the delegation in the copy without touching the card.
+FakeElement.prototype.cloneNode = function cloneNode(deep) {
+    const doc = this.ownerDocument;
+    if (this.nodeType === TEXT_NODE) return doc.createTextNode(this.textContent);
+    const copy = doc.createElement(this.tagName);
+    this._attrs.forEach((value, name) => copy.setAttribute(name, value));
+    copy.className = this.className;
+    copy.hidden = this.hidden;
+    Object.keys(this.style).forEach((name) => {
+        if (typeof this.style[name] !== 'function') copy.style[name] = this.style[name];
+    });
+    if (deep) this.childNodes.forEach((child) => copy.appendChild(child.cloneNode(true)));
+    return copy;
+};
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+// The popout is placed entirely from measured boxes — the card's rect, the
+// drawer's laid-out height, the header's bottom edge — so the fake has to
+// have a box model. It is deliberately not a layout engine: a box is whatever
+// the test wrote with setRect(), and an element nobody measured reads as 0x0
+// at the origin. That is what a detached or display:none node reads as in a
+// real browser, and it is the case placePopout() refuses to paint over.
+const ZERO_RECT = Object.freeze({
+    x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0
+});
+
+FakeElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    return this._rect || ZERO_RECT;
+};
+
+// Give `el` a laid-out box, in viewport coordinates. offsetWidth/offsetHeight
+// follow it, so the drawer whose height placePopout() reads is measured the
+// same way as a card's art.
+function setRect(el, box) {
+    const left = Number(box.left || 0);
+    const top = Number(box.top || 0);
+    const width = Number(box.width || 0);
+    const height = Number(box.height || 0);
+    el._rect = {
+        x: left,
+        y: top,
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height
+    };
+    el.offsetWidth = width;
+    el.offsetHeight = height;
+    return el;
+}
+
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
@@ -113,8 +154,10 @@ function makeThemeWindow(overrides = {}) {
     const opts = Object.assign({}, overrides);
     const hash = opts.hash;
     delete opts.hash;
+    // A viewport, because placePopout() clamps against both axes of it.
     const win = makeWindow(Object.assign({
         innerWidth: 1280,
+        innerHeight: 720,
         devicePixelRatio: 1
     }, opts));
     if (hash !== undefined) win.location.hash = hash;
@@ -221,9 +264,7 @@ function makeThemeApiClient(overrides = {}) {
                 + '?maxWidth=' + o.maxWidth + '&tag=' + o.tag;
         },
         // A function override stands in for the accessor itself, so a test can
-        // make serverName() throw the way a disconnected ApiClient does.
-        serverName() { return value(overrides.serverName); },
-        serverInfo() { return value(overrides.serverInfo); },
+        // make serverId() throw the way a disconnected ApiClient does.
         serverId() { return value(overrides.serverId); }
     };
     return Object.assign(client, overrides.extra || {});
@@ -244,6 +285,7 @@ module.exports = {
     makeThemeWindow,
     loadTheme,
     installThemeStyle,
+    setRect,
     buildHome,
     makeCard,
     makeThemeApiClient,

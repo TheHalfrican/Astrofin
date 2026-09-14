@@ -346,15 +346,28 @@ test('every control container is stamped with its key, section and apply mode', 
         ]);
 });
 
-test('only videoMode is tagged as applying live', () => {
+test('videoMode and interfaceScale are the settings tagged as applying live', () => {
     const jmpInfo = makeJmpInfo();
     jmpInfo.settingsDescriptions.video.push({
         key: 'videoMode', displayName: 'Video mode', options: ['auto', 'off']
     });
+    // videoMode reaches the running mpv, interfaceScale reaches CEF's browser
+    // zoom. Everything else is read at boot and shows the restart pill.
+    jmpInfo.settingsDescriptions.video.push({
+        key: 'interfaceScale', displayName: 'Interface Scale', options: ['1', '0.85']
+    });
+    jmpInfo.settingsDescriptions.video.push({
+        key: 'hideScrollbar', displayName: 'Hide Scrollbar'
+    });
     const ctx = load({ jmpInfo });
     const form = renderForm(ctx);
     const live = form.querySelectorAll('[data-af-applies="live"]');
-    assert.deepStrictEqual(live.map((c) => c.getAttribute('data-af-setting')), ['videoMode']);
+    assert.deepStrictEqual(
+        live.map((c) => c.getAttribute('data-af-setting')).sort(),
+        ['interfaceScale', 'videoMode']);
+    const restart = form.querySelectorAll('[data-af-applies="restart"]');
+    assert.ok(restart.some((c) => c.getAttribute('data-af-setting') === 'hideScrollbar'),
+        'a boot-time setting still asks for a restart');
 });
 
 test('every group carries its section, including the two synthetic ones', () => {

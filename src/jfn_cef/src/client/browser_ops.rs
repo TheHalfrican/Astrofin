@@ -63,6 +63,16 @@ impl Inner {
         }
     }
 
+    /// Page zoom for this layer. The level is Chromium's logarithmic one —
+    /// 0.0 is 100 % — so callers convert a UI scale factor with
+    /// [`crate::client_logic::zoom_level_for_factor`] rather than passing a
+    /// factor here.
+    pub(crate) fn cef_set_zoom_level(&self, level: f64) {
+        if let Some(h) = self.host() {
+            h.set_zoom_level(level);
+        }
+    }
+
     pub(crate) fn cef_was_hidden(&self, hidden: bool) {
         if let Some(h) = self.host() {
             h.was_hidden(if hidden { 1 } else { 0 });

@@ -118,6 +118,27 @@ pub unsafe fn jfn_web_exec_js(js_utf8: *const c_char) {
     inner.exec_js(&js);
 }
 
+/// Re-scale the live web UI, as CEF page zoom.
+///
+/// The web layer and no other: the overlay is a separate browser drawing its
+/// own fixed-size chrome (the connect screen, the about box) over a UI the
+/// settings page is not in, and re-zooming it from here would resize
+/// something nobody asked about mid-interaction. Every layer, the overlay
+/// included, still picks the saved scale up at `OnAfterCreated`.
+///
+/// A no-op before `jfn_web_init` and after the layer's `OnBeforeClose`, like
+/// [`jfn_web_exec_js`].
+pub fn jfn_web_set_interface_scale(factor: f64) {
+    // Clone the Arc<Inner> out under the lock and release the lock before the
+    // CEF call — see `jfn_web_exec_js`. The Arc keeps Inner alive across the
+    // call even if the layer closes mid-way.
+    let inner = match INSTANCE.lock().as_ref() {
+        Some(s) => Arc::clone(&s.layer),
+        None => return,
+    };
+    inner.cef_set_zoom_level(crate::client_logic::zoom_level_for_factor(factor));
+}
+
 fn install_handlers(layer: *mut JfnCefLayer, inner_for_created: Arc<Inner>) {
     let l = unsafe { &*layer };
 
@@ -865,6 +886,22 @@ mod tests {
         assert_eq!(media_type_to_pb(MT_VIDEO), PbMediaType::Video);
         assert_eq!(media_type_to_pb(MT_UNKNOWN), PbMediaType::Unknown);
         assert_eq!(media_type_to_pb(u8::MAX), PbMediaType::Unknown);
+    }
+
+    // --- jfn_web_set_interface_scale ----------------------------------------
+
+    /// There is no web layer in a test binary, which is the same state the
+    /// app is in before `jfn_web_init` and after the layer's `OnBeforeClose`:
+    /// the call is a no-op, never a touch of a torn-down layer. (The zoom
+    /// itself is `client_logic::zoom_level_for_factor`, tested there; a live
+    /// `CefBrowserHost` is what the rest would need.)
+    #[test]
+    fn setting_the_interface_scale_without_a_web_layer_does_nothing() {
+        assert!(INSTANCE.lock().is_none(), "a test installed a web layer");
+        for factor in [1.0, 0.65, 1.3, 0.0, -1.0, f64::NAN, f64::INFINITY] {
+            jfn_web_set_interface_scale(factor);
+        }
+        assert!(INSTANCE.lock().is_none());
     }
 
     // --- with_args ----------------------------------------------------------

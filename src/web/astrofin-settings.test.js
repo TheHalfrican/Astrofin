@@ -260,6 +260,8 @@ test('panelFor maps keys first, then sections, then Advanced', () => {
     const ctx = boot({ open: false });
     assert.strictEqual(ctx.af.panelFor('deviceName', 'advanced'), 'server');
     assert.strictEqual(ctx.af.panelFor('videoMode', 'playback'), 'video');
+    // Interface Scale is Astrofin's own zoom, not a playback concern.
+    assert.strictEqual(ctx.af.panelFor('interfaceScale', 'advanced'), 'advanced');
     assert.strictEqual(ctx.af.panelFor('somethingNew', 'transcode'), 'playback');
     assert.strictEqual(ctx.af.panelFor('somethingNew', 'mpv'), 'advanced');
     assert.strictEqual(ctx.af.panelFor('somethingNew', 'audio'), 'audio');

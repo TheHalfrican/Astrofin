@@ -17,6 +17,12 @@ Creative direction in one line: **the PlayStation 5 home screen, set in deep spa
 - Motifs: orbit rings for loading, a constellation-line treatment for progress and timelines, a small "fin" wordmark (Astro + fin: a rocket fin or a star with a swept tail). Propose 3 logo directions.
 - Type: a geometric sans with a light display weight. Prefer open-source: Sora or Outfit for display, Inter for body. Big type scale: page titles 48-64px, tile labels 18-20px, body 16px. Tracking slightly open on titles.
 
+> **Superseded, 2026-09-13:** the Home "spotlight" panel below was built and
+> then replaced. An in-flow band reflowed the page on every hover; the hover
+> treatment is now a Netflix/Prime-style popout fixed over the card itself.
+> See `docs/design/theme-injection.md` § The card popout. Everything else in
+> this brief stands.
+
 ## PS5 behaviors to borrow
 - Home: one horizontal row of large media tiles at the top (libraries, Continue Watching, Next Up), the focused tile enlarged with a glowing ring, and the rest of the screen dedicated to the focused item's artwork, logo, and a short "spotlight" panel with title, year, runtime, rating and a Play button.
 - Item detail ("game hub" layout): full-bleed key art, logo top-left, a vertical stack of quick actions (Play / Resume / Trailer / Mark watched), metadata chips, then horizontal shelves for cast, similar titles, and episodes.

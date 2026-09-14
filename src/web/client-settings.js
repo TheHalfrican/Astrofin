@@ -199,6 +199,12 @@
         return widget;
     }
 
+    /* Settings that take effect on the running app rather than at the next
+     * launch: videoMode goes to the running mpv, interfaceScale to CEF's
+     * browser zoom. A table rather than a growing ternary - it is read once
+     * per rendered setting and there are two of them now. */
+    const LIVE_SETTINGS = { videoMode: true, interfaceScale: true };
+
     // Populate the settings form with controls driven by window.jmpInfo.
     function buildSettingsForm(form) {
         const jmpInfo = window.jmpInfo;
@@ -230,13 +236,15 @@
                 // Stable hooks for astrofin-settings.js and the theme sheet:
                 // the generated control ids are non-semantic (`embyselect0`),
                 // so the key and its section are stamped on the container.
-                // `data-af-applies` is the LIVE/RESTART tag — only videoMode
-                // is applied to the running mpv (see video_mode.rs); every
-                // other setting is read at boot.
+                // `data-af-applies` is the LIVE/RESTART tag. Two settings are
+                // applied to the running app — videoMode to mpv (video_mode.rs)
+                // and interfaceScale to CEF's browser zoom (browser_ops.rs);
+                // every other setting is read at boot.
                 container.setAttribute('data-af-setting', setting.key);
                 container.setAttribute('data-af-section', section);
                 container.setAttribute(
-                    'data-af-applies', setting.key === 'videoMode' ? 'live' : 'restart');
+                    'data-af-applies',
+                    LIVE_SETTINGS[setting.key] ? 'live' : 'restart');
 
                 if (setting.options) {
                     container.className = 'selectContainer';

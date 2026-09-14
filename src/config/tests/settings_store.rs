@@ -52,6 +52,7 @@ fn the_store_binds_one_path_loads_saves_and_drains_its_worker() {
     jfn_config::set_transparent_titlebar(false);
     jfn_config::set_force_transcoding(true);
     jfn_config::set_hide_scrollbar(false);
+    jfn_config::set_interface_scale("0.75");
     jfn_config::set_window_decorations(Some("serverThemed"));
     jfn_config::set_device_name("  My   Box \n", "platform-host");
     jfn_config::set_window_geometry(jfn_config::JfnWindowGeometry {
@@ -75,6 +76,11 @@ fn the_store_binds_one_path_loads_saves_and_drains_its_worker() {
     assert!(!jfn_config::transparent_titlebar());
     assert!(jfn_config::force_transcoding());
     assert!(!jfn_config::hide_scrollbar());
+    assert_eq!(jfn_config::interface_scale(), "0.75");
+    // The store keeps the string; the factor is resolved on the way out.
+    assert!(
+        (jfn_config::interface_scale_factor(&jfn_config::interface_scale()) - 0.75).abs() < 1e-12
+    );
     assert!(jfn_config::configured_window_decorations().is_some());
     // Whitespace is folded before the name ever reaches an auth header.
     assert_eq!(jfn_config::device_name(), "My Box");
@@ -93,6 +99,7 @@ fn the_store_binds_one_path_loads_saves_and_drains_its_worker() {
     assert_eq!(cli["videoMode"].as_str(), Some("animation"));
     assert_eq!(cli["deviceName"].as_str(), Some("My Box"));
     assert_eq!(cli["forceTranscoding"].as_bool(), Some(true));
+    assert_eq!(cli["interfaceScale"].as_str(), Some("0.75"));
 
     // 5. Async saves coalesce, and the shutdown drains the newest one.
     jfn_config::set_server_url("http://async-1");
@@ -117,6 +124,7 @@ fn the_store_binds_one_path_loads_saves_and_drains_its_worker() {
     assert!(jfn_config::settings_load());
     assert_eq!(jfn_config::server_url(), "http://after-shutdown");
     assert!(jfn_config::video_mode_migrated());
+    assert_eq!(jfn_config::interface_scale(), "0.75");
 
     // 8. A settings.json that cannot be parsed leaves the in-memory state
     //    alone and says so.
