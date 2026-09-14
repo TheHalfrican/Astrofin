@@ -5,6 +5,62 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-13
+
+### Added
+- **Card popout.** Hovering or focusing a card on Home or a library grid now
+  opens a Netflix/Prime-style popout over it: the card's own art, larger, with
+  a drawer under it carrying Play/Resume and Details plus the item's facts.
+  It replaces a panel that was inserted into the page flow, which pushed every
+  rail below it down the page on every hover. The popout is a fixed layer in
+  `<body>`, so nothing reflows; it follows the card when the page scrolls
+  rather than closing, and a card at either end of a rail opens inward instead
+  of off-screen.
+  - The drawer shows the title, a badge row (certification, resolution, video
+    range), a dot-joined meta line (season/episode and episode name, season
+    count, year, runtime, rating, time remaining or *New*) and up to three
+    genres. Certification, genres and the season count are new: the strip this
+    replaced could fit about three facts and clipped the rest.
+- **Interface Scale** (Settings → Advanced). Astrofin's own UI zoom, from 65 %
+  to 130 %, applied live. It is browser page zoom rather than a CSS transform,
+  so the app genuinely gains room as it shrinks — at 80 % a 1280-wide screen
+  lays out as if it were 1600. Intended for displays whose system scaling suits
+  everything else but makes Astrofin too large; a 4K panel at 300 % hands the
+  app a 1280 px canvas.
+
+### Changed
+- **Item detail.** The poster is back on every width, moved into the right
+  column above a facts card that is now as wide as the column and about half
+  its former height, sitting directly above *Cast & Crew*. The page is
+  two-column down to 1024 px rather than 1600 px, which cut its height on a
+  1280 px screen from 2592 px to roughly 1900 px and gave narrow and wide
+  displays the same layout.
+- The detail page's own measures — the blurb column, the prose measure, the
+  logo, the title, the action stack and its type — are proportional to the
+  viewport now instead of fixed pixels, so the page holds its proportions
+  across very different screens. A consequence worth knowing: the detail page
+  therefore responds very little to Interface Scale, which still governs Home,
+  the library grids, Settings and the player.
+- The server card on Home (server name, Mode/Decode) has been removed.
+
+### Fixed
+- **The header on Jellyfin 12.** Jellyfin 12 moves the shell to MUI and leaves
+  the old `.skinHeader` in a hidden wrapper, so the theme was styling an
+  invisible element and the real header rendered as stock grey once the page
+  scrolled under it. The MUI header now takes the same glass treatment.
+- The popout's clamp reads whichever header is actually on screen, so it no
+  longer tucks underneath one that outranks it.
+
+### Notes
+- **The theme is verified against jellyfin-web 10.11.11; Jellyfin 12 has moved
+  some of the ground under it.** The header above was one symptom, found
+  because it was reported. Item detail, the library grids, Settings and the
+  player OSD have *not* been re-verified against 12 — nothing is known broken,
+  and the card and rail markup this theme leans on is still the legacy DOM,
+  which is why the rest kept working. A deliberate sweep is the next piece of
+  theme work; `docs/design/theme-injection.md` records what was measured.
+- Installers are unsigned; no code-signing certificate yet.
+
 ## [0.5.0] - 2026-09-10
 
 ### Security
