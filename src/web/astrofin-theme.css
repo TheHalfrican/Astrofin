@@ -2752,14 +2752,18 @@ html.af-detail.af-backdrop .backgroundContainer.withBackdrop {
  * put the right-hand column. */
 html.af-detail .itemDetailPage .detailPageWrapperContainer {
   display: grid;
-  /* The blurb column shrinks instead of the layout collapsing. At 2048px the
-   * clamp lands on its 640px ceiling, so the wide layout is unchanged; at
-   * 1280px — the 85" panel at 300% — it is 563px, leaving 485px of right
-   * column, which holds the 300px rail and a shelf that scrolls. Owner call
+  /* The blurb column shrinks instead of the layout collapsing. Owner call
    * 2026-09-13: one layout language at both sizes was worth more than six
    * un-scrolled tiles, and stacking cost 1000px of page height (measured:
-   * 2592px against 1568px on the monitor). */
-  grid-template-columns: clamp(420px, 44vw, 640px) minmax(0, 1fr);
+   * 2592px against 1568px on the monitor).
+   *
+   * The coefficient is 31.25vw, not the 44vw it started at, so the column is
+   * the same *fraction* of the screen at every width — 640px at 2048px, and
+   * 31.25% of anything narrower. At 44vw the clamp pinned it to 640px from
+   * 1455px upward, which made it 42.5% of the 85" panel's width against 31%
+   * of the monitor's, and that was most of why the detail page needed a
+   * smaller Interface Scale than Home did. */
+  grid-template-columns: var(--af-detail-column) minmax(0, 1fr);
   column-gap: 88px;
   align-items: start;
   box-sizing: border-box;
@@ -3150,21 +3154,25 @@ html.af-detail .trackSelections .selectArrowContainer {
 }
 
 html.af-detail .detailSectionContent .itemGenres {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body);
   color: var(--af-text-muted);
 }
 html.af-detail .detailSectionContent .tagline {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-tile);
   color: var(--af-text-primary);
 }
 html.af-detail .detailSectionContent .overview {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
   margin: 0 0 var(--af-space-3);
   font: var(--af-type-body-lg);
+  /* After the shorthand: the size alone is viewport-relative. The token stays
+   * 16px and is shared with the OSD and the about box, which are not on this
+   * page and are not being re-scaled. */
+  font-size: var(--af-detail-body);
   color: var(--af-text-muted);
 }
 /* The tag wall and the external-links row have no cap of their own, so they
@@ -3177,7 +3185,7 @@ html.af-detail .detailSectionContent .itemTags,
 html.af-detail .detailSectionContent .itemExternalLinks,
 html.af-detail .itemTags,
 html.af-detail .itemExternalLinks {
-  max-width: 600px;
+  max-width: var(--af-detail-measure);
 }
 /* jf-web clamps the blurb by *adding* .detail-clamp-text and removes it when
  * "Show more" is clicked, so the 3-line clamp has to ride that class or the
@@ -3261,6 +3269,9 @@ html.af-detail .itemDetailPage .mainDetailButtons > .detailButton {
   border-radius: var(--af-radius-pill);
   background: var(--af-glass-fill-soft);
   font: var(--af-type-button-secondary);
+  /* After the shorthand, as everywhere else on this page: the size follows the
+   * viewport while the weight and family stay the token's. */
+  font-size: var(--af-detail-pill);
   text-align: left;
   text-transform: none;
   color: var(--af-text-primary);
@@ -3441,6 +3452,9 @@ html.af-detail .detailPageContent .sectionTitle,
 html.af-detail .detailPagePrimaryContent .sectionTitle {
   margin: 0 0 14px;
   padding: 0;
+  /* Scoped to the detail page: `.sectionTitle` is Home's shelf heading too,
+   * and Home is comfortable at a width this page is not. */
+  font-size: var(--af-detail-shelf);
 }
 html.af-detail .detailPageContent .sectionTitleContainer,
 html.af-detail .detailPagePrimaryContent .sectionTitleContainer {
@@ -3560,6 +3574,7 @@ html.af-detail .detailPagePrimaryContent .emby-scroller {
   justify-content: space-between;
   gap: var(--af-space-4);
   font: 400 15px/1.7 var(--af-font-body);
+  font-size: var(--af-detail-facts);
   color: var(--af-text-muted);
 }
 .af-dp-row > span:last-child {

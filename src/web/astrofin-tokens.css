@@ -199,6 +199,19 @@
   --af-detail-actions-width: clamp(280px, 17.6vw, 360px);
   /* 64/2048 = 3.125vw, with 1.125 line-height as 72/64. */
   --af-detail-title-size: clamp(40px, 3.125vw, 64px);
+  /* 640/2048 = 31.25vw — the blurb column. */
+  --af-detail-column: clamp(420px, 31.25vw, 640px);
+  /* 600/2048 = 29.3vw — the prose measure the overview, tagline, genres and
+     tag wall all share. */
+  --af-detail-measure: clamp(360px, 29.3vw, 600px);
+  /* The detail page's own type, each landing on the artboard's size at 2048px.
+     Floors are set where the text stops being comfortable rather than where
+     the ratio would put it, so the smallest viewports lose a little fidelity
+     to the ratio and nothing to legibility. */
+  --af-detail-body: clamp(12px, 0.781vw, 16px);
+  --af-detail-facts: clamp(11px, 0.732vw, 15px);
+  --af-detail-shelf: clamp(15px, 0.977vw, 20px);
+  --af-detail-pill: clamp(13px, 0.879vw, 18px);
   /* The air above and below the detail poster. The poster pulls itself up out
      of the inset above by exactly the difference, so this one number is both
      gaps at once and they cannot drift apart. Deliberately smaller than the

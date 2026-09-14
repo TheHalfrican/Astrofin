@@ -1450,6 +1450,37 @@ The blurb column's clearance is `calc(logo-height + 24px)` rather than the old
 literal 164 px, so a logo that shrinks takes its clearance with it instead of
 leaving a hole.
 
+That first pass was not enough, and the reason is worth keeping. Measured at
+the two settings the owner was switching between, as a fraction of screen
+width:
+
+| | 1969 (65 %) | 1506 (85 %) | ratio |
+|---|---|---|---|
+| logo, poster, title | 25.4 / 21.5 / 31.2 | 25.4 / 21.5 / 31.2 | **1.00** |
+| blurb column | 32.5 | 42.5 | 1.31 |
+| overview, facts, shelf titles | — | — | 1.31 |
+
+**Anything expressed in `vw` is immune to Interface Scale**, because the scale
+works by changing the effective viewport width. So the first pass froze the
+logo, poster and title against the control — they were identical at both
+settings — while everything it had *not* converted still grew by 31 %. The
+remainder was the 640 px blurb column and the page's type.
+
+The column was the largest of them: at `clamp(420px, 44vw, 640px)` the clamp
+pinned it to 640 px from 1455 px upward, making it 42.5 % of the 85" panel's
+width against 31 % of the monitor's. At `31.25vw` it is 640 px at 2048 px and
+the same fraction of anything narrower. The prose measure (`--af-detail-measure`)
+and four type sizes (`--af-detail-body`, `-facts`, `-shelf`, `-pill`) follow the
+same rule, each applied as a `font-size` *after* the `font` shorthand so the
+weight and family stay the token's. `.sectionTitle` is scoped to
+`html.af-detail`: it is Home's shelf heading too, and Home is comfortable at a
+width this page is not.
+
+**The consequence, accepted deliberately:** the detail page now largely sizes
+itself from the viewport and stops responding to Interface Scale. That is the
+direct price of one setting suiting both pages, and the scale still governs
+Home, the library grids, Settings and the player.
+
 These attributes are part of `client-settings.js`'s contract and are pinned by
 `src/web/client-settings.test.js`.
 
