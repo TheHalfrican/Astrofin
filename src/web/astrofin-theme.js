@@ -1297,14 +1297,40 @@
          * the two-column layout had none at all. Moving the node rather than
          * cloning it keeps jellyfin-web's own lazy-loading of the Primary image
          * working, and keeps one poster on the page rather than two. */
+        /* Scoped to the *visible* detail page, never `doc`. jellyfin-web keeps
+         * the page you came from in the DOM with `.hide` — which is the whole
+         * reason `detailPage()` exists — and this node is moved rather than
+         * cloned, so a document-wide query could pick up the poster belonging
+         * to the page just left and relocate it into the current one. That was
+         * the "shows the last viewed poster" bug reported against 0.6.0.
+         *
+         * Within the page, document order does the rest: jellyfin-web renders
+         * its copy inside `.detailPagePrimaryContainer`, which precedes the
+         * `.detailPageSecondaryContainer` this function moves it to, so a
+         * freshly rendered poster always wins over one already moved. */
         function detailPosterNode() {
-            return doc.querySelector('.detailImageContainer.hide-mobile');
+            var page = detailPage();
+            return page ? page.querySelector('.detailImageContainer.hide-mobile') : null;
         }
 
         function placeDetailPoster(host, item) {
             if (!host || !POSTER_TYPES[detailTypeFor(item)]) { return null; }
             var poster = detailPosterNode();
             if (!poster) { return null; }
+            /* Drop any poster a previous item left in this host. jellyfin-web
+             * reuses the page node on some navigations (which is why
+             * syncDetail() re-places the panel rather than assuming it is
+             * gone): it renders a fresh poster into the primary container
+             * while the one moved here is still in the secondary one, and both
+             * then match the rule that shows them — the reported case of the
+             * last item's art above the current item's. The stale node is safe
+             * to drop: jellyfin-web has already replaced the copy it tracks. */
+            var strays = host.querySelectorAll('.detailImageContainer.hide-mobile');
+            for (var i = 0; i < strays.length; i++) {
+                if (strays[i] !== poster && strays[i].parentNode === host) {
+                    host.removeChild(strays[i]);
+                }
+            }
             if (poster.parentNode !== host || host.firstChild !== poster) {
                 host.insertBefore(poster, host.firstChild);
             }

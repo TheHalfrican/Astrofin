@@ -3037,12 +3037,14 @@ html.af-detail .nameContainer .itemName {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-  /* Cap to the blurb column's own 640px measure (as the credits and track
-   * pickers are). Without it a long episode title ran to 1017px on one 64px
-   * line and the 2-line clamp never engaged (measured 2026-09-10 on the
-   * single-column layout, whose 1136px track let it). The cap still earns its
-   * place: the column is only narrower than 640px below about 1455px. */
-  max-width: 640px;
+  /* Cap to the blurb column's own measure (as the credits and track pickers
+   * are). Without it a long episode title ran to 1017px on one 64px line and
+   * the 2-line clamp never engaged (measured 2026-09-10 on the single-column
+   * layout, whose 1136px track let it). It reads the column token rather than
+   * the literal 640px it was written as: since the column became
+   * viewport-relative, a literal cap is wider than the column it is meant to
+   * match on every screen below 2048px. */
+  max-width: var(--af-detail-column);
   margin: 0;
   font: var(--af-type-display);
   /* After the shorthand, which carries the weight and family: the size alone
@@ -3108,8 +3110,19 @@ html.af-detail .trackSelections {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--af-space-3);
-  max-width: 640px;
+  max-width: var(--af-detail-column);
   margin: 0 0 var(--af-space-4);
+}
+
+/* A flex item's `min-width` is `auto`, so a picker whose longest option is
+ * wider than the row refuses to shrink and overflows it — into the right
+ * column, since 2026-09-13 made the blurb column narrower than the 640px these
+ * were written against. `min-width: 0` is what lets them shrink, and the
+ * ellipsis is what they do instead of overflowing. Reported against 0.6.0 as
+ * the detail page overlapping itself when the audio or subtitle names are
+ * long. */
+html.af-detail .trackSelections > * {
+  min-width: 0;
 }
 
 /* jellyfin-web disables a picker when the item offers exactly one option, and
@@ -3132,7 +3145,26 @@ html.af-detail .trackSelections .selectContainer {
 }
 html.af-detail .trackSelections .emby-select {
   width: auto;
-  padding: 10px 34px 10px 16px;
+  /* `.selectContainer` is itself a flex row — the label, then this. A flex
+   * item's `min-width` is `auto`, so without this the select refused to shrink
+   * below its longest option and ran past the container's right edge by
+   * exactly the label's width (measured: 52px on an Audio row). The arrow is
+   * absolutely positioned against the *container*, so it then landed in the
+   * middle of the text. `max-width` is `none` rather than `100%` for the same
+   * reason: 100% is the container's width, which is the wrong bound when a
+   * label shares the row. */
+  min-width: 0;
+  max-width: none;
+  /* The ellipsis rides the select, never `.selectContainer`: the pill's radius
+   * below is on this element, so clipping the container cut the capsule's
+   * rounded end off square. Clipping here follows the rounded box. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 38, not 34: the arrow sits 12px from the container's right edge and is
+   * 23px wide, so it reaches 35px in. At 34px the text ended one pixel inside
+   * it (measured). */
+  padding: 10px 38px 10px 16px;
   border: 1px solid var(--af-edge-strong);
   border-radius: var(--af-radius-pill);
   background: var(--af-glass-fill-soft);
@@ -3218,7 +3250,7 @@ html.af-detail .itemDetailsGroup {
   margin: var(--af-space-4) 0 0;
 }
 html.af-detail .detailsGroupItem {
-  max-width: 640px;
+  max-width: var(--af-detail-column);
   margin: 0 0 6px !important;
   font: var(--af-type-body);
   color: var(--af-text-muted);

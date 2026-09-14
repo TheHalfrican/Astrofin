@@ -7,6 +7,33 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-13
+
+### Fixed
+- **The item detail page showed the previous item's poster**, and sometimes
+  both posters at once with the current one below the facts card. The lookup
+  that moves the poster into the right column searched the whole document,
+  and jellyfin-web keeps the page you navigated away from in the DOM — so it
+  could find, and relocate, the art belonging to the page just left. It is
+  scoped to the visible page now. The duplicate was the same fault seen from
+  the other side: jellyfin-web reuses the page node on some navigations and
+  renders a fresh poster while the moved one is still in place, so a stale
+  poster left in the column is now dropped.
+- **The detail page overlapped itself when audio or subtitle names were long.**
+  The picker row is a flex container, and a flex item's `min-width` defaults
+  to `auto`, so a picker wider than the row refused to shrink and spilled into
+  the right column. `.selectContainer` is itself a flex row — the label, then
+  the select — and the select carried the same `min-width: auto`, so it refused
+  to shrink below its longest option and ran past the container by exactly the
+  label's width; the arrow, which is positioned against the container, then
+  landed in the middle of the text. The select can shrink now and ellipsizes,
+  with the ellipsis on the select rather than its container (the pill's radius
+  is on the select, so clipping the container sheared the capsule's rounded end
+  off square). Three width caps
+  written against the old fixed 640px blurb column — the picker row, the
+  credits and the title — follow the column token instead, which 0.6.0 made
+  narrower than 640px on every screen below 2048px.
+
 ## [0.6.0] - 2026-09-13
 
 ### Added

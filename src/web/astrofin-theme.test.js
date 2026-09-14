@@ -2133,6 +2133,45 @@ test('placeDetailPoster moves the poster to the head of the right column, once',
     assert.strictEqual(detail.posterMobile.parentNode, detail.ribbon);
 });
 
+test('placeDetailPoster never takes the poster off the page being left', () => {
+    const { win, detail, theme } = onDetail();
+    // jellyfin-web keeps the page you came from in the DOM with .hide - the
+    // reason detailPage() exists - and this node is moved, not cloned. A
+    // document-wide lookup relocated the previous item's art into the current
+    // page: the "shows the last viewed poster" bug reported against 0.6.0.
+    const stale = buildDetail(win);
+    stale.page.classList.add('hide');
+    stale.poster.id = 'stale-poster';
+    // The hidden page is earlier in the document than the visible one.
+    win.document.body.insertBefore(stale.pages, detail.pages);
+
+    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
+    assert.strictEqual(moved, detail.poster, 'the visible page\'s own poster');
+    assert.notStrictEqual(moved, stale.poster);
+    assert.strictEqual(stale.poster.parentNode, stale.primary,
+        'the hidden page keeps its own art');
+});
+
+test('placeDetailPoster drops a poster the previous item left in the host', () => {
+    const { win, detail, theme } = onDetail();
+    // jellyfin-web reuses the page node on some navigations: it renders a
+    // fresh poster into the primary container while the one this moved is
+    // still in the secondary one, and both then match the rule that shows
+    // them - the reported case of two posters, last item's above current.
+    const stale = win.document.createElement('div');
+    stale.className = 'detailImageContainer hide-mobile';
+    detail.secondary.insertBefore(stale, detail.secondary.firstChild);
+
+    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
+    assert.strictEqual(moved, detail.poster, 'the freshly rendered one wins');
+    assert.strictEqual(detail.secondary.children[0], detail.poster);
+    assert.strictEqual(
+        detail.secondary.children.filter(
+            (el) => el.classList.contains('detailImageContainer')).length,
+        1, 'exactly one poster is left in the column');
+    assert.strictEqual(stale.parentNode, null, 'the stale node is gone');
+});
+
 test('placeDetailPoster gives an episode no poster, and needs a host', () => {
     const { detail, theme } = onDetail();
     // An episode's own art is a 16:9 still; the season poster above it would
