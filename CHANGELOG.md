@@ -7,6 +7,8 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [Unreleased]
+
 ## [0.6.1] - 2026-09-13
 
 ### Fixed
