@@ -1,3 +1,4 @@
+use crate::mpv_stale;
 use crate::naming::{self, HOST_OS};
 use crate::paths;
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,12 @@ pub fn build(out: &Path, cplayer: bool) -> Result<Mpv> {
     let src = paths::mpv_source_dir();
     let build_dir = paths::mpv_build_dir(out);
     let cplayer_flag = if cplayer { "true" } else { "false" };
+
+    if configured_tree_is_stale(&build_dir)? {
+        println!("Reconfiguring mpv from scratch: a linked dependency moved.");
+        std::fs::remove_dir_all(&build_dir)
+            .with_context(|| format!("remove stale {}", build_dir.display()))?;
+    }
 
     if !build_dir.join("build.ninja").exists() {
         println!("Configuring mpv with meson (cplayer={cplayer_flag})...");
@@ -57,6 +64,30 @@ pub fn build(out: &Path, cplayer: bool) -> Result<Mpv> {
     }
     let _ = library;
     Ok(Mpv { build_dir })
+}
+
+/// Whether an already-configured tree links a library that has since moved.
+///
+/// A package upgrade deletes the old keg and `meson configure` will not
+/// re-resolve it, so ninja fails on the missing input before compiling
+/// anything. Wiping the tree is the only cure. See [`mpv_stale`].
+fn configured_tree_is_stale(build_dir: &Path) -> Result<bool> {
+    let ninja = build_dir.join("build.ninja");
+    if !ninja.exists() {
+        return Ok(false);
+    }
+    // An unreadable build.ninja is not evidence of staleness; let meson
+    // and ninja report whatever is actually wrong with it.
+    let Ok(text) = std::fs::read_to_string(&ninja) else {
+        return Ok(false);
+    };
+    match mpv_stale::missing_library(&text, |path| path.exists()) {
+        Some(missing) => {
+            println!("mpv links {missing}, which no longer exists.");
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 pub fn external(dir: &Path) -> Result<Mpv> {

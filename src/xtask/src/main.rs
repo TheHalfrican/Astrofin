@@ -9,6 +9,7 @@ mod cef;
 mod fs;
 mod install;
 mod mpv;
+mod mpv_stale;
 mod naming;
 mod package;
 mod paths;
