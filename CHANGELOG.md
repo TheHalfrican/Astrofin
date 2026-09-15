@@ -5,9 +5,18 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
-## [Unreleased]
-
-## [Unreleased]
+### Security
+- **Bumped `rustls` 0.23.43 -> 0.23.45** (and `rustls-webpki` 0.103.13 ->
+  0.103.15 along with it) for RUSTSEC-2026-0285: rustls accepted TLS 1.3
+  handshake messages sent at the wrong encryption level when they followed a
+  key-changing message in the same record, which RFC 8446 section 5.1 requires
+  be rejected with an `unexpected_message` alert. The transcript stays
+  authenticated, so this is not a handshake-forgery bug. Astrofin reaches
+  rustls only as a *build* dependency -- `ureq` -> `download-cef` ->
+  `cef-dll-sys`, i.e. the CEF downloader -- so no shipped binary was affected,
+  but `deny.toml` makes a vulnerability a hard error with `ignore = []`
+  deliberately empty, and this failed CI on every push once the advisory
+  landed in the RustSec database rather than on any change of ours.
 
 ## [0.6.1] - 2026-09-13
 
