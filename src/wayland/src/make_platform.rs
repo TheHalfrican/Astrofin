@@ -190,6 +190,19 @@ impl Platform for WaylandPlatform {
         jfn_platform_abi::MenuDelivery::Host(self.rt().menu())
     }
 
+    fn open_file_dialog(&self, req: jfn_platform_abi::FileDialogRequest) -> bool {
+        // A cached read, never a round trip: this runs on CEF's UI thread and
+        // the export was made when the toplevel was created. No handle means
+        // no `xdg_foreign`, and the portal takes an empty parent.
+        let parent = self
+            .rt()
+            .root()
+            .exported_handle()
+            .map(jfn_linux_util::file_dialog::wayland_parent)
+            .unwrap_or_default();
+        jfn_linux_util::file_dialog::open(req, parent)
+    }
+
     fn mpv_host(&self) -> &dyn jfn_platform_abi::MpvHost {
         &self.mpv_host
     }
