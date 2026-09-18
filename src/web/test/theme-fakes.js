@@ -1,9 +1,10 @@
 'use strict';
 // Extra browser fakes for the Astrofin theme runtime tests.
 //
-// src/web/test/player-fakes.js owns the fake DOM; this file only fills the two
-// gaps astrofin-theme.js walks into, then adds the jellyfin-web-shaped scaffolds
-// the theme reads (a Home page with rails and cards, an ApiClient with images).
+// src/web/test/player-fakes.js owns the fake DOM; this file only fills the
+// three gaps astrofin-theme.js walks into, then adds the jellyfin-web-shaped
+// scaffolds the theme reads (a Home page with rails and cards, an ApiClient
+// with images).
 //
 // The gaps, all patched on the prototypes exported by player-fakes.js:
 //
@@ -12,37 +13,24 @@
 //      and its badge row exactly that way, so without real semantics a second
 //      render would append to the first and the tests would be measuring the
 //      fake.
-//   2. `createDocumentFragment()` does not exist, and the detail facts panel
-//      builds its rows in one. A fragment appends its children, not itself.
-//   3. there is no box model at all — nothing has a position or a size and
+//   2. there is no box model at all — nothing has a position or a size and
 //      `getBoundingClientRect()` does not exist — but placePopout() is made of
 //      nothing else. See `setRect` below: every box is one the test wrote.
-//   4. `cloneNode()` does not exist, and cloneArt() deep-clones the card tile.
+//   3. `cloneNode()` does not exist, and cloneArt() deep-clones the card tile.
 //
 // Nothing here touches the real DOM, the network or a profile dir; the
 // prototype patches are process-local and `node --test` gives each test file
 // its own process.
 
 const {
-    loadModule, makeWindow, FakeElement, FakeDocument
+    loadModule, makeWindow, FakeElement
 } = require('./player-fakes.js');
 
 // ---------------------------------------------------------------------------
 // DOM gaps
 // ---------------------------------------------------------------------------
 
-const FRAGMENT_NODE = 11;
 const TEXT_NODE = 3;
-
-const rawAppendChild = FakeElement.prototype.appendChild;
-
-FakeElement.prototype.appendChild = function appendChild(child) {
-    if (child && child.nodeType === FRAGMENT_NODE) {
-        child.childNodes.slice().forEach((node) => rawAppendChild.call(this, node));
-        return child;
-    }
-    return rawAppendChild.call(this, child);
-};
 
 Object.defineProperty(FakeElement.prototype, 'textContent', {
     configurable: true,
@@ -77,12 +65,6 @@ FakeElement.prototype.click = function click() {
     };
     this.dispatchEvent(event);
     return event;
-};
-
-FakeDocument.prototype.createDocumentFragment = function createDocumentFragment() {
-    const frag = new FakeElement(this, '#fragment');
-    frag.nodeType = FRAGMENT_NODE;
-    return frag;
 };
 
 // cloneArt() deep-clones the card's own .cardScalable into the popout. A real

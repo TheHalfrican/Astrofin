@@ -37,10 +37,15 @@ the checks in [Testing](#testing).
 > **This is a partial fix to a bigger problem.** Only the header was chased,
 > because only the header was reported. Everything else in this document was
 > verified against 10.11.11 and has *not* been re-checked against 12.0.0 —
-> `[class*=Mui]` already matched 129 nodes on Home alone. The item detail page,
-> the library grids, Settings and the player OSD each need their own pass, and
-> the [Testing](#testing) checks should be re-run wholesale. The card popout
+> `[class*=Mui]` already matched 129 nodes on Home alone. The library grids,
+> Settings and the player OSD each need their own pass, and the
+> [Testing](#testing) checks should be re-run wholesale. The card popout
 > itself is safe as long as the rails stay legacy, which on 12.0.0 they are.
+>
+> **Update 2026-09-18:** the server now reports **12.1.0**, and the item detail
+> pages have had their pass — see [Item detail](#item-detail), which was
+> rebuilt as a colour-only section against 12.1.0. Jellyfin 12's stock sheets
+> read MUI's `--jf-palette-*` variables, which is what made that cheap.
 >
 > The probe scripts used are not checked in; `Runtime.evaluate` with
 > `document.elementsFromPoint(innerWidth/2, 20)` is what identified the real
@@ -834,508 +839,165 @@ still reserved 120 px. `padding-top: calc(var(--af-header-height) + 84px)
 
 ## Item detail
 
-Design targets: `docs/design/canvas/MovieDetail.dc.html` and
-`docs/design/canvas/SeriesDetail.dc.html` — a 640 px blurb column at the 72 px
-gutter starting 150 px down, an 88 px gap, then the shelves; the item's logo
-(or a 64/72 display title) top left under a cyan eyebrow; the actions as a
-360 px stack of 56 px pills with Resume in accent; and, on a season page,
-episode rows of 208×117 stills. The artboards draw no poster and put the facts
-panel top right at 300 px; both were overruled by the owner — see
-[The poster and the facts card](#the-poster-and-the-facts-card).
-Section (o) of `astrofin-theme.css` and section 8 of `astrofin-theme.js` are the
-whole of it.
-
-### The skeleton
-
-```
-#itemDetailPage.page.libraryPage.itemDetailPage.selfBackdropPage
-  #itemBackdrop.itemBackdrop           40vh inline art band — mobile only
-  .detailLogo                          absolute; .hide when the item has none
-  .detailPageWrapperContainer
-    .detailPagePrimaryContainer                        ← left column
-      .detailImageContainer.hide-mobile                  the poster
-      .detailRibbon.padded-left.padded-right
-        .infoWrapper
-          .detailImageContainer.hide-desktop.hide-tv     the poster again
-          .nameContainer > .parentName, .itemName
-          .itemMiscInfo.itemMiscInfo-primary   > .mediaInfoItem…
-          .itemMiscInfo.itemMiscInfo-secondary > .mediaInfoItem…
-        .mainDetailButtons.focuscontainer-x > .detailButton…
-      .detailPagePrimaryContent.padded-right
-        .detailSection
-          form.trackSelections > .selectContainer > select.emby-select
-          .detailSectionContent
-            p.itemGenres, h3.tagline, p.overview, .overview-controls,
-            #seriesAirTime, .itemTags, .itemExternalLinks
-          .itemDetailsGroup > .detailsGroupItem > .label + .content
-          .nextUpSection, #listChildrenCollapsible
-    .detailPageSecondaryContainer.padded-bottom-page   ← right column
-      .detailPageContent
-        #childrenCollapsible   present but .hide — see below
-        #castCollapsible > #castContent
-        #specialsCollapsible, #scenesCollapsible,
-        #similarCollapsible > .similarContent
-```
-
-Every shelf is a `.verticalSection.detailVerticalSection` with an
-`h2.sectionTitle.sectionTitle-cards` and, except the two `…ChildrenCollapsible`
-sections, an `emby-scroller` around the `.itemsContainer`. Sections the item has
-nothing for keep `.hide`.
-
-**Select the page as `.itemDetailPage:not(.hide)`, never `#itemDetailPage`.**
-jf-web 10.11.11 leaves the outgoing view in the DOM, duplicate id and all.
-
-**A series' seasons and a season's episodes render into
-`#listChildrenCollapsible`, which is in `.detailPagePrimaryContent` — the *left*
-column** — while `#childrenCollapsible` in the right column stays `.hide` and
-empty. Measured live on a series page: left `#listChildrenCollapsible`
-"Seasons", 8 cards; right `#childrenCollapsible` hidden, 0 cards. Every shelf
-rule in section (o) therefore names both containers.
-
-**The page's origin is 22 px below the viewport top**, not 0: `.mainAnimatedPage`
-is `position:absolute;top:0` inside a container that jf-web insets. The grid's
-own `padding-top: 150px` therefore lands the first row at y = 172, which is what
-the live readings below show.
-
-### The gate
-
-`html.af-detail`, set in `refresh()` from `isDetailRoute()` — hash-only,
-`/^\/details([?/]|$)/`, with no DOM fallback for the same reason. `af-home`,
-`af-library` and `af-detail` are never set together: `refresh()` resolves them
-in that order and each test only runs once the ones above it are out.
-
-Nothing on the page says whether the item is a movie, a series, a season or an
-episode — all four come from one template — so on entering the route the gate
-fetches the item once (`ApiClient.getItem(getCurrentUserId(), id)`, id parsed
-out of the hash query) and writes `detailTypeFor(item)` to
-`html[data-af-detail-type]`. The eyebrow keys off that attribute with four
-literal `content:` rules; `attr()` could not do it, because it resolves against
-the pseudo-element's own originating element and never against `<html>`. A
-season page is a details route of its own, so a hash change with a new id
-re-runs the whole thing; leaving the route clears the attribute, removes the
-panel and clears the backdrop.
-
-Entering also drops the focused card, once. The card that got us here belongs
-to a page on its way out, and carrying it into Home would paint a stale item
-into the popout. The art it was driving stays up until the fetched item's
-own backdrop replaces it — which is why `refresh()` passes
-`leaveHome(library || detail)`: a detail page refreshes constantly while it
-streams in, and a `clearBackdrop()` on each one would strobe the art.
-
-### The backdrop
-
-Ours, not jellyfin-web's, for consistency with Home and the grids:
-`setBackdrop(backdropUrlFor(item))` off the fetched item (Backdrop tag, then
-ParentBackdrop, then Primary). jellyfin-web's own two layers stand down —
-`.backdropContainer` (which the details controller paints via
-`backdrop.setBackdrops([item])`) and `#itemBackdrop` are both `display: none`
-under the gate, and `.backgroundContainer.withBackdrop` goes transparent for
-exactly as long as `html.af-backdrop` is up, the same trade section (l) makes
-on a library page.
-
-#### The art treatment is the detail page's own
-
-Section (c)'s treatment is tuned for **Home**, where the art is a peripheral
-wash behind dense rails. Stacked up it passes
-
-```
-brightness .5 x layer opacity .5 x (1-.42 horizontal at the right edge)
-  x (1-.58 base wash) x (1-.35 vertical minimum)  =  4%
-```
-
-of the source luminance. Measured on a running detail page with a **pure white
-frame substituted for the art**: the canvas composited to `rgb(11,14,24)`
-against a base of `rgb(7,10,20)`. That is the whole reason a detail page read
-as having no backdrop — not a missing URL, not a stacking fault. Everything in
-the pipeline was correct: `af-backdrop` set, the active layer carrying a real
-Backdrop URL at `opacity: .5`, and every ancestor of the page transparent.
-
-On a detail page the backdrop **is** the subject: one item fills the screen and
-two thirds of the canvas is empty. So `html.af-detail` retunes it. The values
-were not computed, they were tuned against a harness — white frame, page
-content set to `visibility: hidden`, bare canvas screenshotted and sampled on a
-9x5 grid — and re-measured after every change:
-
-| | Home | detail |
-| --- | --- | --- |
-| layer `filter` | `saturate(.32) brightness(.5) contrast(.92)` | `saturate(.62) brightness(.78) contrast(.96)` |
-| layer `opacity` when on | `.5` | `.84` |
-| `--af-glass-blur-backdrop` | 38 px | **6 px** (26 px for a poster, below) |
-| `--af-scrim-horizontal` | `.94 → .72@42% → .42` | `.96 → .82@36% → .50` |
-| `--af-scrim-vertical` | `.96 → .35@38% → .55` | `.94 → .22@44% → .52` |
-| `--af-scrim-wash` | `.58` | `.28` |
-
-The base wash was a hard-coded `rgba(bg,.58)` inside section (c)'s
-`.af-backdrop-scrim::after`; it is now
-`var(--af-scrim-wash, rgba(var(--af-bg-base-rgb), .58))`, so the fallback keeps
-Home byte-identical and only a gate that sets the variable changes anything.
-
-Measured against the Home treatment on the identical white frame:
-
-| point | Home | detail | gain |
-| --- | --- | --- | --- |
-| blurb column (x=400) | `rgb(9,12,21)` | `rgb(18,21,30)` | **x6.3** |
-| mid canvas (x=1100) | `rgb(13,15,26)` | `rgb(34,36,45)` | **x4.6** |
-| right edge (x=1636) | `rgb(21,22,38)` | `rgb(51,52,66)` | **x3.0** |
-
-The blurb column is nonetheless **darker** than Home's, because the horizontal
-scrim's first two stops are deepened (`.94 → .96`, `.72@42% → .82@36%`) even as
-its tail is lifted (`.42 → .50`). The art is bought at the right, where the page
-is empty, not underneath the text. On the 9x5 grid, over the whole area text can
-occupy (x ≤ the 72 px right gutter), `--af-text-muted` measures between
-**4.51:1** and **7.95:1**, worst at (1500, 400) — and pure white is the
-adversarial case no real backdrop reaches.
-
-#### A poster is not a backdrop
-
-`backdropUrlFor()` falls back Backdrop tag → `ParentBackdropImageTags` →
-`ImageTags.Primary`. `backdropSourceFor()` is a pure helper beside it that names
-which branch an item landed on, and the gate writes it to
-`html[data-af-backdrop-src]`. On `primary` the sheet blurs the art back towards
-a wash (26 px, `brightness(.62)`): `background-size: cover` crops a 2:3 poster
-to a 16:9 canvas, which is a blown-up detail of somebody's chin.
-
-### The poster and the facts card
-
-The artboards have no poster and a 300 px facts panel top right. Both were
-overruled live, in three passes on 2026-09-13:
-
-1. The poster came back (2026-09-10) but only below 1600 px, absolutely
-   positioned over the empty top right of the ribbon — so on a monitor, which
-   takes the two-column branch, there was no poster at all.
-2. `placeDetailPoster()` now moves the `.hide-mobile` copy into the **right
-   column**, ahead of `#af-detail-panel`, for `movie`/`series`/`season`. An
-   episode gets none: its own art is a 16:9 still. The mobile copy is left
-   where jellyfin-web put it, and both stay `display: none` by default.
-3. The facts card went from a 300 px column of stacked rows to the **full width
-   of the column with its rows in an auto-fit grid** — 1137×123 instead of
-   300×250 — so it sits directly above Cast & Crew and leaves the poster room.
-
-The poster is `clamp(260px, 21.5vw, 460px)` wide, centred, with
-`--af-detail-poster-gap` of air above and below it. The width is viewport-
-relative because a fixed one could not hold its proportion: 440 px is 21.5 % of
-the monitor's 2048 px viewport but 34 % of the 85" panel's 1280 px one, which
-the owner saw as "the scaling is off on the TV". The gap is one number for both
-sides — the poster pulls itself up out of `--af-detail-top` by the difference,
-so the left column keeps the full inset it is designed around while the poster
-sits with equal air above and below (measured 95/96 at both viewports).
-
-**Four stock declarations had to be answered**, all left over from
-jellyfin-web's own overlapping ribbon, and none of them visible until the
-poster moved into flow. They were found one at a time, each only after the
-previous was fixed:
-
-| stock | effect once the poster was in the column |
-|---|---|
-| `position: relative; top: -12.96em` | top edge at y=-8, under the header — "cut off at the top" |
-| `float: left` | **the load-bearing one.** A float gives its parent no height, so `.detailImageContainer` measured 0 tall and every margin on it was absorbed; and `#af-detail-panel` is a grid, so it establishes a BFC, refuses to overlap a float, and sat flush against the poster whatever margin it was given. Two spacing attempts measured a 0 px gap before this was found. |
-| `max-width: 25vw` | held the art to 320 px inside a 440 px container on the 85" panel — the container obeyed the theme and the picture did not |
-| `height: 0` on the container | the ribbon let the poster overflow it, so it reserved nothing |
-
-The lesson worth keeping: when a stock rule and a theme rule disagree, measure
-the *rendered* box of every element in the chain, not just the one being
-styled. Three of those four were invisible in the element we were editing.
-
-`.detailLogo` moves from stock's `right:25vw;top:10vh;width:25vw;height:16vh`
-to `left: var(--af-gutter); top: 150px; width: 520px; height: 140px`,
-`background-position: left center`. jf-web already hides it below 68.75 em; the
-sheet carries that up to 1280 px; since 2026-09-13 the layout is two-column
-down to 1024 px, with the blurb column on a `clamp(420px, 44vw, 640px)` so it
-shrinks instead of the layout collapsing. It stays
-`position: absolute`, so when it is present the left column takes a 164 px top
-padding to clear it and `.itemName` is hidden — both through
-`.detailLogo:not(.hide) ~ .detailPageWrapperContainer …`, which works because
-the logo is a previous sibling of the wrapper and gains `.hide` when the item
-has neither `ImageTags.Logo` nor a `ParentLogoImageTag`. **The title is hidden
-only for `data-af-detail-type` `movie` and `series`.** On a season or an episode
-the logo is the *series* logo (jf-web falls back to `ParentLogoImageTag`) while
-`.itemName` is "Season 1" or the episode's own name; measured live before this
-was scoped, a season page showed nothing but the show's wordmark. With no logo,
-`.itemName` renders as the display title: `--af-type-display` (64/72 Sora 200),
-wrapping, clamped to two lines, against stock's `font-weight:600;
-white-space:nowrap` one-liner.
-
-**Owner revision (live review, 2026-09-10) — the poster comes back.** In the
-single-column layout only (`@media (max-width: 1599px)`, the 4K-at-300% case)
-the `.hide-mobile` copy is shown again for `movie`, `series` and `season`: the
-blurb caps at 640 px on the left and the shelves stack far below, leaving the
-top-right of the ribbon empty. It is a standard `portraitCard` whose
-`.cardImageContainer` lazy-loads the Primary image; parked
-`position: absolute; top: 210px; right: var(--af-gutter); width: 300px` on the
-wrapper (made `position: relative`), dropped from the logo line to sit centred
-against the action column, its right edge on the content edge, `z-index: 2`,
-`pointer-events: none`. The two-column layout (≥1600 px) keeps the no-poster
-treatment — the empty space there is the shelf column, a separate placement.
-Same review lifted the backdrop art forward (see *The art treatment* above):
-blur 6 px → 3 px, the horizontal scrim tail .50 → .40, the art layer to
-`saturate(.72) brightness(.86)` at `.92` opacity; the two protected stops over
-the blurb (.96 at 0 %, .82 at 36 %) are unchanged.
-
-### The two columns
-
-`.detailPageWrapperContainer` becomes
-`grid-template-columns: 640px minmax(0,1fr)` with an 88 px column gap and
-`padding: 150px var(--af-gutter) var(--af-gutter)` — 72 + 640 + 88 = 800, which
-is where both artboards put the right-hand column. One column below 1600 px.
-
-The artboard reads name → chips → **actions** → blurb → credits, and the
-actions go directly after the chips for one reason: **the fold**. Everything
-below them is variable-length — a 3-line blurb, a tag wall, a credits block
-that runs to four wrapping rows on a film with six directors — so any order
-that puts the stack after `.detailPagePrimaryContent` puts it off screen on
-exactly the items with the most to say. Measured at 1064 px before the order
-was settled: `#btnPlay` at y=**1094** on The Animatrix (17 tags, 6 directors,
-4 writers, 6 studios), present and correct and entirely below the fold. After:
-y=**452** on that item and on a short one alike, the stack's bottom edge at
-712 px, whole stack in view at both 1708x1064 and 1920x1080.
-
-`.detailRibbon` gets **`display: contents`**, which drops its box and promotes
-`.infoWrapper` and `.mainDetailButtons` to siblings of
-`.detailPagePrimaryContent`. The three then carry explicit orders:
-
-| order | element |
-| --- | --- |
-| 1 | `.infoWrapper` — eyebrow, `.parentName`, `.itemName`, the chip strip |
-| **2** | **`.mainDetailButtons`** — `margin: 22px 0 6px` |
-| 3 | `.detailPagePrimaryContent` — track pickers, tagline, blurb, tags, links, credits, and the season/episode shelves |
-
-That matches jellyfin-web's own DOM order on 10.11.11, so the orders change
-nothing today. They are there to say the intent out loud: a future template
-that moves `.mainDetailButtons` out of the ribbon, or puts the blurb ahead of
-it, cannot silently push the stack under the fold again. Because everything
-variable-length sits at order 3, the stack's y is a function of the chip strip
-alone — 452 px on every item measured, long or short.
-
-The ribbon has nothing of its own left to draw: its 7.2 em height, its −7.2 em
-margin and its 32.45 vw left padding all exist to clear the poster this page no
-longer has.
-
-An earlier attempt promoted four wrappers and ordered every block explicitly so
-the stack could sit between the credits and the tags. It worked, but it made
-the stack's y a function of the blurb and credits length — 977 px on a long
-item — and it needed an `order: 40` default to stop unlisted children
-(`#itemBirthday`, `.recordingFields`, the shelf sections) jumping to the head of
-the column, plus a `display: none` on `.detailPagePrimaryContent::after`,
-because a boxless parent still generates its pseudo-elements and stock's float
-clearfix (`content:""; display:table`) otherwise survived as a flex item at
-`order: 0`. Both are recorded here because they are real traps in
-`display: contents`, not because the sheet still carries them.
-
-#### Verified on Windows at 300% (2026-09-10)
-
-At 1280 CSS px the wrapper is single column as designed (one 1136 px track).
-`#af-detail-panel` takes the stacked treatment and lands at the head of
-`.detailPageSecondaryContainer` — two to three screens down; at this width it is
-a footer, not a facts panel beside the blurb.
-
-The single-column track exposed four things the 640 px column measure had been
-hiding, all fixed in section (o):
-
-* **`.itemTags` had no rule at all**, so the tag wall spanned the full 1136 px
-  track under a 600 px `.overview` — ragged (Dune: Part Two, overview 600×94,
-  tags 1136×48). `.itemGenres`, `.tagline` and `.itemExternalLinks` were
-  uncapped the same way. All four are now `max-width: 600px`, the overview's own
-  measure.
-* **`.itemName` had no `max-width`**, so a long episode title ran to 1017.9 px on
-  one 64 px line and the two-line clamp never engaged. Now capped to the 640 px
-  blurb-column measure (as the credits and track pickers already were).
-* **The action stack no longer cleared the fold on a series.** A movie stack
-  ends at y=690 (fits 698, 8 px spare); a series adds a `btnShuffle` pill and
-  ends at **y=756**, so the `btnUserRating` / `btnMoreCommands` disc row was
-  below the fold. An `@media (max-height: 900px)` tightens the gap
-  (`--af-space-2`), the top margin (22→12 px) and the 56 px pills/discs (→48 px)
-  just enough to bring the series stack back to y=690, matching the movie. The
-  Play/Resume pill was already well clear of the fold; the 1064/1080 desktop
-  tuning heights never reach the query.
-* **The 520 px logo does sit over a single-column page.** The single-column
-  breakpoint is 1599, not 1279, so every width in 1280–1599 shows the logo over
-  one column. It reads fine — the column takes its 164 px top padding and
-  `.itemName` is hidden on movie/series — so the fix was the misleading comment
-  on the `max-width:1279px` logo rule, not the rule.
-
-Not ours: `document.documentElement.scrollWidth` is 3508 on a movie detail (2008
-on a series), because the cast shelf's `.emby-scroller` computes
-`overflow-x: visible` and its ~23 person cards push the *document* sideways —
-with `html.af-detail` removed the same page measures 4978. Far more visible at
-1280 than at 1920.
-
-#### The track pickers
-
-`form.trackSelections` is the source / video / audio / subtitle picker. jf-web
-marks a `<select>` **disabled** when the item offers exactly one option, and
-forces it chrome-less with
-`.emby-select[disabled]{background:none!important;border-color:transparent!important}`
-— which is right, a dead control must not look clickable. But the row then
-reads "Video   4K HEVC SDR": a label pretending to be a form field, saying
-nothing the chip strip and the facts panel have not already said.
-
-So a `.selectContainer` whose select is disabled is dropped
-(`:has(.emby-select[disabled])`), and the form is what the design asked for —
-**one row of glass selects, each of them a real decision**. Measured on
-Bāhubali 2: one picker shown (Subtitles, enabled, `rgba(22,28,51,.55)` at a
-999 px radius), form height 44 px against 122 px before. On The Animatrix,
-which offers no choice at all, the form collapses to 0 px and the page simply
-does not show one. Nothing is lost: codec, resolution and the track list are on
-the chips and in `#af-detail-panel`.
-
-`.overview-expand` ("Show more") is excluded from section (f)'s secondary-pill
-rule and rendered as an accent text link. As a 56 px pill it outweighed the
-blurb it belongs to.
-
-### The action stack
-
-`.detailButton` in 10.11.11 has **no text element**. The template is one
-`.detailButton-content` holding a `.material-icons.detailButton-icon` and
-nothing else, and the words live in the `title` attribute — there is a
-`.detailButton-text` *rule* in the stock sheet, but no such element on this
-page. So the label is `content: attr(title)` on a pseudo-element **of the
-button itself**, the one element `attr()` can read it from. It is `::before`
-with an explicit `order: 2`, not `::after`, because the remaining time has to
-come last and a pseudo-element cannot otherwise be placed between
-`.detailButton-content` and `::after`.
-
-That remaining time is `content: attr(data-af-left)`, written by
-`markResumeButton()` from `UserData.PlaybackPositionTicks` against
-`RunTimeTicks` and only when `data-action="resume"`. An **attribute**, not a
-child element: attribute writes are invisible to the `childList` observer that
-drives `refresh()`, so this cannot feed the repaint loop the detail panel has to
-be filtered out of. (`#af-detail-panel` is filtered out of that observer the
-same way `#af-detail-panel` is.)
-
-`.btnPlay` is a **class**, not an id — the whole button set is classes on
-`button.button-flat`.
-
-### The facts panel
-
-`#af-detail-panel` is synthesised: `detailFacts(item, opts)` is a pure
-item-JSON-in, rows-out helper and `renderDetailPanel()` inserts the result as
-the first child of `.detailPageSecondaryContainer`, where `margin-left: auto`
-lands it on the page's right gutter at the artboard's 150 px. Glass built from
-the same `--af-glass` tokens the removed server card used, and the same video
-gate.
-
-| Item | Eyebrow | Rows |
-| --- | --- | --- |
-| Movie, Episode, anything else | File | Video (codec · resolution · HDR), Audio (codec · layout), Subtitles (language codes, 3 + "+n"), Mode, Size |
-| Series | Next up (or Series) | headline `S1 E9 · Title` + remaining time, then Network, Status, Airs, Mode |
-| Season | Season | Episodes, Watched *n* of *m*, Mode |
-
-Streams come from `MediaSources[0].MediaStreams`, falling back to
-`item.MediaStreams` for the trimmed shapes `/Items` and `/NextUp` return. Next
-up is a second, optional pass — `ApiClient.getNextUpEpisodes({SeriesId, UserId,
-Limit: 1})` — which re-renders the panel when it lands. Mode is the video mode
-from `window.jmpInfo.settings.playback.videoMode` through the same
-`videoModeLabel()` the server panel uses.
-
-**Rows with no value are never emitted.** A movie the server has not scanned
-yields no rows at all and the panel hides itself rather than printing a stack
-of dashes.
-
-### Four deliberate deviations from the artboards
-
-The first three are owner decisions; the fourth came out of the live check.
-
-1. **Seasons stay cards.** SeriesDetail draws them as a row of pills;
-   jellyfin-web renders `#childrenCollapsible` as an `.itemsContainer` of
-   `.card.overflowPortraitCard`, which already carries the tile rules from
-   section (e), and rebuilding them as pills would mean hiding real season art.
-2. **`btnMoreCommands`, `btnUserRating`, `btnDownload`, `btnInstantMix` and
-   `btnSplitVersions` become 56 px icon discs on a row of their own** under the
-   pills. jf-web wraps none of them, so there is no element to make that row
-   with: the stack is spelled as a wrapping flex *row* whose pills are
-   `flex: 0 0 100%` and whose discs are `flex: 0 0 56px` at `order: 2`, which
-   puts them together on the line after the pills whatever order the template
-   uses (`btnDownload` is third in the markup).
-3. **No separate remaining-time scrubber under the stack.** Both artboards draw
-   one; the same number rides the Resume pill instead, and a second copy would
-   say it twice.
-4. **No per-row overview on a season page** (`.listItem-overview`,
-   `display: none`). Both artboards draw an episode row as still +
-   "E9 · Title" + "24m · Aired …" and nothing else, and the live check says why:
-   jf-web puts the episode list in the 640 px blurb column, where a paragraph
-   between a 208 px still and four 40 px buttons measured **215 px wide and
-   186 px tall** — six words to a line. jf-web itself hides it below a 50 em
-   viewport for the same reason. Deleting the one rule brings it back.
-
-### Selectors depended on (verified 10.11.11)
-
-Read off the pinned bundle in `.cache/e2e/jellyfin-web/`, not from memory.
-
-**Page** — `.itemDetailPage.libraryPage.selfBackdropPage`, `#itemBackdrop`,
-`.detailLogo`, `.detailPageWrapperContainer`, `.detailPagePrimaryContainer`,
-`.detailImageContainer` (`.hide-mobile` / `.hide-desktop.hide-tv`),
-`.detailRibbon`, `.infoWrapper`, `.detailPagePrimaryContent`,
-`.detailPageSecondaryContainer.padded-bottom-page`, `.detailPageContent`.
-
-**Head** — `.nameContainer` > `.parentName` + `.itemName` (also
-`.itemName.parentNameLast`, `.itemName.originalTitle`),
-`.itemMiscInfo.itemMiscInfo-primary` / `-secondary` > `.mediaInfoItem`
-(sometimes also `.mediaInfoText.mediaInfoText-upper`), `.starRatingContainer` >
-`.starIcon`, `.mediaInfoCriticRating`.
-
-**Actions** — `.mainDetailButtons.focuscontainer-x` >
-`button.button-flat.detailButton` with `.detailButton-content >
-span.material-icons.detailButton-icon`, classed `btnPlay` (`data-action`
-`resume`|`play`), `btnReplay`, `btnDownload`, `btnPlayTrailer`, `btnInstantMix`,
-`btnShuffle`, `btnCancelSeriesTimer`, `btnCancelTimer`, `btnPlaystate`,
-`btnUserRating`, `btnSplitVersions`, `btnMoreCommands`. Each carries `.hide`
-until the item earns it.
-
-**Body** — `form.trackSelections` > `.selectContainer` >
-`select.emby-select.detailTrackSelect`, `.detailSectionContent` >
-`p.itemGenres`, `h3.tagline`, `p.overview` (+ `.detail-clamp-text`),
-`.overview-controls > a.overview-expand`, `.itemTags`, `.itemExternalLinks`;
-`.itemDetailsGroup > .detailsGroupItem > .label + .content`.
-
-**Season rows** — `.itemsContainer.vertical-list` >
-`.listItem.listItem-largeImage.listItem-withContentWrapper` >
-**`.listItem-content`** > `.listItemImage.listItemImage-large` (holding
-`.listItemImageButton` and, when the item has them,
-`.indicators.listItemIndicators > .playedIndicator` and
-`.itemProgressBar.listItemProgressBar > .itemProgressBarForeground`),
-`.listItemBody > .listItemBodyText` + `.secondary.listItemMediaInfo` +
-`.secondary.listItem-overview`, then `.listViewUserDataButtons`.
-
-**The row is `.listItem-content`, not `.listItem`.** Stock lays
-`.listItem-withContentWrapper` out as a *column* and puts the real row inside
-it, so styling `.listItem` as the row put the episode title and its runtime
-*above* the still — measured live at 264 px per row before the fix, 125 px
-after.
-
-**JS** — `ApiClient.getNextUpEpisodes({SeriesId, UserId, Limit})` in addition to
-the calls listed above.
-
-### Stock rules that had to be answered
-
-| Stock | Specificity | How |
-| --- | --- | --- |
-| `.libraryPage{padding-top:7em!important}` — 8575.css exempts every library page from its own 3.25rem *except* this one | (0,1,0) **!important** | `padding-top:0!important` at (0,2,1); the grid sets its own 150px inset |
-| `.layout-desktop .detailRibbon{height:7.2em;margin-top:-7.2em}` + `.layout-desktop [dir=ltr] .detailRibbon{padding-left:32.45vw}` | (0,2,0) / **(0,3,0)** | `display:contents` at (0,3,1). The (0,3,0) is why every rule in the section spells `.itemDetailPage` out |
-| `[dir=ltr] .detailPagePrimaryContent` / `.detailPageContent` `{padding-left:32.45vw;padding-right:2%}` | (0,2,0) | `padding:0` at (0,3,1) |
-| `.layout-desktop .detailPageWrapperContainer{display:flex;flex-wrap:wrap;margin:1em 0}` | (0,2,0) | `display:grid` at (0,3,1) |
-| `.infoWrapper{flex:1 0 0}` | (0,1,0) | `flex:none` — a zero basis that grows would make the blurb column one tall empty box |
-| `style="margin-bottom:.6em"` inline on both `.itemMiscInfo` rows | inline | `margin-bottom:0!important` — the column gap owns the rhythm |
-| `.detailButton{flex-direction:column;margin:0!important;padding:.7em .7em!important}` plus three more `padding-left`/`-right` `!important` rules in media queries | (0,1,0) **!important** | `margin:0!important;padding:0 24px!important` at (0,4,1) |
-| `form.trackSelections` renders its **disabled** selects chrome-less: `.emby-select[disabled]{background:none!important;border-color:transparent!important;color:inherit!important}` | (0,2,0) **!important** | **not fought** — the container is dropped instead, with `:has(.emby-select[disabled])`. A picker offering one option is not a decision, and the value is already on the chips and in the facts panel |
-| `.detailButton-icon{font-size:1.6em!important}` | (0,1,0) **!important** | `font-size:20px!important` at (0,4,1) |
-| `.detailsGroupItem,.trackSelections .selectContainer{margin:0 0 .5em!important}` | (0,1,0) / (0,2,0) **!important** | `margin:0 0 6px!important` and `margin:0!important` at (0,2,1)/(0,3,1) |
-| `.detail-clamp-text{-webkit-line-clamp:12}`, 6 above 40em — added to `.overview` by jf-web and **removed** by "Show more" | (0,1,0) | 3 lines on `.overview.detail-clamp-text` at (0,4,1), so the expand control still has something to undo |
-| `.overflowPortraitCard` nine-step vw ladder | (0,1,0) | `width:130px` on `> .card` at (0,4,1) |
-| `[dir=ltr] .itemsContainer>.card>.cardBox{margin-right:1.2em}` and `.cardBox-bottompadded{…!important}` | (0,4,0) / (0,1,0) **!** | `margin:0!important`, exactly as section (l) does |
-| `.emby-scroller{padding-left:3.3%}` + its `@supports` safe-area twin | (0,1,0) | `padding:0` at (0,3,1) |
-| `.listItemImage-large{height:13vw;width:19.5vw}` — 374×250 at 1920 | (0,1,0) | `208px × 117px` at (0,2,1) |
-| `.indicator{height:2em;width:2em}` + `.countIndicator,.playedIndicator{box-shadow:…;color:#fff}` | (0,1,0) | 24px cyan disc at (0,4,1) |
-| `.listItem:hover` / `:focus` fills from section (b) | (0,1,0) | `background:transparent` — the still carries the state, so a row cannot paint a band across the column |
-| `themes/<name>/theme.css` painting `.detailPagePrimaryContainer` / `.detailPageSecondaryContainer` `#101010` and `.detailRibbon` `rgba(32,32,32,.8)` | (0,1,0) | `background:transparent` at (0,3,1). **Only findable on a running page** — that sheet is not in the chunk CSS. Measured before the rule: two opaque slabs, 640×1214 and 836×1057, over the art the page is built around |
-| `.listItemBody` blockified — `{display:inline-block}` wins on source order, and as a flex item that computes to `block`, so stock's own `flex-direction:column` never takes | (0,1,0) | restated as a real flex column at (0,4,1) |
-| The progress bar carries **both** `.itemProgressBar` (itemDetails.css, `position:relative`) and `.listItemProgressBar` (main.css, `position:absolute`) | (0,1,0) each — the winner is whichever chunk loads last | `position:absolute` restated. Measured live with the relative one winning: the bar left the still entirely and rendered **0 px wide, in flow, at x=296** beside a 208 px image ending at x=286 |
-
-**Nine `!important` declarations**, every one of them answering an `!important`
-or an inline style in jellyfin-web: the page's top padding, the inline
-misc-info margin, the two stock group margins (`.detailsGroupItem` and
-`.trackSelections .selectContainer`), the button margin/padding pair, the icon
-disc padding, the icon font size, and the card box margin. Everything else in
-the section is plain specificity.
+Movie, series, season and episode pages (`#/details?id=…`). **Owner call
+2026-09-18: these pages keep jellyfin-web's own layout, exactly as Jellium
+Desktop renders it, and take only Astrofin's colours and typefaces.** Section
+(o) of `astrofin-theme.css` is the whole of it; the script's only part is
+setting `html.af-detail` from `isDetailRoute()`.
+
+This replaced a full redesign built 2026-09-10..13: a logo-led blurb column, a
+stack of 56 px action pills, the poster moved into a right-hand rail above a
+synthesised `#af-detail-panel` facts card, Astrofin's full-screen art backdrop
+and a family of viewport-relative `--af-detail-*` tokens. It is in git up to
+`6499aae` if it is ever wanted back, and the artboards
+`docs/design/canvas/MovieDetail.dc.html` / `SeriesDetail.dc.html` still draw
+it. The measured lessons from it that still apply anywhere are kept under
+[Interface Scale](#interface-scale).
+
+### The rule
+
+**Nothing on these pages may change a box.** Section (o) sets colour, the page
+background and one type reset, and nothing else — no size, position, margin,
+padding, display, font size or letter-spacing.
+
+The same holds for every app-wide rule that reaches into the page. The
+declarations that set a size carry `:where(:not(.itemDetailPage *))`: the heading
+tracking in (a), the card labels and their two-line clamp and the progress
+bar's height in (e), the raised-button type, the secondary pill's border and
+type, the input/select border and type and the media-info chip in (f), and the
+section titles in (g). `:where()` adds no specificity, so those rules rank
+exactly as before on every other page. Their colour declarations stay
+app-wide. What does carry over, because it moves nothing: the tile corner
+radius, the card focus ring and hover lift, and the pill radius on chips and
+buttons.
+
+**Type.** Stock is `html { font-size: 93%; line-height: 1.35 }` with nothing on
+body or on any page container, while section (a) sets the body to
+`--af-type-body` (16/24 px). `.itemDetailPage { font-size: 1rem; line-height:
+1.35 }` restores exactly what the page would inherit without the theme. The
+family is Inter throughout the page, headings included: stock sets the item
+name at weight 600, and the bundled Sora stops at 400, so it would come out
+synthetically emboldened. The directors/writers/studios block is MUI in 12.x,
+and MUI's Typography sets its own family (`--jf-font-body1`, Noto Sans), so it
+is overridden family-only.
+
+### The palette
+
+Jellyfin 12's legacy stylesheets read MUI's CSS variables —
+`color: var(--jf-palette-text-secondary, hsla(0,0%,100%,.7))` and so on — so
+most of the recolour is those variables redefined on `.itemDetailPage`. A
+declaration there outranks the inherited `:root` value for the page's subtree
+and for nothing outside it.
+
+| `--jf-palette-*` | stock | Astrofin |
+|---|---|---|
+| `text-primary` | `#fff` | `--af-text-primary` |
+| `text-secondary` | white at .7 | `--af-text-muted` |
+| `primary-main`, `secondary-main` | `#00a4dc` | `--af-accent-primary` |
+| `primary-mainChannel` | `0 164 220` | `--af-accent-primary-ch` |
+| `primary-contrastText`, `secondary-contrastText` | black at .87 | `--af-on-accent` |
+| `primary-dark` | `#00729a` | the accent mixed 70 % with `--af-bg-base` |
+| `background-default` | `#101010` | `--af-bg-base` |
+| `background-paper` / `-paperChannel` | `#202020` / `32 32 32` | `--af-surface` / `--af-surface-ch` |
+| `AppBar-defaultBg` | `#202020` | `--af-surface` |
+| `divider` | white at .12 | `--af-hairline` |
+| `action-hover` / `action-focus` | white at .08 / .12 | `--af-glass-fill-soft` / `--af-surface-raised` |
+| `FilledInput-bg` / `-borderColor` | white at .09 | `--af-surface` / `--af-edge-strong` |
+| `Button-inheritContainedBg` / `-HoverBg` | `#424242` / `#616161` | `--af-surface-raised` / `--af-glass-fill` |
+| `error-light` | `#d15353` | `--af-accent-danger` |
+| `starIcon-main` | `#f2b01e` | `--af-accent-warm` (the detail page's own star is hard-coded and has its own rule) |
+
+`--jf-card-borderRadius` goes to `--af-radius-tile` as well, which section (e)
+already enforces on the cards themselves. `--af-surface-ch` and
+`--af-accent-primary-ch` are space-separated because stock uses the channel
+variables as `rgb(var(--x) / .8)` (the ribbon), where the comma-separated
+`-rgb` tokens are invalid.
+
+**The hierarchy follows stock's.** Stock draws almost the whole page in
+text-secondary, so the page's base colour is `--af-text-muted`, and only names
+are lifted to `--af-text-primary`: the item's name (not the `.originalTitle`
+line under a foreign film's name, which also carries `.itemName`), the series
+name above an episode or season, the episode titles in a season's list, and —
+app-wide — the shelf titles and card labels. Two accents on top of that: the
+Play glyph in `--af-accent-primary`, because Astrofin draws the primary action
+in the accent and stock draws every detail button alike; and the played check
+in the accent rather than stock's red. Stock gives the played check and the
+favourite heart the same `error-light`; the heart keeps a red
+(`--af-accent-danger`), and the check matches the accent played indicators on
+every card.
+
+On a 10.11.x server, which has no `--jf-palette-*` variables, only the explicit
+rules take effect: the type reset, the name colours, the page background, the
+two accents and everything app-wide.
+
+### The background
+
+Stock paints the page below the art band `#101010`
+(`.noBackdropTransparency .detailPageWrapperContainer`). That covers
+jellyfin-web's own fixed `.backdropContainer` completely: on a detail page it is
+never seen, even though jellyfin-web loads the item's art into it. Astrofin's
+space background takes the `#101010`'s place. The wrapper goes transparent,
+`.backdropContainer` goes to opacity 0 so that art cannot show through instead,
+and section (b)'s `.withBackdrop` scrim stands down with it.
+
+The in-page band (`#itemBackdrop`) and the ribbon over its foot are stock. The
+ribbon's `rgb(paperChannel / .8)` becomes the Astrofin surface at .8 through the
+variables above. The script drives no art on these pages: on a detail route
+`refresh()` calls `leaveHome(false)`, which clears Home's backdrop and the
+popout's selection, so nothing of Astrofin's own art layer is up.
+
+### Verified live
+
+2026-09-18, against Jellyfin **12.1.0** on the 85" panel's real viewport
+(1506x821 CSS px at Interface Scale 85 %), over CEF's debug port.
+
+**Method — repeat it after any server upgrade or any edit to this section.**
+For each page, with the stock font family forced on both runs (`.itemDetailPage,
+.itemDetailPage * { font-family: "Noto Sans" !important; transition: none
+!important }`) so glyph widths cannot differ, record every element's
+`getBoundingClientRect()` in document order with the theme on, then again with
+`document.getElementById('af-theme').sheet.disabled = true`, and compare. Wait
+~1.5 s after toggling the sheet before reading anything: jellyfin-web's own
+`transition`s start from Astrofin's values when the sheet goes off, and
+`getComputedStyle` reads the mid-transition colour (that briefly looked like a
+second Astrofin stylesheet). Then, with the real sheet and fonts, list every
+computed `color` / `background-color` / `border-color` / `box-shadow` in the
+page that is still one of stock's (`#00a4dc`, `#101010`, `#202020`, white at .7,
+`#d15353`, `#f2b01e`, …).
+
+| page | elements | page height, Astrofin / stock | boxes that differ |
+|---|---|---|---|
+| movie (Dragon Ball Super: Broly) | 755 | 1834 / 1834 | 0 |
+| series (Hunter x Hunter (2011)) | 1050 | 2468 / 2468 | 0 |
+| season (its Season 1) | 4516 | 34921 / 34921 | 0 |
+| episode | 3259 | 1548 / 1548 | 0 |
+
+Stock colours left after the palette remap: one, the rating star, which
+`itemDetails.css` hard-codes (`.starIcon { color: #f2b01e }`) rather than reading
+`--jf-palette-starIcon-main`; section (o) answers it with its own rule. Every
+text node on all four pages computes to Inter. Key values as measured: page text
+`--af-text-muted`, item and series names `--af-text-primary`, the ribbon
+`rgba(14,19,38,.8)`, the wrapper and `.backgroundContainer` transparent,
+`.backdropContainer` at opacity 0, `html.af-backdrop` off, the Play glyph in the
+accent and the other detail buttons muted, the track selects on
+`--af-surface` with an `--af-edge-strong` border, and the item name at stock's
+26.78 px / 600 on a movie or series and 17.41 px on a season or episode.
+
+The guarded app-wide rules were re-checked on Home the same day and are
+unchanged there: shelf titles and card labels Inter 500 20/26 px with the
+two-line clamp, secondary labels 16/22 px, the body 16/24 px.
+
+### Selectors depended on (verified 12.1.0)
+
+Inside the page: `.itemDetailPage` (the page itself, and the scope of every
+rule), `.detailPageWrapperContainer`, `.nameContainer .itemName` and
+`.itemName.originalTitle`, `.nameContainer .parentName`, `.listItemBodyText`,
+`.mainDetailButtons .btnPlay .detailButton-icon`,
+`.playstatebutton-icon-played`, `.starIcon`, `.MuiTypography-root`. Outside it:
+`.backdropContainer` and `.backgroundContainer.withBackdrop`. If one of these
+stops matching after a server upgrade, that element falls back to stock
+jellyfin-web colours — never to a broken layout, which is the point of the
+rule above.
 
 ## Settings
 
@@ -1408,7 +1070,7 @@ genuinely grows and every measurement the theme's JS takes stays truthful. A
 writes stay unscaled, so an element set to `left: 200px` reports `x: 160`, and
 the card popout (which reads rects and writes positions) would be misplaced by
 the zoom factor. Below 100 % the app also *gains room*: at 80 % a 1280 px
-screen lays out as 1600 px, which is the band section (o) is designed for.
+screen lays out as 1600 px, the width band the theme was drawn against.
 
 * Stored as a string, like `videoMode` — `CliSettings` has no numeric field.
   `jfn_config::interface_scale_factor()` is the one place it becomes a number.
@@ -1424,62 +1086,23 @@ screen lays out as 1600 px, which is the band section (o) is designed for.
   0.5–2.0. A hand-edited file can therefore ask for a scale the UI does not
   offer, the same escape hatch `videoModeLibraries` has.
 
-**Why section (o) is viewport-relative.** The first live test of this setting
-found that no single scale suited every screen: on the 85" panel Home read well
-at 85 % (1506 px of effective width) while item detail wanted 65 % (1969 px) —
-the detail page needed about 30 % more room than Home to feel the same. The
-cause was that detail is built almost entirely from fixed pixels chosen against
-a wide desktop, where Home is mostly jellyfin-web's own em-based cards: a 520 px
-logo is 25 % of a 2048 px viewport but 35 % of a 1506 px one.
+**The detail page and `vw`, 2026-09-13 to 09-18.** The first live test of this
+setting found that no single scale suited every screen: on the 85" panel Home
+read well at 85 % (1506 px of effective width) while the redesigned item detail
+page wanted 65 % (1969 px), because it was built from fixed pixels chosen
+against a wide desktop where Home is jellyfin-web's own em-based cards. It was
+answered by making the detail page's measures viewport-relative, and that is
+where the lesson worth keeping came from: **anything expressed in `vw` is
+immune to Interface Scale**, because the scale works by changing the effective
+viewport width. Measured at the two settings the owner was switching between,
+the converted logo, poster and title were identical (ratio 1.00) while
+everything left in px still grew by 31 %, so each round of conversion froze a
+little more of the page against the control. Keep sizes in em/rem/px on any
+page that should respond to it.
 
-The fix was not a per-view scale — the UI must not resize as you navigate — but
-to give the detail page's own measures the treatment the poster already had. The
-tokens below are each a clamp whose `vw` term lands on the artboard's number at
-2048 px, so the monitor is unchanged and everything shrinks beneath it:
-
-| token | 2048 | 1506 | 1280 |
-|---|---|---|---|
-| `--af-detail-top` | 150 | 110 | 96 |
-| `--af-detail-logo-width` × height | 520×140 | 383×103 | 325×88 |
-| `--af-detail-actions-width` | 360 | 280 | 280 |
-| `--af-detail-title-size` | 64 | 47 | 40 |
-| `--af-detail-poster-gap` | 96 | 71 | 64 |
-| `--af-detail-poster-width` | 440 | 324 | 275 |
-
-The blurb column's clearance is `calc(logo-height + 24px)` rather than the old
-literal 164 px, so a logo that shrinks takes its clearance with it instead of
-leaving a hole.
-
-That first pass was not enough, and the reason is worth keeping. Measured at
-the two settings the owner was switching between, as a fraction of screen
-width:
-
-| | 1969 (65 %) | 1506 (85 %) | ratio |
-|---|---|---|---|
-| logo, poster, title | 25.4 / 21.5 / 31.2 | 25.4 / 21.5 / 31.2 | **1.00** |
-| blurb column | 32.5 | 42.5 | 1.31 |
-| overview, facts, shelf titles | — | — | 1.31 |
-
-**Anything expressed in `vw` is immune to Interface Scale**, because the scale
-works by changing the effective viewport width. So the first pass froze the
-logo, poster and title against the control — they were identical at both
-settings — while everything it had *not* converted still grew by 31 %. The
-remainder was the 640 px blurb column and the page's type.
-
-The column was the largest of them: at `clamp(420px, 44vw, 640px)` the clamp
-pinned it to 640 px from 1455 px upward, making it 42.5 % of the 85" panel's
-width against 31 % of the monitor's. At `31.25vw` it is 640 px at 2048 px and
-the same fraction of anything narrower. The prose measure (`--af-detail-measure`)
-and four type sizes (`--af-detail-body`, `-facts`, `-shelf`, `-pill`) follow the
-same rule, each applied as a `font-size` *after* the `font` shorthand so the
-weight and family stay the token's. `.sectionTitle` is scoped to
-`html.af-detail`: it is Home's shelf heading too, and Home is comfortable at a
-width this page is not.
-
-**The consequence, accepted deliberately:** the detail page now largely sizes
-itself from the viewport and stops responding to Interface Scale. That is the
-direct price of one setting suiting both pages, and the scale still governs
-Home, the library grids, Settings and the player.
+That page is gone: since 2026-09-18 the detail pages are jellyfin-web's own
+em-based layout (see [Item detail](#item-detail)), so they follow Interface
+Scale exactly as Home, the library grids, Settings and the player do.
 
 These attributes are part of `client-settings.js`'s contract and are pinned by
 `src/web/client-settings.test.js`.
@@ -1728,8 +1351,8 @@ and jf-web puts nothing in its place on the pointer path — so
 `.listItem-border:focus-visible` now carries `--af-focus-ring`, which follows
 the pill's radius because it is a box-shadow. The detail page's episode rows
 are not `.listItem-border > .listItem` (checked live: zero matches on a season
-page) and their own `html.af-detail` rules out-specify this anyway, so they
-keep the transparent fill and the 14px radius.
+page), so this does not reach them; they take section (b)'s plain
+`.listItem:hover`/`:focus` fills on their stock square rows.
 
 ## Testing
 

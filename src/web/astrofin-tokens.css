@@ -15,6 +15,10 @@
   --af-bg-base: #070A14;
   --af-bg-base-rgb: 7, 10, 20;
   --af-surface: #0E1326;
+  /* Space-separated channels, for the `rgb(var(--x) / .8)` form Jellyfin 12's
+     own stylesheets use with their palette variables (see theme section (o));
+     the comma-separated -rgb tokens are invalid there. */
+  --af-surface-ch: 14 19 38;
   --af-surface-raised: #161C33;
   --af-surface-raised-rgb: 22, 28, 51;
 
@@ -29,6 +33,7 @@
 
   --af-accent-primary: #6FE3FF;
   --af-accent-primary-rgb: 111, 227, 255;
+  --af-accent-primary-ch: 111 227 255;
   --af-accent-secondary: #8B6CFF;
   --af-accent-secondary-rgb: 139, 108, 255;
   --af-accent-warm: #FFB86B;
@@ -164,63 +169,6 @@
      took the 85" panel's popout to 90% of its usable height for no gain. At
      200px it only rescues cards under ~170px wide. */
   --af-popout-min-width: 200px;
-  /* The item detail poster, centred at the head of the right column. One
-     number: the card under it and the shelves under that follow from it. */
-  /* Viewport-relative, not a fixed px: measured live, 440px is 21.5% of the
-     1440p monitor's 2048px viewport but 34% of the 85" panel's 1280px one, and
-     the owner saw that as "the scaling is off on the TV". At 21.5vw both land
-     on the same fraction of the screen — 440x660 on the monitor, 275x413 on
-     the TV — which is the invariant that matters when the two are viewed from
-     a desk and from a couch. The clamp keeps it sane outside that range. */
-  --af-detail-poster-width: clamp(260px, 21.5vw, 460px);
-  /* The detail page's top inset: the wrapper's top padding, which is what sets
-     where the blurb column and the action stack begin. Viewport-relative for
-     the same reason the poster is — see the block below. 7.3vw lands on the
-     artboard's 150px at 2048px. */
-  --af-detail-top: clamp(96px, 7.3vw, 150px);
-
-  /* ---- Item detail, viewport-relative ---------------------------------
-     Measured 2026-09-13: Home reads well on the 85" panel at 1506px of
-     effective width while item detail wanted 1969px — the detail page needed
-     about 30% more room than Home to feel the same, so no single Interface
-     Scale suited both. The cause was that detail is built almost entirely
-     from fixed pixels chosen against a wide desktop, where Home is mostly
-     jellyfin-web's own em-based cards: the 520px logo is 25% of a 2048px
-     viewport but 35% of a 1506px one.
-
-     Each value below is a clamp whose vw term lands on the artboard's number
-     at 2048px, so the monitor is unchanged, and which shrinks below that. */
-
-  /* 520/2048 = 25.4vw; the height keeps the artboard's 520x140 ratio. */
-  --af-detail-logo-width: clamp(320px, 25.4vw, 520px);
-  --af-detail-logo-height: calc(var(--af-detail-logo-width) * 0.2692);
-  /* 360/2048 = 17.6vw. The floor is two 56px discs plus their gaps, below
-     which the stack would wrap into something taller, not smaller. */
-  --af-detail-actions-width: clamp(280px, 17.6vw, 360px);
-  /* 64/2048 = 3.125vw, with 1.125 line-height as 72/64. */
-  --af-detail-title-size: clamp(40px, 3.125vw, 64px);
-  /* 640/2048 = 31.25vw — the blurb column. */
-  --af-detail-column: clamp(420px, 31.25vw, 640px);
-  /* 600/2048 = 29.3vw — the prose measure the overview, tagline, genres and
-     tag wall all share. */
-  --af-detail-measure: clamp(360px, 29.3vw, 600px);
-  /* The detail page's own type, each landing on the artboard's size at 2048px.
-     Floors are set where the text stops being comfortable rather than where
-     the ratio would put it, so the smallest viewports lose a little fidelity
-     to the ratio and nothing to legibility. */
-  --af-detail-body: clamp(12px, 0.781vw, 16px);
-  --af-detail-facts: clamp(11px, 0.732vw, 15px);
-  --af-detail-shelf: clamp(15px, 0.977vw, 20px);
-  --af-detail-pill: clamp(13px, 0.879vw, 18px);
-  /* The air above and below the detail poster. The poster pulls itself up out
-     of the inset above by exactly the difference, so this one number is both
-     gaps at once and they cannot drift apart. Deliberately smaller than the
-     inset: the inset was drawn against the theme's 88px header, and Jellyfin
-     12's MUI header is 48px, so leaving it at the inset read as dead space.
-     The left column keeps the full inset — the logo is absolutely positioned
-     and the blurb column's own padding clears it, so moving the columns up
-     would have walked the text into the logo. */
-  --af-detail-poster-gap: clamp(64px, 4.7vw, 96px);
   --af-backdrop-scale-from: 1.04;
   --af-page-offset: 24px;
   --af-page-scale: .98;

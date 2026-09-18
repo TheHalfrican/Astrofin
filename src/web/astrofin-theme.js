@@ -15,9 +15,9 @@
  *   3. track the focused/hovered card and drive the backdrop from it — on
  *      the card popout that stands in for it on Home and on the library
  *      grids, plus #af-hint, which is Home-only;
- *   3b. gate the item detail pages: fetch the item once per route, stamp
- *      html[data-af-detail-type], drive the backdrop from it and synthesise
- *      the #af-detail-panel facts panel;
+ *   3b. mark the item detail pages with html.af-detail, which the sheet's
+ *      colour-only section (o) is scoped to — those pages keep jellyfin-web's
+ *      own layout and art band, so there is nothing to build there;
  *   4. pin <meta name="theme-color"> to --af-bg-base so the native chrome and
  *      the mpv letterbox match;
  *   5. gate every Astrofin layer off while video is playing.
@@ -292,24 +292,16 @@
         // The item detail page: #/details?id=<guid>&serverId=<guid>[&context=…].
         // Hash-only, with no DOM fallback: jf-web 10.11.11 keeps the outgoing
         // view in the DOM, duplicate id and all, so a `.itemDetailPage` probe
-        // stays true forever once one has rendered. Everything downstream reads
-        // `.itemDetailPage:not(.hide)` rather than #itemDetailPage for the same
-        // reason.
+        // stays true forever once one has rendered. The sheet's section (o) is
+        // scoped to `.itemDetailPage` and so also matches a hidden outgoing
+        // page, which is harmless: a hidden page paints nothing.
         function isDetailRoute() {
             var hash = String(location.hash || '').replace(/^#!?/, '');
             return /^\/details([?/]|$)/.test(hash);
         }
 
-        // The item the route is about. A season page is a details route of its
-        // own, so this changing is what makes the gate re-fetch.
-        function detailIdFromHash() {
-            var m = /[?&]id=([^&]*)/.exec(String(location.hash || ''));
-            if (!m || !m[1]) { return null; }
-            try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
-        }
-
         /* ------------------------------------------------------------------ */
-        /* 5. Card popout, server panel, controller hint                       */
+        /* 5. Card popout, controller hint                                     */
         /* ------------------------------------------------------------------ */
 
         var ui = null;
@@ -418,23 +410,6 @@
             popout.addEventListener('mouseleave', guard(function (e) {
                 if (!cardFrom(e.relatedTarget)) { hidePopout(); }
             }));
-        }
-
-        // Video-mode wire value -> panel label. The pre-rename spellings are
-        // still accepted because a settings.json normalised at startup only
-        // reaches jmpInfo on the next launch.
-        var VIDEO_MODE_LABELS = {
-            'auto': 'Auto',
-            'live-action': 'Live-Action',
-            'movies': 'Live-Action',
-            'animation': 'Animation',
-            'anime': 'Animation',
-            'off': 'Off'
-        };
-
-        function videoModeLabel(value) {
-            var key = String(value || '').toLowerCase();
-            return VIDEO_MODE_LABELS[key] || key;
         }
 
         /* ------------------------------------------------------------------ */
@@ -566,24 +541,6 @@
         function titleFor(item) {
             if (item.Type === 'Episode' && item.SeriesName) { return item.SeriesName; }
             return item.Name || '';
-        }
-
-        /* Which branch of backdropUrlFor()'s fallback chain an item lands on.
-         * Pure, and kept beside it so the two cannot drift. Only the detail
-         * gate reads it: `primary` means the art is a 2:3 poster cropped to a
-         * 16:9 canvas, which section (o) blurs back towards a wash. */
-        function backdropSourceFor(item) {
-            if (!item) { return null; }
-            if (item.BackdropImageTags && item.BackdropImageTags.length) {
-                return 'backdrop';
-            }
-            if (item.ParentBackdropItemId
-                && item.ParentBackdropImageTags
-                && item.ParentBackdropImageTags.length) {
-                return 'parent';
-            }
-            if (item.ImageTags && item.ImageTags.Primary) { return 'primary'; }
-            return null;
         }
 
         function backdropUrlFor(item) {
@@ -1096,412 +1053,7 @@
         }
 
         /* ------------------------------------------------------------------ */
-        /* 8. Item detail                                                      */
-        /* ------------------------------------------------------------------ */
-
-        /* jf-web 10.11.11 renders movie, series, season and episode pages from
-         * one template and marks none of them — nothing in the DOM says which
-         * kind of item is on screen. The item JSON does, so the gate fetches it
-         * once per route and writes the answer to html[data-af-detail-type],
-         * which is what the eyebrow in section (o) of the sheet keys off.
-         * `attr()` could not do this: it resolves against the pseudo-element's
-         * own originating element, never against <html>. */
-        var DETAIL_TYPES = {
-            Movie: 'movie',
-            Series: 'series',
-            Season: 'season',
-            Episode: 'episode'
-        };
-
-        function detailTypeFor(item) {
-            return (item && DETAIL_TYPES[item.Type]) || 'other';
-        }
-
-        /* The panel prefers MediaSources[0], which is what the page's own
-         * version picker is showing; item.MediaStreams is the fallback for the
-         * trimmed shapes /Items and /NextUp hand back. */
-        function mediaStreams(item) {
-            var src = item && item.MediaSources && item.MediaSources[0];
-            if (src && src.MediaStreams && src.MediaStreams.length) {
-                return src.MediaStreams;
-            }
-            return (item && item.MediaStreams) || [];
-        }
-
-        function streamOfType(streams, type) {
-            for (var i = 0; i < streams.length; i++) {
-                if (streams[i] && streams[i].Type === type) { return streams[i]; }
-            }
-            return null;
-        }
-
-        function formatBytes(value) {
-            var n = Number(value);
-            if (!n || n <= 0) { return null; }
-            var units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            var i = 0;
-            while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
-            return (i >= 2 ? n.toFixed(1) : String(Math.round(n))) + ' ' + units[i];
-        }
-
-        function videoFact(streams) {
-            var s = streamOfType(streams, 'Video');
-            if (!s) { return null; }
-            var head = [
-                s.Codec ? String(s.Codec).toUpperCase() : null,
-                resolutionLabel(s)
-            ].filter(Boolean).join(' ');
-            var range = s.VideoRangeType || s.VideoRange;
-            range = range && String(range).toUpperCase() !== 'SDR'
-                ? String(range).replace(/_/g, ' ')
-                : null;
-            return [head, range].filter(Boolean).join(' · ') || null;
-        }
-
-        function audioFact(streams) {
-            var s = streamOfType(streams, 'Audio');
-            if (!s) { return null; }
-            return [
-                s.Codec ? String(s.Codec).toUpperCase() : null,
-                s.ChannelLayout || (s.Channels ? s.Channels + 'ch' : null)
-            ].filter(Boolean).join(' ') || null;
-        }
-
-        /* Language codes only. A subtitle track's DisplayTitle is a sentence
-         * ("English - Forced - SRT") and would blow the 300px panel apart. */
-        function subtitleFact(streams) {
-            var seen = Object.create(null);
-            var codes = [];
-            for (var i = 0; i < streams.length; i++) {
-                if (!streams[i] || streams[i].Type !== 'Subtitle') { continue; }
-                if (!streams[i].Language) { continue; }
-                var code = String(streams[i].Language).toUpperCase();
-                if (seen[code]) { continue; }
-                seen[code] = 1;
-                codes.push(code);
-            }
-            if (!codes.length) { return null; }
-            if (codes.length <= 3) { return codes.join(' · '); }
-            return codes.slice(0, 3).join(' · ') + ' +' + (codes.length - 3);
-        }
-
-        function resumeLabel(item) {
-            var ud = item && item.UserData;
-            var pos = Number(ud && ud.PlaybackPositionTicks) || 0;
-            var total = Number(item && item.RunTimeTicks) || 0;
-            if (pos <= 0 || total <= 0 || pos >= total) { return null; }
-            var left = formatRuntime(total - pos);
-            return left ? left + ' left' : null;
-        }
-
-        function nextUpLine(ep) {
-            if (!ep) { return null; }
-            var bits = [];
-            if (ep.ParentIndexNumber != null && ep.IndexNumber != null) {
-                bits.push('S' + ep.ParentIndexNumber + ' E' + ep.IndexNumber);
-            }
-            if (ep.Name) { bits.push(ep.Name); }
-            return bits.join(' · ') || null;
-        }
-
-        function airsLine(item) {
-            var days = item.AirDays && item.AirDays.length ? item.AirDays.join(', ') : null;
-            return [days, item.AirTime || null].filter(Boolean).join(' ') || null;
-        }
-
-        /* Pure: item JSON (plus whatever the two async extras have resolved to)
-         * in, panel content out. Rows with no value are never emitted, so a
-         * sparse item yields a short panel rather than a wall of dashes, and
-         * an item with nothing to say yields none at all. */
-        function detailFacts(item, opts) {
-            var o = opts || {};
-            var rows = [];
-            var facts = { eyebrow: '', headline: null, sub: null, rows: rows };
-            if (!item) { return facts; }
-            var mode = o.videoMode ? videoModeLabel(o.videoMode) : null;
-
-            function push(label, value, tone) {
-                if (value === null || value === undefined || value === '') { return; }
-                rows.push({ label: label, value: String(value), tone: tone || null });
-            }
-
-            var type = detailTypeFor(item);
-
-            if (type === 'series') {
-                facts.eyebrow = o.nextUp ? 'Next up' : 'Series';
-                if (o.nextUp) {
-                    facts.headline = nextUpLine(o.nextUp);
-                    facts.sub = resumeLabel(o.nextUp);
-                }
-                push('Network', item.Studios && item.Studios[0] && item.Studios[0].Name);
-                push('Status', item.Status);
-                push('Airs', airsLine(item));
-                push('Mode', mode, 'accent');
-                return facts;
-            }
-
-            if (type === 'season') {
-                facts.eyebrow = 'Season';
-                var count = item.ChildCount != null ? item.ChildCount : item.RecursiveItemCount;
-                var unplayed = (item.UserData || {}).UnplayedItemCount;
-                if (count != null) { push('Episodes', String(count)); }
-                if (count != null && unplayed != null) {
-                    push('Watched', (count - unplayed) + ' of ' + count);
-                }
-                push('Mode', mode, 'accent');
-                return facts;
-            }
-
-            facts.eyebrow = 'File';
-            var streams = mediaStreams(item);
-            push('Video', videoFact(streams));
-            push('Audio', audioFact(streams));
-            push('Subtitles', subtitleFact(streams));
-            push('Mode', mode, 'accent');
-            push('Size', formatBytes((item.MediaSources && item.MediaSources[0] || {}).Size));
-            return facts;
-        }
-
-        var detailPanel = null;
-        var detailId = null;
-        var detailItem = null;
-        var detailNextUp = null;
-
-        function detailPage() {
-            return doc.querySelector('.itemDetailPage:not(.hide)');
-        }
-
-        function detailPanelHost() {
-            var page = detailPage();
-            return page ? page.querySelector('.detailPageSecondaryContainer') : null;
-        }
-
-        function removeDetailPanel() {
-            var el = detailPanel || doc.getElementById('af-detail-panel');
-            if (el && el.parentNode) { el.parentNode.removeChild(el); }
-            detailPanel = null;
-        }
-
-        /* The types that get a poster in the rail. An episode does not: its own
-         * art is a 16:9 still, and the season poster above it says nothing the
-         * page is not already showing. */
-        var POSTER_TYPES = { movie: 1, series: 1, season: 1 };
-
-        /* jellyfin-web renders .detailImageContainer twice — once .hide-mobile
-         * beside the ribbon and once .hide-desktop inside it — and neither copy
-         * is in the right column. Move the desktop one there so the poster and
-         * the facts panel read as a single rail.
-         *
-         * Owner call 2026-09-13: before this the poster existed only below
-         * 1600px, absolutely positioned over the top right of the ribbon, and
-         * the two-column layout had none at all. Moving the node rather than
-         * cloning it keeps jellyfin-web's own lazy-loading of the Primary image
-         * working, and keeps one poster on the page rather than two. */
-        /* Scoped to the *visible* detail page, never `doc`. jellyfin-web keeps
-         * the page you came from in the DOM with `.hide` — which is the whole
-         * reason `detailPage()` exists — and this node is moved rather than
-         * cloned, so a document-wide query could pick up the poster belonging
-         * to the page just left and relocate it into the current one. That was
-         * the "shows the last viewed poster" bug reported against 0.6.0.
-         *
-         * Within the page, document order does the rest: jellyfin-web renders
-         * its copy inside `.detailPagePrimaryContainer`, which precedes the
-         * `.detailPageSecondaryContainer` this function moves it to, so a
-         * freshly rendered poster always wins over one already moved. */
-        function detailPosterNode() {
-            var page = detailPage();
-            return page ? page.querySelector('.detailImageContainer.hide-mobile') : null;
-        }
-
-        function placeDetailPoster(host, item) {
-            if (!host || !POSTER_TYPES[detailTypeFor(item)]) { return null; }
-            var poster = detailPosterNode();
-            if (!poster) { return null; }
-            /* Drop any poster a previous item left in this host. jellyfin-web
-             * reuses the page node on some navigations (which is why
-             * syncDetail() re-places the panel rather than assuming it is
-             * gone): it renders a fresh poster into the primary container
-             * while the one moved here is still in the secondary one, and both
-             * then match the rule that shows them — the reported case of the
-             * last item's art above the current item's. The stale node is safe
-             * to drop: jellyfin-web has already replaced the copy it tracks. */
-            var strays = host.querySelectorAll('.detailImageContainer.hide-mobile');
-            for (var i = 0; i < strays.length; i++) {
-                if (strays[i] !== poster && strays[i].parentNode === host) {
-                    host.removeChild(strays[i]);
-                }
-            }
-            if (poster.parentNode !== host || host.firstChild !== poster) {
-                host.insertBefore(poster, host.firstChild);
-            }
-            return poster;
-        }
-
-        /* The right column's rail: poster on top, facts panel under it, then
-         * jellyfin-web's own cast/similar shelves. Returns null while the page
-         * is still being built; the next refresh retries, which is what makes
-         * it safe to call early. */
-        function renderDetailPanel(item) {
-            var host = detailPanelHost();
-            if (!host) { return null; }
-            var jmp = window.jmpInfo;
-            var playback = jmp && jmp.settings && jmp.settings.playback;
-            var facts = detailFacts(item, {
-                nextUp: detailNextUp,
-                videoMode: playback ? playback.videoMode : null
-            });
-
-            var panel = detailPanel || doc.getElementById('af-detail-panel');
-            if (!panel) {
-                panel = doc.createElement('aside');
-                panel.id = 'af-detail-panel';
-                panel.setAttribute('aria-hidden', 'true');
-            }
-            detailPanel = panel;
-            /* The rail is poster then panel, so the panel's slot depends on
-             * whether there is a poster above it. Comparing against the node
-             * that should be there makes this a no-op once it is, which
-             * matters: syncDetail() calls this on every refresh and a page
-             * streams in for seconds. */
-            var poster = placeDetailPoster(host, item);
-            var want = poster ? poster.nextSibling : host.firstChild;
-            if (panel !== want) { host.insertBefore(panel, want); }
-
-            panel.textContent = '';
-            if (!facts.rows.length && !facts.headline) {
-                panel.hidden = true;
-                return panel;
-            }
-            panel.hidden = false;
-
-            var frag = doc.createDocumentFragment();
-            if (facts.eyebrow) {
-                var eyebrow = div('af-dp-eyebrow');
-                eyebrow.textContent = facts.eyebrow;
-                frag.appendChild(eyebrow);
-            }
-            if (facts.headline) {
-                var head = div('af-dp-headline');
-                head.textContent = facts.headline;
-                frag.appendChild(head);
-                if (facts.sub) {
-                    var sub = div('af-dp-sub');
-                    sub.textContent = facts.sub;
-                    frag.appendChild(sub);
-                }
-                if (facts.rows.length) { frag.appendChild(div('af-dp-rule')); }
-            }
-            facts.rows.forEach(function (r) {
-                var row = div('af-dp-row');
-                var k = doc.createElement('span');
-                k.textContent = r.label;
-                var v = doc.createElement('span');
-                if (r.tone) { v.className = 'af-dp-' + r.tone; }
-                v.textContent = r.value;
-                row.appendChild(k);
-                row.appendChild(v);
-                frag.appendChild(row);
-            });
-            panel.appendChild(frag);
-            return panel;
-        }
-
-        /* The remaining time on the Resume pill. An attribute, not a child:
-         * .detailButton has no text element in 10.11.11 (the label is the
-         * `title`), the sheet already draws that with ::before, and attribute
-         * writes are invisible to the childList observer that drives refresh()
-         * — appending a <span> here would feed the loop. */
-        function markResumeButton(item) {
-            var page = detailPage();
-            var btn = page && page.querySelector('.mainDetailButtons .btnPlay');
-            if (!btn) { return; }
-            var label = btn.getAttribute('data-action') === 'resume'
-                ? resumeLabel(item)
-                : null;
-            if (label) {
-                if (btn.getAttribute('data-af-left') !== label) {
-                    btn.setAttribute('data-af-left', label);
-                }
-            } else if (btn.getAttribute('data-af-left') != null) {
-                btn.removeAttribute('data-af-left');
-            }
-        }
-
-        function fetchNextUp(item) {
-            if (!item || item.Type !== 'Series') { return; }
-            var api = window.ApiClient;
-            if (!api || !api.getNextUpEpisodes || !api.getCurrentUserId) { return; }
-            var id = item.Id;
-            Promise.resolve(api.getNextUpEpisodes({
-                SeriesId: id,
-                UserId: api.getCurrentUserId(),
-                Limit: 1
-            })).then(guard(function (result) {
-                var next = result && result.Items && result.Items[0];
-                if (!next || detailId !== id) { return; }
-                detailNextUp = next;
-                renderDetailPanel(item);
-            })).catch(function (e) { log(e); });
-        }
-
-        function syncDetail() {
-            var id = detailIdFromHash();
-            if (!id) { return; }
-            if (id === detailId) {
-                // Same item, another refresh: jf-web rebuilds the page on some
-                // navigations, so re-place the panel only when it is gone.
-                if (detailItem) {
-                    if (!detailPanel || !detailPanel.isConnected) {
-                        renderDetailPanel(detailItem);
-                    }
-                    markResumeButton(detailItem);
-                }
-                return;
-            }
-            detailId = id;
-            detailItem = null;
-            detailNextUp = null;
-            root().removeAttribute('data-af-detail-type');
-            root().removeAttribute('data-af-backdrop-src');
-            removeDetailPanel();
-            /* The card that got us here belongs to a page on its way out; drop
-             * it so a later return to Home cannot paint a stale item into the
-             * popout. The art it is driving stays up until this item's own
-             * backdrop replaces it, which is why the class goes but the
-             * backdrop does not. */
-            if (focusedCard) { focusedCard.classList.remove('af-focused'); }
-            focusedCard = null;
-            focusedItem = null;
-
-            fetchItem(id).then(guard(function (item) {
-                if (!item || detailId !== id) { return; }
-                detailItem = item;
-                root().setAttribute('data-af-detail-type', detailTypeFor(item));
-                var src = backdropSourceFor(item);
-                if (src) {
-                    root().setAttribute('data-af-backdrop-src', src);
-                } else {
-                    root().removeAttribute('data-af-backdrop-src');
-                }
-                setBackdrop(backdropUrlFor(item));
-                renderDetailPanel(item);
-                markResumeButton(item);
-                fetchNextUp(item);
-            })).catch(function (e) { log(e); });
-        }
-
-        function leaveDetail() {
-            detailId = null;
-            detailItem = null;
-            detailNextUp = null;
-            root().removeAttribute('data-af-detail-type');
-            root().removeAttribute('data-af-backdrop-src');
-            removeDetailPanel();
-            clearBackdrop();
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* 9. Visibility                                                       */
+        /* 8. Visibility                                                       */
         /* ------------------------------------------------------------------ */
 
         var overlaysWanted = false;
@@ -1594,7 +1146,6 @@
              * points at is going away with the page, and the popout is anchored
              * to that card's viewport rect. */
             if (!library && root().classList.contains('af-library')) { leaveHome(); }
-            if (!detail && root().classList.contains('af-detail')) { leaveDetail(); }
             if (library) {
                 root().classList.add('af-library');
             } else {
@@ -1617,13 +1168,12 @@
                 syncPopout();
             } else {
                 root().classList.remove('af-home');
-                /* Both art routes keep the backdrop across a refresh. Detail
-                 * pages refresh constantly while the page streams in, and a
-                 * clearBackdrop() on each one would strobe the art the fetched
-                 * item just put up. */
-                leaveHome(library || detail);
+                /* The library grid keeps its selection and its art across a
+                 * refresh. Everywhere else, the item detail pages included,
+                 * both go: a detail page shows jellyfin-web's own art band,
+                 * not ours. */
+                leaveHome(library);
             }
-            if (detail) { syncDetail(); }
         }
 
         /* .mainAnimatedPages does not exist yet at DOMContentLoaded - jellyfin-web
@@ -1636,23 +1186,11 @@
             var pages = doc.querySelector('.mainAnimatedPages');
             if (!pages) { return; }
             pagesObserved = true;
-            new MutationObserver(guard(function (records) {
-                for (var i = 0; i < records.length; i++) {
-                    var t = records[i].target;
-                    /* The detail panel is in this subtree; its own repaint must
-                     * not schedule a refresh, or refresh and repaint feed
-                     * forever. The popout needs no such filter — it lives in
-                     * <body>, outside .mainAnimatedPages, and the .af-popped it
-                     * writes onto a card is an attribute mutation, which this
-                     * observer does not ask for. */
-                    if (detailPanel
-                        && (t === detailPanel || detailPanel.contains(t))) {
-                        continue;
-                    }
-                    queueRefresh();
-                    return;
-                }
-            })).observe(pages, {
+            /* Nothing Astrofin draws lives in this subtree — the popout is in
+             * <body>, outside .mainAnimatedPages, and the .af-popped it writes
+             * onto a card is an attribute mutation, which this observer does
+             * not ask for — so any record here is jellyfin-web's. */
+            new MutationObserver(guard(queueRefresh)).observe(pages, {
                 childList: true,
                 subtree: true
             });
@@ -1671,7 +1209,7 @@
         }
 
         /* ------------------------------------------------------------------ */
-        /* 10. Wiring                                                          */
+        /* 9. Wiring                                                           */
         /* ------------------------------------------------------------------ */
 
         function start() {
@@ -1734,8 +1272,6 @@
                 isHomeRoute: isHomeRoute,
                 isLibraryRoute: isLibraryRoute,
                 isDetailRoute: isDetailRoute,
-                detailIdFromHash: detailIdFromHash,
-                videoModeLabel: videoModeLabel,
                 buildUi: buildUi,
                 cacheItem: cacheItem,
                 minutes: minutes,
@@ -1747,7 +1283,6 @@
                 genresFor: genresFor,
                 titleFor: titleFor,
                 backdropUrlFor: backdropUrlFor,
-                backdropSourceFor: backdropSourceFor,
                 fetchItem: fetchItem,
                 setFocusedCard: setFocusedCard,
                 artOf: artOf,
@@ -1778,18 +1313,6 @@
                 showOverlays: showOverlays,
                 leaveHome: leaveHome,
                 decorateCards: decorateCards,
-                detailTypeFor: detailTypeFor,
-                mediaStreams: mediaStreams,
-                formatBytes: formatBytes,
-                resumeLabel: resumeLabel,
-                detailFacts: detailFacts,
-                detailPosterNode: detailPosterNode,
-                placeDetailPoster: placeDetailPoster,
-                renderDetailPanel: renderDetailPanel,
-                removeDetailPanel: removeDetailPanel,
-                markResumeButton: markResumeButton,
-                syncDetail: syncDetail,
-                leaveDetail: leaveDetail,
                 refresh: refresh,
                 watchPages: watchPages,
                 queueRefresh: queueRefresh,
@@ -1813,11 +1336,7 @@
                         itemCache: itemCache,
                         itemCacheKeys: itemCacheKeys,
                         pagesObserved: pagesObserved,
-                        refreshQueued: refreshQueued,
-                        detailPanel: detailPanel,
-                        detailId: detailId,
-                        detailItem: detailItem,
-                        detailNextUp: detailNextUp
+                        refreshQueued: refreshQueued
                     };
                 }
             };

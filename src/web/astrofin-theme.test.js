@@ -71,16 +71,17 @@ function onLibrary(overrides) {
     return { win, library, theme };
 }
 
-// The item detail page as jf-web 10.11.11 renders it, trimmed to the parts the
-// theme reaches:
+// The item detail page as jf-web 10.11.11 renders it, trimmed to the parts an
+// earlier theme used to rearrange:
 //   .mainAnimatedPages
 //     > #itemDetailPage.page.libraryPage.itemDetailPage.selfBackdropPage
 //       > .detailLogo
 //       > .detailPageWrapperContainer
 //         > .detailPagePrimaryContainer > .detailRibbon > .mainDetailButtons
 //         > .detailPageSecondaryContainer > .detailPageContent
-// The buttons are `button.button-flat.btnPlay.detailButton` with the label in
-// `title` and no text element, which is why the sheet draws it with attr().
+// The detail pages keep jellyfin-web's stock layout and only take Astrofin's
+// colours from the sheet, so the tests use this scaffold to prove the runtime
+// leaves every node of it where jellyfin-web put it.
 function buildDetail(win) {
     const doc = win.document;
     const pages = doc.createElement('div');
@@ -106,8 +107,7 @@ function buildDetail(win) {
     ribbon.appendChild(buttons);
     primary.appendChild(ribbon);
     // jf-web renders .detailImageContainer twice: .hide-mobile beside the
-    // ribbon and .hide-desktop inside it. The theme moves the desktop copy into
-    // the right column; the mobile copy must be left where it is.
+    // ribbon and .hide-desktop inside it. Both stay exactly where they are.
     const poster = doc.createElement('div');
     poster.className = 'detailImageContainer hide-mobile';
     const posterCard = doc.createElement('div');
@@ -134,9 +134,9 @@ function buildDetail(win) {
 }
 
 // A window with the theme installed and a details route in the address bar.
-// `api` is attached before the theme loads: start() calls refresh(), which is
-// what kicks the item fetch off, and a client attached afterwards would arrive
-// one route too late.
+// `api` is attached before the theme loads, because start() calls refresh():
+// a client attached afterwards could not show that the first refresh on a
+// details route fetches nothing.
 function onDetail(opts = {}) {
     const win = makeThemeWindow({
         hash: opts.hash === undefined ? '#/details?id=item-1&serverId=srv' : opts.hash
@@ -152,30 +152,16 @@ async function settle(times = 6) {
     for (let i = 0; i < times; i += 1) await Promise.resolve();
 }
 
-// A movie with everything the facts panel can read.
-function fullMovie() {
+// A movie with art of its own, so a test can tell "did not fetch" and "did not
+// paint" apart from "had nothing to paint".
+function movieWithArt(id) {
     return {
-        Id: 'item-1',
+        Id: id,
         Name: 'Blade Runner 2049',
         Type: 'Movie',
         RunTimeTicks: 98640000000,
         UserData: { PlaybackPositionTicks: 43200000000 },
-        BackdropImageTags: ['bt'],
-        MediaSources: [{
-            Size: 41017541427,
-            MediaStreams: [
-                {
-                    Type: 'Video', Codec: 'hevc', Width: 3840,
-                    VideoRangeType: 'HDR10'
-                },
-                { Type: 'Audio', Codec: 'truehd', ChannelLayout: '7.1' },
-                { Type: 'Subtitle', Language: 'eng' },
-                { Type: 'Subtitle', Language: 'fra' },
-                { Type: 'Subtitle', Language: 'jpn' },
-                { Type: 'Subtitle', Language: 'deu' },
-                { Type: 'Subtitle', Language: 'eng' }
-            ]
-        }]
+        BackdropImageTags: ['bt']
     };
 }
 
@@ -200,13 +186,6 @@ function pinHeader(win, height) {
     win.document.body.appendChild(header);
     setRect(header, { left: 0, top: 0, width: 1280, height });
     return header;
-}
-
-// The rows a rendered panel reads as, as [label, value] pairs.
-function panelRows(panel) {
-    return panel.children
-        .filter((el) => el.classList.contains('af-dp-row'))
-        .map((row) => row.children.map((span) => span.textContent));
 }
 
 // ---------------------------------------------------------------------------
@@ -628,17 +607,6 @@ test('isFolderLike is true for the container types and nothing else', () => {
     }
     assert.strictEqual(theme.isFolderLike(null), false);
     assert.strictEqual(theme.isFolderLike({}), false);
-});
-
-test('videoModeLabel maps the wire values including the pre-rename spellings', () => {
-    const { theme } = onHome();
-    assert.strictEqual(theme.videoModeLabel('auto'), 'Auto');
-    assert.strictEqual(theme.videoModeLabel('LIVE-ACTION'), 'Live-Action');
-    assert.strictEqual(theme.videoModeLabel('movies'), 'Live-Action');
-    assert.strictEqual(theme.videoModeLabel('anime'), 'Animation');
-    assert.strictEqual(theme.videoModeLabel('off'), 'Off');
-    assert.strictEqual(theme.videoModeLabel('something-else'), 'something-else');
-    assert.strictEqual(theme.videoModeLabel(null), '');
 });
 
 test('minutes rounds ticks and tolerates rubbish', () => {
@@ -1932,7 +1900,7 @@ test('the popout repainting itself does not queue a refresh', () => {
     assert.strictEqual(theme.state().refreshQueued, false);
     // The popout lives in <body>, outside .mainAnimatedPages, so the observer
     // that catches cards streaming into the rails never sees it and needs no
-    // filter of its own — unlike the detail panel, which does.
+    // filter of its own. Nothing Astrofin draws lives in that subtree.
     theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
     assert.strictEqual(theme.state().refreshQueued, false);
     theme.state().ui.badges.appendChild(win.document.createElement('div'));
@@ -2000,30 +1968,6 @@ test('isDetailRoute claims the details view and nothing that merely starts like 
     }
 });
 
-test('detailIdFromHash reads the id wherever the query puts it', () => {
-    const { win, theme } = onDetail();
-    win.location.hash = '#/details?id=abc123&serverId=s';
-    assert.strictEqual(theme.detailIdFromHash(), 'abc123');
-    // jf-web orders these differently depending on where the click came from.
-    win.location.hash = '#/details?serverId=s&id=def456&context=tvshows';
-    assert.strictEqual(theme.detailIdFromHash(), 'def456');
-    win.location.hash = '#/details';
-    assert.strictEqual(theme.detailIdFromHash(), null);
-});
-
-test('detailTypeFor names the four kinds the one template renders', () => {
-    const { theme } = onDetail();
-    assert.strictEqual(theme.detailTypeFor({ Type: 'Movie' }), 'movie');
-    assert.strictEqual(theme.detailTypeFor({ Type: 'Series' }), 'series');
-    assert.strictEqual(theme.detailTypeFor({ Type: 'Season' }), 'season');
-    assert.strictEqual(theme.detailTypeFor({ Type: 'Episode' }), 'episode');
-    // A details route can also be a box set, a person or a music album; the
-    // eyebrow has no label for those and the attribute must not invent one.
-    assert.strictEqual(theme.detailTypeFor({ Type: 'BoxSet' }), 'other');
-    assert.strictEqual(theme.detailTypeFor({}), 'other');
-    assert.strictEqual(theme.detailTypeFor(null), 'other');
-});
-
 test('refresh on a details route sets af-detail alone and drops it on the way out', () => {
     const { win, theme } = onDetail();
     const html = win.document.documentElement;
@@ -2038,268 +1982,133 @@ test('refresh on a details route sets af-detail alone and drops it on the way ou
     assert.ok(html.classList.contains('af-library'));
 });
 
-test('detailFacts reads a full movie file', () => {
-    const { theme } = onDetail();
-    const facts = theme.detailFacts(fullMovie(), { videoMode: 'live-action' });
-    assert.strictEqual(facts.eyebrow, 'File');
-    assert.strictEqual(facts.headline, null);
-    assert.deepStrictEqual(facts.rows.map((r) => [r.label, r.value]), [
-        ['Video', 'HEVC 4K · HDR10'],
-        ['Audio', 'TRUEHD 7.1'],
-        // Four distinct languages, one of them twice: three plus a count.
-        ['Subtitles', 'ENG · FRA · JPN +1'],
-        ['Mode', 'Live-Action'],
-        ['Size', '38.2 GB']
-    ]);
-    assert.strictEqual(facts.rows[3].tone, 'accent', 'the mode is app state, not file metadata');
+test('leaving a details route for Home or an unthemed page drops af-detail too', () => {
+    const { win, theme } = onDetail();
+    const html = win.document.documentElement;
+    theme.refresh();
+    assert.ok(html.classList.contains('af-detail'));
+
+    buildHome(win);
+    win.location.hash = '#/home.html';
+    theme.refresh();
+    assert.ok(!html.classList.contains('af-detail'));
+    assert.ok(html.classList.contains('af-home'));
+
+    // A season page is a details route of its own; coming back to one from
+    // Home puts the class straight back.
+    win.location.hash = '#/details?id=season-2&serverId=srv';
+    theme.refresh();
+    assert.ok(html.classList.contains('af-detail'));
+    assert.ok(!html.classList.contains('af-home'), 'never both');
+
+    win.location.hash = '#/search';
+    theme.refresh();
+    assert.ok(!html.classList.contains('af-detail'));
+    assert.ok(!html.classList.contains('af-home'));
+    assert.ok(!html.classList.contains('af-library'));
 });
 
-test('detailFacts never throws on a movie with no media sources', () => {
-    const { theme } = onDetail();
-    const facts = theme.detailFacts({ Id: 'm', Name: 'Unscanned', Type: 'Movie' });
-    assert.strictEqual(facts.eyebrow, 'File');
-    // Every row would have been empty, so the panel renders as nothing at all
-    // rather than as a stack of dashes.
-    assert.deepStrictEqual(facts.rows, []);
-});
+test('a details route fetches nothing, builds nothing and leaves the stock page alone', async () => {
+    const api = makeThemeApiClient({ items: new Map([['item-1', movieWithArt('item-1')]]) });
+    const { win, detail, theme } = onDetail({ api });
+    theme.refresh();
+    await settle();
+    win.timers.runAll();
+    await settle();
 
-test('detailFacts reads a series, with and without a next-up episode', () => {
-    const { theme } = onDetail();
-    const series = {
-        Id: 's1',
-        Name: "Frieren: Beyond Journey's End",
-        Type: 'Series',
-        Status: 'Continuing',
-        Studios: [{ Name: 'Nippon TV' }, { Name: 'Madhouse' }],
-        AirDays: ['Friday'],
-        AirTime: '11:00 PM'
-    };
-    const bare = theme.detailFacts(series, { videoMode: 'anime' });
-    assert.strictEqual(bare.eyebrow, 'Series');
-    assert.strictEqual(bare.headline, null);
-    assert.deepStrictEqual(bare.rows.map((r) => [r.label, r.value]), [
-        ['Network', 'Nippon TV'],
-        ['Status', 'Continuing'],
-        ['Airs', 'Friday 11:00 PM'],
-        ['Mode', 'Animation']
-    ]);
+    const html = win.document.documentElement;
+    assert.ok(html.classList.contains('af-detail'));
+    // The item JSON used to be fetched once per route for the facts panel, the
+    // type attribute and the art. The page keeps jellyfin-web's own now, so the
+    // item is never asked for, even though the client could have answered.
+    assert.deepStrictEqual(api.calls.filter((c) => c[0] === 'getItem'), []);
+    assert.strictEqual(win.images.length, 0, 'no backdrop was requested');
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+    assert.ok(!html.classList.contains('af-backdrop'));
+    assert.strictEqual(win.document.getElementById('af-detail-panel'), null);
+    assert.strictEqual(html.getAttribute('data-af-detail-type'), null);
+    assert.strictEqual(html.getAttribute('data-af-backdrop-src'), null);
+    const ui = theme.state().ui;
+    assert.ok(!ui || ui.popout.hidden, 'no popout over a details page');
 
-    const withNext = theme.detailFacts(series, {
-        nextUp: {
-            Name: 'Aura the Guillotine', ParentIndexNumber: 1, IndexNumber: 9,
-            RunTimeTicks: 14400000000, UserData: { PlaybackPositionTicks: 7800000000 }
-        }
-    });
-    assert.strictEqual(withNext.eyebrow, 'Next up');
-    assert.strictEqual(withNext.headline, 'S1 E9 · Aura the Guillotine');
-    assert.strictEqual(withNext.sub, '11m left');
-});
-
-test('detailFacts counts a season', () => {
-    const { theme } = onDetail();
-    const facts = theme.detailFacts({
-        Id: 'se1', Name: 'Season 1', Type: 'Season',
-        ChildCount: 28, UserData: { UnplayedItemCount: 20 }
-    }, {});
-    assert.strictEqual(facts.eyebrow, 'Season');
-    assert.deepStrictEqual(facts.rows.map((r) => [r.label, r.value]), [
-        ['Episodes', '28'],
-        ['Watched', '8 of 28']
-    ]);
-
-    // A season the server has not counted yields no rows rather than "NaN".
-    const empty = theme.detailFacts({ Id: 'se2', Type: 'Season' }, {});
-    assert.deepStrictEqual(empty.rows, []);
-});
-
-test('detailPosterNode finds the desktop copy and never the mobile one', () => {
-    const { detail, theme } = onDetail();
-    assert.strictEqual(theme.detailPosterNode(), detail.poster);
-    assert.notStrictEqual(theme.detailPosterNode(), detail.posterMobile);
-});
-
-test('placeDetailPoster moves the poster to the head of the right column, once', () => {
-    const { detail, theme } = onDetail();
-    assert.strictEqual(detail.poster.parentNode, detail.primary, 'starts beside the ribbon');
-    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
-    assert.strictEqual(moved, detail.poster);
-    assert.strictEqual(detail.secondary.children[0], detail.poster);
-    // A page streams in for seconds and syncDetail() calls this on every
-    // refresh, so a second call has to be a no-op rather than a re-insert.
-    theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
-    assert.strictEqual(
-        detail.secondary.children.filter((el) => el === detail.poster).length, 1);
-    // The mobile copy is left exactly where jellyfin-web put it.
+    // jellyfin-web's own layout, node for node: neither poster copy moved,
+    // nothing inserted into the right column, the Resume pill unannotated.
+    assert.strictEqual(detail.poster.parentNode, detail.primary);
     assert.strictEqual(detail.posterMobile.parentNode, detail.ribbon);
-});
-
-test('placeDetailPoster never takes the poster off the page being left', () => {
-    const { win, detail, theme } = onDetail();
-    // jellyfin-web keeps the page you came from in the DOM with .hide - the
-    // reason detailPage() exists - and this node is moved, not cloned. A
-    // document-wide lookup relocated the previous item's art into the current
-    // page: the "shows the last viewed poster" bug reported against 0.6.0.
-    const stale = buildDetail(win);
-    stale.page.classList.add('hide');
-    stale.poster.id = 'stale-poster';
-    // The hidden page is earlier in the document than the visible one.
-    win.document.body.insertBefore(stale.pages, detail.pages);
-
-    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
-    assert.strictEqual(moved, detail.poster, 'the visible page\'s own poster');
-    assert.notStrictEqual(moved, stale.poster);
-    assert.strictEqual(stale.poster.parentNode, stale.primary,
-        'the hidden page keeps its own art');
-});
-
-test('placeDetailPoster drops a poster the previous item left in the host', () => {
-    const { win, detail, theme } = onDetail();
-    // jellyfin-web reuses the page node on some navigations: it renders a
-    // fresh poster into the primary container while the one this moved is
-    // still in the secondary one, and both then match the rule that shows
-    // them - the reported case of two posters, last item's above current.
-    const stale = win.document.createElement('div');
-    stale.className = 'detailImageContainer hide-mobile';
-    detail.secondary.insertBefore(stale, detail.secondary.firstChild);
-
-    const moved = theme.placeDetailPoster(detail.secondary, { Type: 'Movie' });
-    assert.strictEqual(moved, detail.poster, 'the freshly rendered one wins');
-    assert.strictEqual(detail.secondary.children[0], detail.poster);
-    assert.strictEqual(
-        detail.secondary.children.filter(
-            (el) => el.classList.contains('detailImageContainer')).length,
-        1, 'exactly one poster is left in the column');
-    assert.strictEqual(stale.parentNode, null, 'the stale node is gone');
-});
-
-test('placeDetailPoster gives an episode no poster, and needs a host', () => {
-    const { detail, theme } = onDetail();
-    // An episode's own art is a 16:9 still; the season poster above it would
-    // say nothing the page is not already showing.
-    assert.strictEqual(theme.placeDetailPoster(detail.secondary, { Type: 'Episode' }), null);
-    assert.strictEqual(detail.poster.parentNode, detail.primary, 'left alone');
-    assert.strictEqual(theme.placeDetailPoster(null, { Type: 'Movie' }), null);
-});
-
-test('the facts panel is inserted once at the head of the right column and updated in place', () => {
-    const { win, detail, theme } = onDetail();
-    const first = theme.renderDetailPanel(fullMovie());
-    assert.strictEqual(first.id, 'af-detail-panel');
-    // The poster leads the column and the panel sits under it.
-    assert.strictEqual(detail.secondary.children[0], detail.poster);
-    assert.strictEqual(detail.secondary.children[1], first);
-    assert.strictEqual(win.document.querySelectorAll('#af-detail-panel').length, 1);
-    assert.deepStrictEqual(panelRows(first)[0], ['Video', 'HEVC 4K · HDR10']);
-
-    const second = theme.renderDetailPanel({
-        Id: 'item-2', Name: 'Dune', Type: 'Movie',
-        MediaSources: [{ MediaStreams: [{ Type: 'Video', Codec: 'av1', Width: 1920 }] }]
-    });
-    assert.strictEqual(second, first, 'the same node, rewritten');
-    assert.strictEqual(win.document.querySelectorAll('#af-detail-panel').length, 1);
-    assert.deepStrictEqual(panelRows(second), [['Video', 'AV1 1080p']]);
-    assert.strictEqual(second.hidden, false);
-
-    // Nothing to say: the panel stays in place but paints nothing.
-    theme.renderDetailPanel({ Id: 'item-3', Type: 'Movie' });
-    assert.strictEqual(first.hidden, true);
-    assert.deepStrictEqual(panelRows(first), []);
-});
-
-test('resumeLabel only speaks when there is a resume position to report', () => {
-    const { theme } = onDetail();
-    assert.strictEqual(theme.resumeLabel(fullMovie()), '1h 32m left');
-    assert.strictEqual(theme.resumeLabel({ RunTimeTicks: 98640000000 }), null);
-    // Watched to the end: jellyfin keeps the position, the pill must not.
-    assert.strictEqual(theme.resumeLabel({
-        RunTimeTicks: 100, UserData: { PlaybackPositionTicks: 100 }
-    }), null);
-});
-
-test('markResumeButton writes the remaining time as an attribute and clears it', () => {
-    const { detail, theme } = onDetail();
-    theme.markResumeButton(fullMovie());
-    assert.strictEqual(detail.play.getAttribute('data-af-left'), '1h 32m left');
-
-    // A start-from-scratch play button says nothing, and the stale value goes.
-    detail.play.setAttribute('data-action', 'play');
-    theme.markResumeButton(fullMovie());
+    assert.strictEqual(detail.secondary.children.length, 1);
+    assert.strictEqual(detail.secondary.children[0], detail.content);
     assert.strictEqual(detail.play.getAttribute('data-af-left'), null);
 });
 
-test('entering a details route stamps the type, paints the panel and drives the art', async () => {
-    const item = fullMovie();
-    const api = makeThemeApiClient({ items: new Map([['item-1', item]]) });
-    const { win, detail, theme } = onDetail({ api });
+test('entering a details route from Home clears the art and the selection', async () => {
+    const { win, home, theme } = onHome();
+    const api = makeThemeApiClient({ items: new Map([['one', movieWithArt('one')]]) });
+    win.ApiClient = api;
+    const card = popCard(win, { id: 'one', parent: home.sections[0] });
+    theme.setFocusedCard(card);
     await settle();
-
-    const html = win.document.documentElement;
-    assert.strictEqual(html.getAttribute('data-af-detail-type'), 'movie');
-    assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
     win.images[0].onload();
-    assert.ok(html.classList.contains('af-backdrop'));
-    // A movie gets a poster, so the column reads poster then panel.
-    assert.strictEqual(detail.secondary.children[0], detail.poster);
-    assert.strictEqual(detail.secondary.children[1].id, 'af-detail-panel');
-    assert.strictEqual(detail.play.getAttribute('data-af-left'), '1h 32m left');
+    const html = win.document.documentElement;
+    assert.ok(html.classList.contains('af-backdrop'), 'the card is driving the art');
+    assert.strictEqual(theme.state().poppedCard, card);
 
-    // Leaving takes all of it back down: a stale type would keep the eyebrow
-    // saying "Movie" over the next page's title.
-    win.location.hash = '#/home.html';
-    theme.leaveDetail();
-    assert.strictEqual(html.getAttribute('data-af-detail-type'), null);
-    assert.strictEqual(win.document.querySelector('#af-detail-panel'), null);
-    assert.strictEqual(theme.state().currentBackdropUrl, null);
-});
-
-test('a season page is a details route of its own, so the gate re-fetches', async () => {
-    const series = { Id: 'item-1', Name: 'Frieren', Type: 'Series', Status: 'Continuing' };
-    const season = { Id: 'season-2', Name: 'Season 1', Type: 'Season', ChildCount: 28 };
-    const api = makeThemeApiClient({
-        items: new Map([['item-1', series], ['season-2', season]])
-    });
-    const { win, theme } = onDetail({ api });
-    await settle();
-    assert.strictEqual(win.document.documentElement.getAttribute('data-af-detail-type'), 'series');
-
-    win.location.hash = '#/details?id=season-2&serverId=srv';
+    buildDetail(win);
+    win.location.hash = '#/details?id=item-9&serverId=srv';
     theme.refresh();
     await settle();
-    assert.strictEqual(win.document.documentElement.getAttribute('data-af-detail-type'), 'season');
-    assert.strictEqual(theme.state().detailId, 'season-2');
+    assert.ok(html.classList.contains('af-detail'));
+    // A details page shows jellyfin-web's own art band, so the backdrop the
+    // card put up goes with the card. It used to stay until the fetched
+    // item's own art replaced it.
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+    assert.ok(!html.classList.contains('af-backdrop'));
+    assert.strictEqual(theme.state().focusedCard, null);
+    assert.strictEqual(theme.state().focusedItem, null);
+    assert.strictEqual(theme.state().poppedCard, null);
+    assert.ok(!card.classList.contains('af-focused'));
+    assert.ok(!card.classList.contains('af-popped'));
+    assert.deepStrictEqual(
+        api.calls.filter((c) => c[0] === 'getItem').map((c) => c[2]),
+        ['one'], 'the card fetch only, never the details item');
 });
 
-test('backdropSourceFor names the branch of the fallback chain the item lands on', () => {
-    const { theme } = onDetail();
-    assert.strictEqual(theme.backdropSourceFor({ BackdropImageTags: ['t'] }), 'backdrop');
-    assert.strictEqual(theme.backdropSourceFor({
-        ParentBackdropItemId: 'p', ParentBackdropImageTags: ['t']
-    }), 'parent');
-    // A poster cropped to a 16:9 canvas; the sheet blurs this one back towards
-    // a wash rather than showing somebody's chin at 1708px wide.
-    assert.strictEqual(theme.backdropSourceFor({ ImageTags: { Primary: 't' } }), 'primary');
-    // An empty tag array is not art, and neither is a parent id on its own.
-    assert.strictEqual(theme.backdropSourceFor({ BackdropImageTags: [] }), null);
-    assert.strictEqual(theme.backdropSourceFor({ ParentBackdropItemId: 'p' }), null);
-    assert.strictEqual(theme.backdropSourceFor({}), null);
-    assert.strictEqual(theme.backdropSourceFor(null), null);
-});
-
-test('entering a details route stamps where the art came from, and leaving clears it', async () => {
-    const item = fullMovie();
-    const api = makeThemeApiClient({ items: new Map([['item-1', item]]) });
-    const { win, theme } = onDetail({ api });
-    await settle();
-    const html = win.document.documentElement;
-    assert.strictEqual(html.getAttribute('data-af-backdrop-src'), 'backdrop');
-    theme.leaveDetail();
-    assert.strictEqual(html.getAttribute('data-af-backdrop-src'), null);
-});
-
-test('the facts panel repainting itself does not queue a refresh', () => {
+test('a refresh on a details route keeps no art or selection alive', () => {
     const { win, theme } = onDetail();
-    theme.renderDetailPanel(fullMovie());
+    const html = win.document.documentElement;
+    // Details pages used to keep the backdrop across a refresh: the item's own
+    // art was on it, and a page streaming in refreshes constantly. That art is
+    // gone, so a refresh here now tears down like any other unthemed route.
+    theme.setBackdrop('https://server/stale.jpg');
+    win.images[0].onload();
+    assert.ok(html.classList.contains('af-backdrop'));
+    const card = makeCard(win, { id: 'stale' });
+    theme.setFocusedCard(card);
+    assert.ok(card.classList.contains('af-focused'));
+
+    theme.refresh();
+    assert.ok(html.classList.contains('af-detail'));
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+    assert.ok(!html.classList.contains('af-backdrop'));
+    assert.strictEqual(theme.state().focusedCard, null);
+    assert.strictEqual(theme.state().focusedItem, null);
+    assert.ok(!card.classList.contains('af-focused'));
+});
+
+test('a details page streaming in queues one refresh, and the refresh writes nothing back', () => {
+    const { win, detail, theme } = onDetail();
+    assert.strictEqual(theme.state().pagesObserved, true);
+    assert.strictEqual(observersFor(win, detail.pages).length, 1);
     win.timers.runAll();
-    theme.renderDetailPanel(fullMovie());
     assert.strictEqual(theme.state().refreshQueued, false);
+
+    // The .mainAnimatedPages observer filters nothing any more: the facts
+    // panel it used to skip is gone, so every record under it is
+    // jellyfin-web's own.
+    detail.content.appendChild(win.document.createElement('div'));
+    assert.strictEqual(theme.state().refreshQueued, true);
+    win.timers.runAll();
+    // Had refresh() written into the page, the observer would have queued the
+    // next one before this line, and the two would feed each other forever.
+    assert.strictEqual(theme.state().refreshQueued, false);
+    assert.strictEqual(detail.secondary.children.length, 1);
 });

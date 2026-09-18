@@ -140,10 +140,10 @@ class FakeElement {
 
     get children() { return this.childNodes.filter((n) => n.nodeType === 1); }
     get firstChild() { return this.childNodes[0] || null; }
-    // Real DOM getters the theme uses when it orders the detail page's right
-    // column. Without nextSibling, insertBefore(node, undefined) appends rather
-    // than no-opping, and the fake mutates on every insertBefore — which fed the
-    // MutationObserver, which queued a refresh, which inserted again.
+    // Real DOM getters (ab-loop.js walks siblings). Without nextSibling,
+    // insertBefore(node, undefined) appends rather than no-opping, and the fake
+    // mutates on every insertBefore — which can feed a MutationObserver that
+    // queues a refresh that inserts again.
     get nextSibling() {
         const kids = this.parentNode ? this.parentNode.childNodes : [];
         return kids[kids.indexOf(this) + 1] || null;
