@@ -5,6 +5,8 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-18
+
 ### Added
 - **Linux has a native file chooser**, through the XDG desktop portal
   (`org.freedesktop.portal.FileChooser`). Until now `open_file_dialog` kept
