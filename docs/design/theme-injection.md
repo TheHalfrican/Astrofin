@@ -39,8 +39,7 @@ the checks in [Testing](#testing).
 > verified against 10.11.11 and has *not* been re-checked against 12.0.0 —
 > `[class*=Mui]` already matched 129 nodes on Home alone. The library grids,
 > Settings and the player OSD each need their own pass, and the
-> [Testing](#testing) checks should be re-run wholesale. The card popout
-> itself is safe as long as the rails stay legacy, which on 12.0.0 they are.
+> [Testing](#testing) checks should be re-run wholesale.
 >
 > **Update 2026-09-18:** the server now reports **12.1.0**, and the item detail
 > pages have had their pass — see [Item detail](#item-detail), which was
@@ -148,8 +147,7 @@ Two independent gates, both keyed in CSS:
 | `html.transparentDocument` | jellyfin-web's `setBackdropTransparency` (`Dashboard.setBackdropTransparency`) | `mpv-video-player.js` calls it on playback start (`setTransparency(2)`) and clears it on stop. Re-checked in the 10.11.11 bundle: **both** the `Full`/`2` and the `Backdrop`/`1` branches add the class; only level `0` removes it |
 | `html.af-video` | `astrofin-theme.js`, from a `MutationObserver` on `body` childList | while a `.videoPlayerContainer` exists |
 
-Either one sets `display: none !important` on `#af-space`, `#af-popout` and
-`#af-hint`.
+Either one sets `display: none !important` on `#af-space` and `#af-hint`.
 
 Rules that make this safe:
 
@@ -188,7 +186,7 @@ Every state below measured identical values:
 | Measured | Value |
 | --- | --- |
 | `html`, `body`, `.backgroundContainer`, `.backdropContainer`, `.videoPlayerContainer` background | `rgba(0, 0, 0, 0)` |
-| `#af-space`, `#af-popout`, `#af-hint` | `display: none` |
+| `#af-space`, `#af-hint` | `display: none` |
 | `html` classes | `af-video transparentDocument` (and `af-home` is dropped) |
 | `.backgroundContainer` classes | `backgroundContainer backgroundContainer-transparent` |
 
@@ -212,9 +210,9 @@ it lasts roughly 300 ms per start, and `html.af-video` is the only thing holding
 the root canvas transparent through it.
 
 After stop, everything is restored: `html` back to `rgb(7, 10, 20)`, classes
-back to `af-home af-backdrop`, `#af-space` `block`, `#af-popout` present, no
-`.videoPlayerContainer`, no stuck `af-video`, and the hover popout works
-again. (The `#af-server-panel` caveat that used to sit here — it stayed `none`
+back to `af-home af-backdrop`, `#af-space` `block`, no
+`.videoPlayerContainer`, no stuck `af-video`, and hovering a card drives the
+art again. (The `#af-server-panel` caveat that used to sit here — it stayed `none`
 at 720 p under a `900px` viewport-height cut-off, which read like a video-mode
 leftover and was not — went with the panel itself.)
 
@@ -238,7 +236,6 @@ no opaque background other than the cyan progress fill itself.
 | `.backgroundContainer` (jellyfin-web) | auto | forced transparent |
 | page content, `.mainAnimatedPage` | 0 | |
 | `#af-hint` | `900` | fixed, `pointer-events: none` |
-| `#af-popout` | 900 | fixed in `<body>`, positioned over the focused card |
 | `.skinHeader` | `999` | jellyfin-web's own value; computes to `1` once `.osdHeader` is added during playback |
 | `.videoPlayerContainer` | `1000` | inline style from `mpv-video-player.js` when fullscreen |
 | `.videoOsdBottom`, `.skinHeader.osdHeader` | auto | inside `#reactRoot`, painted over `.videoPlayerContainer`; both sub-1 alpha so mpv shows through |
@@ -290,8 +287,7 @@ focus lands on the `.cardOverlayButton`s, so the CSS uses `:focus-within` on
 `.card` and the JS uses `focusin` + `closest('.card[data-id]')`),
 `.cardOverlayContainer`,
 `button.cardOverlayButton[data-action="resume"|"play"]` /
-`.cardOverlayButton.cardOverlayFab-primary` (the popout's Play/Resume button
-clicks this so jellyfin-web owns resume offsets and media-source selection),
+`.cardOverlayButton.cardOverlayFab-primary`,
 `.cardText`, `.cardText-first`, `.cardText-secondary`, `.cardIndicators`,
 `.innerCardFooter`, `.itemProgressBar`, `.itemProgressBarForeground`,
 `.defaultCardBackground1…5`.
@@ -447,217 +443,67 @@ uses); `window.jmpInfo.settings.playback.hwdec` and
   after a route change — a DOM probe alone stays true forever once Home has
   rendered.
 
-## The card popout
+## Card focus on Home and the library grids
 
-Hovering or focusing a card opens a popout over it: the art again, larger, with
-a drawer underneath carrying the actions and the meta line. Netflix and Prime
-Video both do this, and the reference screenshots the owner supplied are what
-the treatment is measured against — the one deliberate difference is that ours
-grows a portrait poster where theirs grow a landscape thumbnail.
-
-It replaced an in-flow spotlight band, and that is the whole reason it exists.
-The band was a ~300 px block inserted after the rail holding the focused card,
-so every hover pushed everything below it down the page. It needed a fixed
-`min-height` and a one-line title clamp purely so that the shove was the same
-size each time, and a pointer guard so that the rails sliding under a
-stationary cursor did not cascade the panel down the page. None of that is
-needed now: **the popout is fixed to the viewport and reflows nothing.**
-
-On Home (`html.af-home`) and on the library grids (`html.af-library`) alike —
-the two routes behave identically here, which the spotlight never did.
+On Home (`html.af-home`) and on the library grids (`html.af-library`) alike:
 
 * `focusin` (capture) and a 120 ms-debounced `mouseover` pick the active
-  `.card[data-id]`; it gets `.af-focused`. The item is fetched once (cache
-  capped at 64 entries, oldest dropped), then `renderPopout()` paints and
-  `setBackdrop()` crossfades the art bleed exactly as before.
-* The fetch is guarded twice over: by `requestToken`, as it always was, and now
-  also by `card !== focusedCard`. `hidePopout()` drops the selection without
-  bumping the token, so a pointer that left the card while the fetch was out
-  would otherwise paint a popout nobody is pointing at.
+  `.card[data-id]`; it gets `.af-focused`, which holds the tile's ring and its
+  1.06 lift. The item is fetched once (cache capped at 64 entries, oldest
+  dropped), then `setBackdrop()` crossfades the art bleed.
+* The fetch is guarded twice over: by `requestToken`, and by
+  `card !== focusedCard`. Dropping the selection does not bump the token, so a
+  pointer that left the card while the fetch was out would otherwise put up art
+  nobody is pointing at.
+* Moving the pointer onto anything that is not a card — a rail heading, the
+  page background — drops `.af-focused` and leaves the art up. The backdrop is
+  the page background on both routes, and clearing it on every pointer exit
+  would strobe the art across a rail.
 
-### Why a body-level portal
+**The card popout was removed at the owner's request on 2026-09-18** ("not
+working quite right and not worth keeping right now"). From v0.6.0 until then,
+hovering a card opened `#af-popout`: a body-level portal fixed over the card,
+the art again at `--af-popout-scale` (1.32), and an opaque drawer carrying
+Play/Details discs, badges, a meta line and genres. It had itself replaced an
+in-flow spotlight band that pushed every rail below it down the page on each
+hover. Nothing replaces it: hovering a card is now jellyfin-web's own card plus
+the ring and the art bleed. The code, its sheet section and the full write-up
+are in git at `d4fd224` if it is ever wanted back. Three lessons from it hold
+for anything like it:
 
-`#af-popout` is created once in `<body>` and positioned over whichever card it
-is standing in for. The alternative — an absolutely positioned child of the
-card — was rejected:
-
-* The drawer grows a couple of hundred pixels past the bottom of the rail.
-  [Card focus ring: what clips it](#card-focus-ring-what-clips-it) records that
-  `.itemsContainer`, `.emby-scroller`, `.verticalSection`,
-  `.homeSectionsContainer` and `#homeTab` are all `overflow: visible` in
-  10.11.11, which is what lets the 44 px focus glow escape. A 44 px glow and a
-  200 px drawer are not the same bet: a scroller that ever gains an
-  `overflow-x` would compute `overflow-y` to `auto` with it and clip the
-  drawer, and the failure would be silent.
-* `.card` carries `contain: layout style`, so it is a containing block and a
-  stacking context. A child would be positioned and stacked against the card;
-  in `<body>` the popout answers to nothing.
-* jellyfin-web rebuilds cards as rails stream in. One node in `<body>` outlives
-  that; one node per card does not.
-
-The cost is that the art has to be drawn twice, which `cloneArt()` does by
-copying the card's own `.cardScalable` — so the popout shows exactly the art,
-kind badge and watched-progress bar the card is showing, and no image URL is
-reconstructed. Three things come out of the clone:
-
-* `<canvas>`: `cloneNode` never copies a canvas's pixels, so a cloned blurhash
-  placeholder paints as an empty box over the real image.
-* `.cardOverlayContainer` and anything carrying `[data-action]`: jf-web 10.11.11
-  resolves a delegated card click from the closest `[data-action]` plus the
-  nearest `[data-id]` ancestor. The clone has no `.card[data-id]` above it, so
-  those would resolve against whatever the popout happens to be sitting over.
-
-### Geometry
-
-`placePopout()` writes `left`, `top` and `width` on the popout and `height` on
-`.af-po-art`; the sheet owns everything else.
-
-* Size comes from the card's measured art box times `--af-popout-scale` (1.32,
-  dropping to 1.18 under `max-height: 900px`). It is read back out of the token
-  in JS by `popoutScale()`, so a per-breakpoint change stays a CSS change. Both
-  it and `--af-popout-min-width` go through `readToken()`, which falls back
-  rather than trusting a value outside a sanity range — every one of these is a
-  geometry input and a bad one paints a popout nobody can read.
-* `--af-popout-min-width` (200 px) is a floor for cards small enough that a
-  proportional popout could not hold a readable line. It is deliberately low.
-  Widening past the card's proportion enlarges the art with it, so a floor that
-  bit on ordinary rail cards would cost height everywhere to buy width in one
-  place: measured on the 85" panel at 300% — a ~1280×720 CSS viewport — a 260 px
-  floor took the popout to 538 px of a 600 px usable band and grew the art to
-  match, where 200 px leaves it proportional at 212×318 with 180 px of text
-  width, which the 12 px tiers fit.
-* The art height is then **capped to what is left of the band** after the
-  drawer. The art is `cover`, so a popout too tall for the viewport crops its
-  poster rather than hanging off the bottom of the screen; `POPOUT_MIN_ART`
-  (96 px) stops the crop turning the poster into a strip.
-* The measurement is a plain layout box, not a transformed one, because
-  `renderPopout()` puts `.af-popped` on the card first and the sheet cancels
-  that card's own 1.06 hover scale. That is needed anyway — a tile still scaled
-  underneath peeks out past the popout's edges.
-* Horizontally it centres on the card, then clamps to a 16 px viewport margin,
-  which is what makes a card at either end of a rail open **inwards** instead
-  of hanging off-screen. Both reference apps do the same.
-* Vertically it grows around the art's own centre, then clamps into the band
-  between `headerBottom()` and the bottom of the viewport. On a short viewport
-  the popout is a large fraction of that band, so the clamp usually wins and it
-  is *not* centred on its card — that is fine because it still covers it.
-  Measured at 1280×720 with a 318 px art and a 148 px drawer: 270 px of overlap
-  for a first-rail card, 224 px for a second-rail card, and 54 px for one at the
-  fold. It never floats free of the card it belongs to. `headerBottom()`
-  counts only a `.skinHeader` actually pinned over the top of the viewport
-  (`rect.top <= 0 && rect.bottom > 0`); jellyfin-web lets some of them scroll
-  away. Taller than the band allows, it pins to the top of it.
-* Two passes by necessity: the drawer's height is only knowable once it has
-  been laid out, so `renderPopout()` unhides the popout before measuring, and
-  `placePopout()` returns `null` — the caller's signal to give up rather than
-  paint at 0,0 — when the card is detached or measures 0×0.
-
-### Dismissal and tracking
-
-* `mouseleave` on the popout, unless the pointer went to another card.
-* `mouseover` on anything that is neither a card nor inside the popout. The
-  popout covers its own card, so that card's own `mouseout` never fires while
-  the pointer is inside the popout — this is the rule that actually closes it.
-* `syncPopout()` on `scroll` (capture, so the rails' horizontal scrolling
-  counts) and on `resize`: it **re-places** the popout rather than closing it,
-  and only closes when the card has detached or scrolled out of the viewport.
-  Closing on scroll would break the keyboard and controller path, where
-  jellyfin-web scrolls the newly focused card into view and would otherwise
-  close the popout it had just opened.
-* `hidePopout()` drops `.af-popped`, `.af-focused` and the selection, so
-  re-entering the same card opens it again. **It deliberately leaves the
-  backdrop up**: the art bleed is the page background on both routes, and
-  clearing it on every pointer exit would strobe it across a rail.
-
-### The drawer
-
-Four tiers: actions, title, badges, meta, genres.
-
-The first build had one strip of `.af-chip` pills, and the owner's live review
-killed it — at a poster's width, a 14 px uppercase pill with 9/14 padding fits
-about three facts, `max-height: 52px` clipped the rest, and what survived was
-"not a whole lot besides the year and runtime". Dot-joined plain text costs
-roughly a quarter of the width per fact, which is what paid for the extra
-tiers; the whole stack is about the height the one clipped strip was. Only the
-certification and the picture format stay boxed, which is what Netflix's hover
-card boxes too.
-
-* `badgesFor()` — `OfficialRating`, resolution, non-SDR video range.
-* `metaFor()` — dot-joined: `S1 E4` and the episode's own name for an episode
-  (the title line shows the series, so it has nowhere else to go), `N seasons`
-  for a series, year, runtime, `★ 8.2`, then `Nm left` or `New`.
-* `genresFor()` — up to three; the server returns them most-specific-first.
-
-`OfficialRating`, `Genres` and the series season count are new data, not a
-re-layout: the strip never showed any of them.
-
-Every tier ellipsizes rather than truncating mid-word, and each is a single
-line except `.af-po-meta`, which gets two because an episode's own name rides
-it. The title is one line on purpose: the drawer's height feeds the vertical
-clamp in `placePopout()`, so a title free to wrap would move the popout as it
-repainted.
-
-**The title reverses the owner's first pick of a title-less drawer**, taken
-when the same review asked for more detail. It is the one fact the popout
-otherwise destroys rather than omits — the drawer covers the card's own
-`.cardText` label while it is up. `renderPopout()` therefore no longer sets an
-`aria-label`: with the title visible in the drawer, a label on the container
-would override the content it duplicates.
-
-* Round discs, CSS-drawn rather than icon-font, because jellyfin-web's Material
-  sheet is lazily loaded and would leave a blank square on a cold rail.
-* **Resume**/**Play** clicks the card's own
-  `.cardOverlayButton[data-action="resume"|"play"]` / `.cardOverlayFab-primary`
-  so jellyfin-web owns resume offsets and media-source selection. Measured on
-  the reference server: 21 of 21 playable Home cards carry one. The fallback
-  for a rail that does not is a throwaway `.itemAction[data-action=…]` appended
-  to the card and clicked, borrowing the same delegation contract.
-* Folder-like types (`CollectionFolder`, `UserView`, `Folder`, `BoxSet`,
-  `Season`, `Playlist`) get a single **Browse** disc that clicks the card's own
-  `[data-action="link"]`, and a `ChildCount` chip — a library is browsed, not
-  played.
-* Actions target `shownCard`/`shownItem`, never the synchronously-set
-  `focusedCard`: the popout only repaints once `fetchItem()` resolves, so on a
-  slow server the two differ and Play would otherwise start the wrong item.
-* Clicking the enlarged art opens Details. The popout covers the card, so
-  without that it would swallow the click that used to open the item.
-* The panel is kept out of controller and keyboard navigation: jf-web 10.11.11's
-  `focusManager` builds its focusable set from
-  `INPUT/TEXTAREA/SELECT/BUTTON/A` + `:not([tabindex="-1"]):not(:disabled)`
-  plus `.focusable`, and `autoFocus()` additionally skips `.noautofocus`. The
-  two buttons carry both `tabindex="-1"` and `noautofocus`. They stay fully
-  usable with the mouse.
-
-Not glass, unlike every other Astrofin panel: the popout stands over rail art
-of every possible brightness, and a translucent drawer leaves the meta
-unreadable over a pale poster. Both reference apps use an opaque panel here for
-the same reason.
+* only a body-level fixed layer reflows nothing and cannot be clipped by an
+  ancestor's `overflow`;
+* a cloned `.cardScalable` has to have its `[data-action]` attributes removed
+  rather than those nodes, because `.cardImageContainer` carries
+  `data-action="link"` and is the art itself;
+* Jellyfin 12's header is a MUI AppBar at z-index 1100, which a fixed overlay
+  has to measure and clear (the legacy `.skinHeader` is still in the DOM but
+  laid out at 0x0).
 
 ### Home-only chrome
 
 `#af-hint` is all of it. It stays fixed to the bottom and is
 `pointer-events: none` so it can never swallow a click meant for a card. It is
 dropped below `560px` viewport height, comes up with the first card the pointer
-lands on rather than with the route — unchanged from the spotlight — and hides
-when the route leaves Home or in video mode.
+lands on (from `setFocusedCard()`, once that card's item resolves) rather than
+with the route, and hides when the route leaves Home or in video mode.
 
 **`#af-server-panel` was removed at the owner's request (2026-09-13).** It was a
 glass card bottom-right on Home showing `ApiClient.serverName()` plus
 Mode/Decode rows sourced from `window.jmpInfo`. The element, `renderServerPanel()`,
 the `.af-srv-*` rules and its two tests are all gone rather than hidden; the
 fake `ApiClient`'s now-unused `serverName`/`serverInfo` accessors went with
-them. `videoModeLabel()` stays — the item detail facts panel uses it too.
+them.
 
-The `.mainAnimatedPages` subtree observer needs **no filter for the popout** —
-it lives in `<body>`, outside that subtree, and the `.af-popped` it writes onto
-a card is an attribute mutation, which the observer does not ask for. The
-spotlight lived inside the observed subtree and its own repaint scheduled a
-refresh, which repainted, which scheduled a refresh; that whole class of bug
-went with it. The `detailPanel` filter is still required.
+The `.mainAnimatedPages` subtree observer needs **no filter**: nothing Astrofin
+draws lives in that subtree, and the `.af-focused` and `data-af-kind` it writes
+onto cards are attribute mutations, which the observer does not ask for. The
+old spotlight lived inside the observed subtree, and its own repaint scheduled
+a refresh, which repainted, which scheduled a refresh; that class of bug is
+gone.
 
 Everything is wrapped so it cannot throw, uses passive listeners where the event
 allows, never calls `preventDefault`, and never moves focus.
-
 
 ## The library grid
 
@@ -680,22 +526,20 @@ Home a library.
 `af-home` and `af-library` are never both set. `refresh()` resolves Home first
 and only tests the library route once Home is ruled out.
 
-The focused-card machinery is now shared with Home outright — the popout opens
-on both routes, where the spotlight only ever opened on Home.
+The focused-card machinery is shared with Home outright.
 
 * `cardFrom()` claims a card inside `#homeTab`, `.homePage` **or**
   `.libraryPage .itemsContainer`; everything else on the page keeps plain
   jellyfin-web behaviour.
 * `setFocusedCard()` resolves the route **synchronously**, before the item
   fetch, because the fetch can outlive a navigation. Both routes then drive
-  `setBackdrop()` and `renderPopout()` identically.
+  `setBackdrop()` identically.
 * `leaveHome(keepSelection)` takes an argument. Moving to a library route
-  passes it, which keeps the focused card and the art it is driving while still
-  tearing the popout down — cards stream into the grid for seconds after the
-  first hover and every batch queues a `refresh()`, so without it the backdrop
-  would blink off under a stationary cursor. Leaving a library grid for anywhere
-  else drops the selection outright: the card the popout is anchored to is
-  going away with the page.
+  passes it, which keeps the focused card and the art it is driving — cards
+  stream into the grid for seconds after the first hover and every batch queues
+  a `refresh()`, so without it the backdrop would blink off under a stationary
+  cursor. Leaving a library grid for anywhere else drops the selection
+  outright: the card it points at is going away with the page.
 
 ### Two deliberate deviations from the artboard
 
@@ -794,7 +638,7 @@ Neither change touches the video gates: `html.af-video` and
 * The rail's `top` is `calc(var(--af-header-height) + 108px)` = 196 px, matching
   the artboard.
 * Unfocused tile labels sit at `.72` here against Home's `.55`. On Home the
-  popout owns the attention and the rails are peripheral; in a library
+  art bleed owns the attention and the rails are peripheral; in a library
   grid the tiles are the whole page. `.72` is the artboard's value.
 * Stock hides the rail entirely below a 500 px viewport height
   (`@media (max-height:31.25em){.alphaPicker-fixed{display:none!important}}`).
@@ -944,7 +788,7 @@ The in-page band (`#itemBackdrop`) and the ribbon over its foot are stock. The
 ribbon's `rgb(paperChannel / .8)` becomes the Astrofin surface at .8 through the
 variables above. The script drives no art on these pages: on a detail route
 `refresh()` calls `leaveHome(false)`, which clears Home's backdrop and the
-popout's selection, so nothing of Astrofin's own art layer is up.
+focused card, so nothing of Astrofin's own art layer is up.
 
 ### Verified live
 
@@ -1068,8 +912,8 @@ genuinely grows and every measurement the theme's JS takes stays truthful. A
 `zoom` on the document was measured first and rejected — under it
 `getBoundingClientRect()` returns zoom-scaled coordinates while `style.left`
 writes stay unscaled, so an element set to `left: 200px` reports `x: 160`, and
-the card popout (which reads rects and writes positions) would be misplaced by
-the zoom factor. Below 100 % the app also *gains room*: at 80 % a 1280 px
+the card popout of the time (which read rects and wrote positions) would have
+been misplaced by the zoom factor. Below 100 % the app also *gains room*: at 80 % a 1280 px
 screen lays out as 1600 px, the width band the theme was drawn against.
 
 * Stored as a string, like `videoMode` — `CliSettings` has no numeric field.
@@ -1397,8 +1241,8 @@ window.__afInstallTheme = () => el;
 (0, eval)(await fetch(base + 'astrofin-theme.js?t=' + Date.now()).then(r => r.text()));
 ```
 
-Hover a Home tile and the popout plus backdrop should come up. Check a card at
-each end of a rail: the popout must shift inward, never cross the viewport edge.
+Hover a Home tile and the backdrop should crossfade to its art, with the tile
+holding its ring.
 
 ### Real OS input at 300% (2026-09-10)
 

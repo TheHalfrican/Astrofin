@@ -9,22 +9,23 @@
 // already has it installed refreshes rather than installs again — no second
 // set of MutationObservers, listeners or panels.
 //
-// Everything else here is the logic the popout is made of: the chip strip, the
-// backdrop crossfade, the Home route test, the viewport geometry that decides
-// where a body-level fixed panel lands over the card it stands in for, and the
-// two buttons, which must act on the item the popout is *showing* rather than
-// on whatever the pointer has since moved to.
+// Everything else here is what the runtime still does: the backdrop crossfade,
+// the route tests, the focus tracking that drives the art from the card under
+// the pointer (on Home and the library grids, and only once its fetch comes
+// back for the card that is still selected), the Home-only controller hint,
+// and the detail gate that marks those pages and otherwise leaves them alone.
+// The v0.6.0 card popout was removed on 2026-09-18; one test below pins that
+// nothing builds it again.
 //
-// The fake DOM comes from src/web/test/player-fakes.js; the extra bits the
-// theme needs (real textContent semantics, document fragments, bubbling
-// clicks, cloneNode, a box model, a Home page) from src/web/test/theme-fakes.js.
+// The fake DOM comes from src/web/test/player-fakes.js; the Home page, the
+// cards and the ApiClient the theme reads come from src/web/test/theme-fakes.js.
 const test = require('node:test');
 const assert = require('node:assert');
 
 const { loadModule } = require('./test/player-fakes.js');
 const {
-    makeThemeWindow, loadTheme, installThemeStyle, setRect, buildHome, makeCard,
-    makeThemeApiClient, observersFor, childTexts
+    makeThemeWindow, loadTheme, installThemeStyle, buildHome, makeCard,
+    makeThemeApiClient, observersFor
 } = require('./test/theme-fakes.js');
 
 // A window with the theme installed and Home already in the DOM.
@@ -165,27 +166,32 @@ function movieWithArt(id) {
     };
 }
 
-// A card whose tile has a measured box, which is the only kind the popout can
-// anchor to: placePopout() gives up on anything reading 0x0. `box` is the
-// tile's viewport rect; the default sits well inside the 1280x720 viewport
-// theme-fakes.js gives every window.
-function popCard(win, opts = {}, box = {}) {
-    const card = makeCard(win, opts);
-    setRect(
-        card.querySelector('.cardScalable'),
-        Object.assign({ left: 100, top: 200, width: 200, height: 300 }, box)
-    );
-    return card;
+// A window on Home whose ApiClient knows `items`, plus one card in the first
+// rail for the first of them. What every focus test starts from.
+function homeWithCard(items = [movieWithArt('one')]) {
+    const ctx = onHome();
+    ctx.api = makeThemeApiClient({ items: new Map(items.map((it) => [it.Id, it])) });
+    ctx.win.ApiClient = ctx.api;
+    ctx.card = makeCard(ctx.win, { id: items[0].Id, parent: ctx.home.sections[0] });
+    return ctx;
 }
 
-// A .skinHeader pinned over the top of the viewport, `height` tall — the one
-// kind placePopout() has to clamp below.
-function pinHeader(win, height) {
-    const header = win.document.createElement('div');
-    header.className = 'skinHeader';
-    win.document.body.appendChild(header);
-    setRect(header, { left: 0, top: 0, width: 1280, height });
-    return header;
+// Identity check for fake DOM nodes. assert.strictEqual would read better, but
+// when it fails it inspects the nodes it was handed, and a fake node's
+// parentNode/ownerDocument graph takes minutes to print: a regression would
+// hang the suite instead of failing it.
+function sameNode(actual, expected, message) {
+    assert.ok(actual === expected, message || 'not the expected node');
+}
+
+// Nothing the removed card popout used to build or stamp is in the document.
+function assertNoPopout(win) {
+    const doc = win.document;
+    assert.strictEqual(doc.querySelectorAll('#af-popout').length, 0, 'no #af-popout');
+    assert.strictEqual(doc.querySelectorAll('.af-popped').length, 0, 'no card is .af-popped');
+    const drawerBits = doc.querySelectorAll('*').filter((el) =>
+        String(el.className).split(/\s+/).some((c) => c.startsWith('af-po-')));
+    assert.strictEqual(drawerBits.length, 0, 'no .af-po-* node');
 }
 
 // ---------------------------------------------------------------------------
@@ -218,56 +224,52 @@ test('a second run against the same window refreshes instead of installing again
     assert.strictEqual(win.observers.length, observersAfterFirst, 'no second observers');
     assert.strictEqual(win.document.listeners.length, docListenersAfterFirst);
     assert.strictEqual(win.listeners.length, winListenersAfterFirst);
-    assert.strictEqual(win.document.getElementById('af-space'), spaceAfterFirst);
+    sameNode(win.document.getElementById('af-space'), spaceAfterFirst);
     assert.strictEqual(win.document.querySelectorAll('#af-space').length, 1);
-    assert.strictEqual(win.document.querySelectorAll('#af-popout').length, 1);
+    assert.strictEqual(win.document.querySelectorAll('#af-hint').length, 1);
+    assertNoPopout(win);
 });
 
 test('a third and fourth run still leave exactly one of every panel', () => {
     const { win } = onHome();
     loadModule('astrofin-theme.js', win);
     loadModule('astrofin-theme.js', win);
-    for (const id of ['af-space', 'af-popout', 'af-hint']) {
+    for (const id of ['af-space', 'af-hint']) {
         assert.strictEqual(win.document.querySelectorAll('#' + id).length, 1, id);
     }
+    assertNoPopout(win);
 });
 
-test('buildUi builds the popout as a hidden body-level portal', () => {
+test('buildUi builds the controller hint alone, hidden, at the end of body', () => {
     const { win, theme } = onHome();
     const ui = theme.state().ui;
-    assert.strictEqual(win.document.getElementById('af-popout'), ui.popout);
-    assert.strictEqual(win.document.getElementById('af-spotlight'), null, 'the band is gone');
-    // A child of the card would be clipped by the first rail ancestor that
-    // stopped being overflow:visible, which is the whole reason for the portal.
-    assert.strictEqual(ui.popout.parentNode, win.document.body);
-    assert.strictEqual(ui.popout.hidden, true);
-    assert.ok(ui.popout.contains(ui.art));
-    assert.ok(ui.popout.contains(ui.drawer));
-    assert.ok(ui.actions.contains(ui.play));
-    assert.ok(ui.actions.contains(ui.details));
-    // The drawer's four tiers, in reading order under the buttons. The order
-    // is load-bearing: the title has to come before the facts that qualify it.
+    // The hint is the whole of the Home chrome: the server card and then the
+    // card popout were both removed at the owner's request.
+    assert.deepStrictEqual(Object.keys(ui), ['hint']);
+    sameNode(win.document.getElementById('af-hint'), ui.hint);
+    sameNode(ui.hint.parentNode, win.document.body);
+    assert.strictEqual(ui.hint.hidden, true, 'nothing shows until a card is selected');
+    assert.strictEqual(ui.hint.getAttribute('aria-hidden'), 'true');
     assert.deepStrictEqual(
-        ui.drawer.children,
-        [ui.actions, ui.title, ui.badges, ui.meta, ui.genres]
+        ui.hint.children.map((el) => el.textContent),
+        ['◀ ▶ MOVE', '✕ SELECT', '◯ BACK', 'OPTIONS ⋯']
     );
-    assert.deepStrictEqual(
-        ui.drawer.children.map((el) => el.className),
-        ['af-po-actions', 'af-po-title', 'af-po-badges', 'af-po-meta', 'af-po-genres']
-    );
-    assert.strictEqual(ui.chips, undefined, 'the single chip strip is gone');
+    sameNode(win.document.getElementById('af-spotlight'), null, 'the band is gone');
+    assertNoPopout(win);
 });
 
-test('buildUi drops panels a previous execution left behind', () => {
-    const { win, theme } = onHome();
-    const stale = theme.state().ui.popout;
+test('buildUi drops a hint a previous execution left behind', () => {
     // A fresh V8 context over a document jellyfin-web never tore down: the
-    // handle is gone but the nodes are still there. Orphaning one panel is
-    // what makes ensureUi() forget the handle and build again.
-    theme.state().ui.hint.remove();
-    theme.ensureUi();
-    assert.strictEqual(win.document.querySelectorAll('#af-popout').length, 1);
-    assert.notStrictEqual(theme.state().ui.popout, stale, 'rebuilt, not shadowed');
+    // old handle is gone with the old context, but its node is still there.
+    const win = makeThemeWindow({ hash: '#/home.html' });
+    buildHome(win);
+    const stale = win.document.createElement('div');
+    stale.id = 'af-hint';
+    win.document.body.appendChild(stale);
+
+    const theme = loadTheme(win);
+    assert.strictEqual(win.document.querySelectorAll('#af-hint').length, 1);
+    assert.ok(theme.state().ui.hint !== stale, 'rebuilt, not shadowed');
     assert.strictEqual(stale.isConnected, false, 'the old one was dropped');
 });
 
@@ -276,12 +278,12 @@ test('the module survives a document that has no body yet', () => {
     win.document.documentElement.removeChild(win.document.body);
     win.document.body = null;
     const theme = loadTheme(win);
-    assert.strictEqual(theme.state().space, null);
-    assert.strictEqual(theme.state().ui, null);
+    sameNode(theme.state().space, null);
+    sameNode(theme.state().ui, null);
 });
 
 // ---------------------------------------------------------------------------
-// guard / tokenMs
+// guard
 // ---------------------------------------------------------------------------
 
 test('guard swallows a throw and logs it to console.debug', () => {
@@ -298,21 +300,6 @@ test('guard passes arguments and the return value through', () => {
     assert.strictEqual(theme.guard((a, b) => a + b)(2, 3), 5);
 });
 
-test('tokenMs reads ms and s durations off the root element', () => {
-    const { win, theme } = onHome();
-    const root = win.document.documentElement;
-    root.style.setProperty('--af-dur-tile', '250ms');
-    assert.strictEqual(theme.tokenMs('--af-dur-tile', 180), 250);
-    root.style.setProperty('--af-dur-tile', '0.4s');
-    assert.strictEqual(theme.tokenMs('--af-dur-tile', 180), 400);
-});
-
-test('tokenMs falls back when the token is missing or unreadable', () => {
-    const { theme } = onHome();
-    assert.strictEqual(theme.tokenMs('--af-nope', 180), 180);
-    assert.strictEqual(theme.tokenMs('--af-nope', 0), 0);
-});
-
 // ---------------------------------------------------------------------------
 // Stylesheet ordering
 // ---------------------------------------------------------------------------
@@ -321,7 +308,7 @@ test('keepThemeLast moves the sheet to the end of body when a later sheet appear
     const win = makeThemeWindow();
     const style = installThemeStyle(win);
     const theme = loadTheme(win);
-    assert.strictEqual(style.parentNode, win.document.body, 'moved out of head');
+    sameNode(style.parentNode, win.document.body, 'moved out of head');
 
     const chunk = win.document.createElement('link');
     chunk.setAttribute('rel', 'stylesheet');
@@ -384,7 +371,7 @@ test('pinThemeColor creates the meta tag at the Astrofin base colour', () => {
     loadTheme(win);
     const meta = win.document.querySelector('meta[name="theme-color"]');
     assert.strictEqual(meta.getAttribute('content'), '#070A14');
-    assert.strictEqual(meta.parentNode, win.document.head);
+    sameNode(meta.parentNode, win.document.head);
 });
 
 test('pinThemeColor rewrites a theme-color jellyfin-web has changed', () => {
@@ -437,7 +424,7 @@ test('ensureSpace adopts a space left in the document by a previous context', ()
     const theme2 = loadTheme(win2);
     assert.strictEqual(theme2.state().space, clone, 'adopted, not duplicated');
     assert.strictEqual(theme2.state().backdropLayers.length, 2);
-    assert.notStrictEqual(clone, first);
+    assert.ok(clone !== first);
 });
 
 test('updateVideoMode sets html.af-video while a video container exists', () => {
@@ -452,13 +439,13 @@ test('updateVideoMode sets html.af-video while a video container exists', () => 
     assert.ok(!win.document.documentElement.classList.contains('af-video'));
 });
 
-test('going into video mode clears the backdrop and closes the popout', () => {
-    const { win, home, theme } = onHome();
-    theme.setBackdrop('https://server/a.jpg');
+test('going into video mode clears the backdrop and drops the selection', async () => {
+    const { win, card, theme } = homeWithCard();
+    theme.setFocusedCard(card);
+    await settle();
     win.images[0].onload();
     assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
+    assert.ok(card.classList.contains('af-focused'));
 
     const container = win.document.createElement('div');
     container.className = 'videoPlayerContainer';
@@ -466,10 +453,11 @@ test('going into video mode clears the backdrop and closes the popout', () => {
     theme.updateVideoMode();
     assert.strictEqual(theme.state().currentBackdropUrl, null);
     assert.ok(!win.document.documentElement.classList.contains('af-backdrop'));
-    // The sheet hides it either way; leaving it up in state means it comes
-    // back over the card the pointer left behind when playback ends.
-    assert.strictEqual(theme.state().poppedCard, null);
-    assert.ok(!theme.state().ui.popout.classList.contains('af-show'));
+    // The sheet hides the ring either way; leaving the selection in state
+    // means it comes back on the card the pointer left behind when playback
+    // ends.
+    sameNode(theme.state().focusedCard, null);
+    assert.ok(!card.classList.contains('af-focused'));
 });
 
 test('setBackdrop only paints once the image has loaded, and crossfades slots', () => {
@@ -597,239 +585,6 @@ test('with no hash isLibraryRoute probes the DOM and never mistakes Home for a l
 // Item metadata
 // ---------------------------------------------------------------------------
 
-test('isFolderLike is true for the container types and nothing else', () => {
-    const { theme } = onHome();
-    for (const type of ['CollectionFolder', 'UserView', 'Folder', 'BoxSet', 'Season', 'Playlist']) {
-        assert.ok(theme.isFolderLike({ Type: type }), type);
-    }
-    for (const type of ['Movie', 'Episode', 'Series', 'Audio']) {
-        assert.ok(!theme.isFolderLike({ Type: type }), type);
-    }
-    assert.strictEqual(theme.isFolderLike(null), false);
-    assert.strictEqual(theme.isFolderLike({}), false);
-});
-
-test('minutes rounds ticks and tolerates rubbish', () => {
-    const { theme } = onHome();
-    assert.strictEqual(theme.minutes(600000000), 1);
-    assert.strictEqual(theme.minutes(900000000), 2, 'rounds, not truncates');
-    assert.strictEqual(theme.minutes(null), 0);
-    assert.strictEqual(theme.minutes('nonsense'), 0);
-});
-
-test('formatRuntime writes hours and minutes, and nothing under a minute', () => {
-    const { theme } = onHome();
-    assert.strictEqual(theme.formatRuntime(600000000 * 95), '1h 35m');
-    assert.strictEqual(theme.formatRuntime(600000000 * 42), '42m');
-    assert.strictEqual(theme.formatRuntime(600000000 * 120), '2h 0m');
-    assert.strictEqual(theme.formatRuntime(0), null);
-    assert.strictEqual(theme.formatRuntime(undefined), null);
-});
-
-test('videoStream picks the first video stream and skips audio', () => {
-    const { theme } = onHome();
-    const video = { Type: 'Video', Width: 1920 };
-    assert.strictEqual(theme.videoStream({ MediaStreams: [{ Type: 'Audio' }, video] }), video);
-    assert.strictEqual(theme.videoStream({ MediaStreams: [] }), null);
-    assert.strictEqual(theme.videoStream(null), null);
-});
-
-test('resolutionLabel buckets by width', () => {
-    const { theme } = onHome();
-    assert.strictEqual(theme.resolutionLabel({ Width: 3840 }), '4K');
-    assert.strictEqual(theme.resolutionLabel({ Width: 3600 }), '4K');
-    assert.strictEqual(theme.resolutionLabel({ Width: 1920 }), '1080p');
-    assert.strictEqual(theme.resolutionLabel({ Width: 1280 }), '720p');
-    assert.strictEqual(theme.resolutionLabel({ Width: 720 }), 'SD');
-    assert.strictEqual(theme.resolutionLabel({ Width: 0 }), null);
-    assert.strictEqual(theme.resolutionLabel(null), null);
-});
-
-// The drawer's three fact tiers. One .af-chip strip fitted about three facts
-// at a poster's width and clipped the rest, so the boxed facts, the dense
-// dot-joined line and the genres are now three separate functions with three
-// separate budgets.
-
-test('badgesFor boxes the certification and the picture format only', () => {
-    const { theme } = onHome();
-    assert.deepStrictEqual(
-        theme.badgesFor({
-            Type: 'Movie',
-            OfficialRating: 'PG-13',
-            ProductionYear: 2016,
-            MediaStreams: [{ Type: 'Video', Width: 3840, VideoRangeType: 'HDR10' }]
-        }),
-        ['PG-13', '4K', 'HDR10'],
-        'the year and everything else belongs to the meta line'
-    );
-    assert.deepStrictEqual(theme.badgesFor({ Type: 'Movie' }), []);
-    assert.deepStrictEqual(theme.badgesFor(null), []);
-});
-
-test('badgesFor drops an SDR range and normalises the underscored ones', () => {
-    const { theme } = onHome();
-    assert.deepStrictEqual(
-        theme.badgesFor({
-            Type: 'Movie', MediaStreams: [{ Type: 'Video', Width: 1920, VideoRange: 'SDR' }]
-        }),
-        ['1080p'],
-        'SDR is the norm, so it says nothing'
-    );
-    assert.deepStrictEqual(
-        theme.badgesFor({
-            Type: 'Movie',
-            MediaStreams: [{ Type: 'Video', Width: 3840, VideoRangeType: 'DOLBY_VISION' }]
-        }),
-        ['4K', 'DOLBY VISION']
-    );
-});
-
-test('badgesFor is empty for a folder, which has no file to describe', () => {
-    const { theme } = onHome();
-    for (const Type of ['BoxSet', 'Season', 'CollectionFolder', 'Playlist']) {
-        assert.deepStrictEqual(
-            theme.badgesFor({
-                Type,
-                OfficialRating: 'TV-14',
-                MediaStreams: [{ Type: 'Video', Width: 3840, VideoRangeType: 'HDR10' }]
-            }),
-            [],
-            Type
-        );
-    }
-});
-
-test('metaFor a folder is a child count and nothing else', () => {
-    const { theme } = onHome();
-    assert.deepStrictEqual(
-        theme.metaFor({
-            Type: 'BoxSet', ChildCount: 4, ProductionYear: 1999, CommunityRating: 7.2
-        }),
-        ['4 items'],
-        'a container has no year, runtime or rating worth showing'
-    );
-    assert.deepStrictEqual(theme.metaFor({ Type: 'Season', ChildCount: 1 }), ['1 item']);
-    assert.deepStrictEqual(theme.metaFor({ Type: 'CollectionFolder' }), []);
-    assert.deepStrictEqual(theme.metaFor(null), []);
-});
-
-test('metaFor an episode leads with the S/E code and its own name', () => {
-    const { theme } = onHome();
-    // titleFor() puts the series on the title line, so the episode's own name
-    // has nowhere else to go.
-    assert.deepStrictEqual(
-        theme.metaFor({
-            Type: 'Episode',
-            Name: 'Pilot',
-            SeriesName: 'The Show',
-            ParentIndexNumber: 1,
-            IndexNumber: 4,
-            ProductionYear: 2011,
-            RunTimeTicks: 600000000 * 58,
-            CommunityRating: 8.75
-        }),
-        ['S1 E4', 'Pilot', '2011', '58m', '★ 8.8']
-    );
-    // A special with no numbering keeps the name and loses the code.
-    assert.deepStrictEqual(
-        theme.metaFor({ Type: 'Episode', Name: 'Recap', ParentIndexNumber: 0 }),
-        ['Recap']
-    );
-});
-
-test('metaFor a series counts its seasons and a movie does not', () => {
-    const { theme } = onHome();
-    assert.deepStrictEqual(
-        theme.metaFor({ Type: 'Series', Name: 'The Show', ChildCount: 5, ProductionYear: 2011 }),
-        ['5 seasons', '2011']
-    );
-    assert.deepStrictEqual(
-        theme.metaFor({ Type: 'Series', Name: 'The Show', ChildCount: 1 }),
-        ['1 season']
-    );
-    assert.deepStrictEqual(
-        theme.metaFor({ Type: 'Series', Name: 'The Show', ProductionYear: 2011 }),
-        ['2011'],
-        'no ChildCount, no count'
-    );
-    assert.deepStrictEqual(
-        theme.metaFor({
-            Type: 'Movie',
-            Name: 'Arrival',
-            ChildCount: 3,
-            ProductionYear: 2016,
-            RunTimeTicks: 600000000 * 116,
-            CommunityRating: 7.9
-        }),
-        ['2016', '1h 56m', '★ 7.9'],
-        'a movie never counts children'
-    );
-});
-
-test('metaFor shows remaining time for a resumable item and New for a fresh one', () => {
-    const { theme } = onHome();
-    const resume = theme.metaFor({
-        Type: 'Movie',
-        RunTimeTicks: 600000000 * 100,
-        UserData: { PlaybackPositionTicks: 600000000 * 70 },
-        DateCreated: new Date().toISOString()
-    });
-    assert.ok(resume.includes('30m left'), resume.join(','));
-    assert.ok(!resume.includes('New'), 'resume wins over New');
-
-    assert.deepStrictEqual(
-        theme.metaFor({ Type: 'Movie', DateCreated: new Date().toISOString() }),
-        ['New']
-    );
-    assert.deepStrictEqual(
-        theme.metaFor({
-            Type: 'Movie',
-            DateCreated: new Date(Date.now() - 30 * 864e5).toISOString()
-        }),
-        [],
-        'a month old is not new'
-    );
-    assert.deepStrictEqual(
-        theme.metaFor({
-            Type: 'Movie',
-            RunTimeTicks: 600000000 * 100,
-            UserData: { PlaybackPositionTicks: 600000000 * 100 }
-        }),
-        ['1h 40m'],
-        'watched to the end has no time left to report'
-    );
-});
-
-test('genresFor takes the first three and nothing from a folder', () => {
-    const { theme } = onHome();
-    // The server returns them most-specific-first, and three is what one line
-    // holds at a poster's width.
-    assert.deepStrictEqual(
-        theme.genresFor({
-            Type: 'Movie',
-            Genres: ['Science Fiction', 'Drama', 'Mystery', 'Thriller', 'Adventure']
-        }),
-        ['Science Fiction', 'Drama', 'Mystery']
-    );
-    assert.deepStrictEqual(theme.genresFor({ Type: 'Movie', Genres: ['Drama'] }), ['Drama']);
-    assert.deepStrictEqual(theme.genresFor({ Type: 'Movie', Genres: [] }), []);
-    assert.deepStrictEqual(theme.genresFor({ Type: 'Movie' }), [], 'an episode carries none');
-    assert.deepStrictEqual(
-        theme.genresFor({ Type: 'BoxSet', Genres: ['Drama'] }), [], 'not for a folder'
-    );
-    assert.deepStrictEqual(theme.genresFor(null), []);
-});
-
-test('titleFor prefers the series name for an episode', () => {
-    const { theme } = onHome();
-    assert.strictEqual(
-        theme.titleFor({ Type: 'Episode', Name: 'Pilot', SeriesName: 'The Show' }),
-        'The Show'
-    );
-    assert.strictEqual(theme.titleFor({ Type: 'Movie', Name: 'Arrival' }), 'Arrival');
-    assert.strictEqual(theme.titleFor({}), '');
-});
-
 test('backdropUrlFor prefers the item backdrop, then the parent, then the poster', () => {
     const { win, theme } = onHome();
     win.ApiClient = makeThemeApiClient();
@@ -879,7 +634,7 @@ test('fetchItem rejects when there is no ApiClient', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Focus tracking and placement
+// Focus tracking
 // ---------------------------------------------------------------------------
 
 test('setFocusedCard moves the af-focused class and ignores a repeat', () => {
@@ -893,46 +648,69 @@ test('setFocusedCard moves the af-focused class and ignores a repeat', () => {
     assert.ok(!one.classList.contains('af-focused'));
     assert.ok(two.classList.contains('af-focused'));
     theme.setFocusedCard(two);
-    assert.strictEqual(theme.state().focusedCard, two);
+    sameNode(theme.state().focusedCard, two);
     theme.setFocusedCard(null);
-    assert.strictEqual(theme.state().focusedCard, null);
+    sameNode(theme.state().focusedCard, null);
     assert.ok(!two.classList.contains('af-focused'));
 });
 
-test('focusing a card pops it out and drives the backdrop from the item', async () => {
-    const { win, home, theme } = onHome();
-    const item = {
-        Id: 'one', Name: 'Arrival', Type: 'Movie', ProductionYear: 2016,
-        BackdropImageTags: ['bt']
-    };
-    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
-    const card = popCard(win, { id: 'one', parent: home.sections[0] });
+test('focusing a card on Home drives the backdrop from its item and brings the hint up', async () => {
+    const { win, card, theme } = homeWithCard();
+    const hint = theme.state().ui.hint;
+    assert.strictEqual(hint.hidden, true, 'the route alone does not show it');
+
+    theme.setFocusedCard(card);
+    assert.ok(card.classList.contains('af-focused'), 'marked at once, before the fetch');
+    await settle();
+    assert.match(theme.state().currentBackdropUrl, /Items\/one\/Images\/Backdrop/);
+    win.images[0].onload();
+    assert.ok(theme.state().backdropLayers[0].classList.contains('af-on'));
+    assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
+    // The Home chrome comes up with the first card, not with the route.
+    assert.strictEqual(theme.state().overlaysWanted, true);
+    assert.strictEqual(hint.hidden, false);
+    assert.ok(hint.classList.contains('af-show'));
+    assertNoPopout(win);
+});
+
+test('dropping the selection takes the ring off and leaves the art up', async () => {
+    const { win, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
     await settle();
-    const ui = theme.state().ui;
-    assert.strictEqual(theme.state().poppedCard, card);
-    assert.strictEqual(ui.popout.hidden, false);
-    assert.ok(ui.popout.classList.contains('af-show'));
-    assert.strictEqual(ui.title.textContent, 'Arrival');
-    assert.strictEqual(ui.meta.textContent, '2016');
+    win.images[0].onload();
+
+    theme.setFocusedCard(null);
+    assert.ok(!card.classList.contains('af-focused'));
+    // The backdrop is the page background: clearing it on every pointer exit
+    // would strobe the art across a rail.
     assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
+    assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
 });
 
 test('a fetch that comes back for a card the pointer has left is dropped', async () => {
-    const { win, home, theme } = onHome();
-    const item = { Id: 'one', Name: 'Arrival', Type: 'Movie' };
-    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
-    const card = popCard(win, { id: 'one', parent: home.sections[0] });
+    const { win, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
-    // hidePopout() drops the selection without bumping the request token, so
-    // the token alone would not catch this.
-    theme.hidePopout();
+    // Dropping the selection does not bump the request token, so the token
+    // alone would not catch this; the card check in the callback does.
+    theme.setFocusedCard(null);
     await settle();
-    assert.strictEqual(theme.state().poppedCard, null, 'a slow server cannot re-open it');
-    assert.ok(!card.classList.contains('af-popped'));
+    assert.strictEqual(theme.state().currentBackdropUrl, null, 'a slow server paints nothing');
+    assert.strictEqual(win.images.length, 0);
+    assert.strictEqual(theme.state().overlaysWanted, false);
+    assert.strictEqual(theme.state().ui.hint.hidden, true);
 });
 
-test('a card with no data-id, or off Home, never reaches the panel', () => {
+test('a fetch for an earlier card never paints over the card selected after it', async () => {
+    const { win, home, theme, card } = homeWithCard([movieWithArt('one'), movieWithArt('two')]);
+    const two = makeCard(win, { id: 'two', parent: home.sections[1] });
+    theme.setFocusedCard(card);
+    theme.setFocusedCard(two);
+    await settle();
+    assert.match(theme.state().currentBackdropUrl, /Items\/two\//);
+    assert.strictEqual(win.images.length, 1, 'the superseded fetch requested nothing');
+});
+
+test('a card with no data-id, or off Home and the grids, fetches nothing', () => {
     const { win, home, theme } = onHome();
     win.ApiClient = makeThemeApiClient();
     const bare = makeCard(win, { id: null, parent: home.sections[0] });
@@ -946,14 +724,10 @@ test('a card with no data-id, or off Home, never reaches the panel', () => {
     assert.ok(card.classList.contains('af-focused'), 'the class still tracks focus');
 });
 
-test('focusing a card on a library route pops it out there too', async () => {
+test('focusing a card on a library route drives the backdrop there too, without the hint', async () => {
     const { win, library, theme } = onLibrary();
-    const item = {
-        Id: 'one', Name: 'Arrival', Type: 'Movie', ProductionYear: 2016,
-        BackdropImageTags: ['bt']
-    };
-    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
-    const card = popCard(win, { id: 'one', parent: library.grid });
+    win.ApiClient = makeThemeApiClient({ items: new Map([['one', movieWithArt('one')]]) });
+    const card = makeCard(win, { id: 'one', parent: library.grid });
     theme.setFocusedCard(card);
     await settle();
 
@@ -961,640 +735,12 @@ test('focusing a card on a library route pops it out there too', async () => {
     win.images[0].onload();
     assert.ok(theme.state().backdropLayers[0].classList.contains('af-on'));
     assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
-    // The popout belongs to a card, not to a route: the grids get it on the
-    // same terms Home does, which the in-flow band it replaced never could.
-    assert.strictEqual(theme.state().poppedCard, card);
-    assert.ok(card.classList.contains('af-popped'));
-    assert.ok(theme.state().ui.popout.classList.contains('af-show'));
-    // The Home-only chrome stays down all the same.
-    assert.strictEqual(theme.state().ui.hint.hidden, true);
-});
-
-// ---------------------------------------------------------------------------
-// Popout geometry
-// ---------------------------------------------------------------------------
-
-test('artOf measures the card tile and falls back to the card itself', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { parent: home.sections[0] });
-    const tile = card.querySelector('.cardScalable');
-    assert.strictEqual(theme.artOf(card), tile);
-    tile.remove();
-    assert.strictEqual(theme.artOf(card), card, 'a tile-less card still measures');
-    assert.strictEqual(theme.artOf(null), null);
-});
-
-test('popoutScale reads the token and only believes a scale between 1 and 3', () => {
-    const { win, theme } = onHome();
-    const style = win.document.documentElement.style;
-    assert.strictEqual(theme.popoutScale(), 1.32, 'no token: the built-in default');
-    style.setProperty('--af-popout-scale', '1.5');
-    assert.strictEqual(theme.popoutScale(), 1.5);
-    for (const junk of ['', 'wide', '1', '3', '0.8', '4']) {
-        style.setProperty('--af-popout-scale', junk);
-        assert.strictEqual(theme.popoutScale(), 1.32, junk || '(empty)');
-    }
-});
-
-test('readToken believes a number strictly inside the range and nothing else', () => {
-    const { win, theme } = onHome();
-    const style = win.document.documentElement.style;
-    assert.strictEqual(theme.readToken('--af-probe', 0, 10, 7), 7, 'missing: the fallback');
-    style.setProperty('--af-probe', '4.5');
-    assert.strictEqual(theme.readToken('--af-probe', 0, 10, 7), 4.5);
-    style.setProperty('--af-probe', '260px');
-    assert.strictEqual(theme.readToken('--af-probe', 0, 1000, 7), 260, 'a unit is parsed off');
-    // The range is exclusive at both ends, so a value sitting exactly on a
-    // bound is read as junk rather than believed.
-    for (const junk of ['', 'wide', 'NaN', '0', '10', '-3', '11']) {
-        style.setProperty('--af-probe', junk);
-        assert.strictEqual(theme.readToken('--af-probe', 0, 10, 7), 7, junk || '(empty)');
-    }
-});
-
-test('popoutMinWidth reads the floor token and falls back to 200', () => {
-    const { win, theme } = onHome();
-    const style = win.document.documentElement.style;
-    assert.strictEqual(theme.popoutMinWidth(), 200, 'no token: the built-in default');
-    style.setProperty('--af-popout-min-width', '260px');
-    assert.strictEqual(theme.popoutMinWidth(), 260);
-    for (const junk of ['', 'narrow', '0', '2000', '-40']) {
-        style.setProperty('--af-popout-min-width', junk);
-        assert.strictEqual(theme.popoutMinWidth(), 200, junk || '(empty)');
-    }
-});
-
-test('headerBottom measures a pinned header and ignores one that has scrolled off', () => {
-    const { win, theme } = onHome();
-    assert.strictEqual(theme.headerBottom(), 0, 'no header at all');
-    const header = pinHeader(win, 88);
-    assert.strictEqual(theme.headerBottom(), 88);
-    setRect(header, { left: 0, top: 40, width: 1280, height: 88 });
-    assert.strictEqual(theme.headerBottom(), 0, 'scrolled down the page, not in the way');
-    setRect(header, { left: 0, top: -88, width: 1280, height: 88 });
-    assert.strictEqual(theme.headerBottom(), 0, 'scrolled off the top');
-});
-
-test('headerBottom ignores a legacy header Jellyfin 12 has hidden and measures the MUI one', () => {
-    const { win, theme } = onHome();
-    // Measured live over CEF's debug port against a 12.0.0 server: .skinHeader is
-    // still in the DOM but its wrapper is display:none, so every number on its
-    // rect is zero, and the real header is a MuiAppBar at z-index 1100.
-    const legacy = win.document.createElement('div');
-    legacy.className = 'skinHeader';
-    win.document.body.appendChild(legacy);
-    setRect(legacy, { left: 0, top: 0, width: 0, height: 0 });
-    assert.strictEqual(theme.headerBottom(), 0, 'a hidden legacy header is not in the way');
-
-    const bar = win.document.createElement('header');
-    bar.className = 'MuiPaper-root MuiAppBar-root MuiAppBar-colorDefault';
-    win.document.body.appendChild(bar);
-    setRect(bar, { left: 0, top: 0, width: 2048, height: 48 });
-    assert.strictEqual(theme.headerBottom(), 48, 'the MUI header is the one in the way');
-});
-
-test('headerBottom takes the lower edge when a server shows both headers', () => {
-    const { win, theme } = onHome();
-    pinHeader(win, 88);
-    const bar = win.document.createElement('header');
-    bar.className = 'MuiAppBar-root';
-    win.document.body.appendChild(bar);
-    setRect(bar, { left: 0, top: 0, width: 2048, height: 48 });
-    assert.strictEqual(theme.headerBottom(), 88, 'the popout has to clear both');
-});
-
-test('placePopout centres the popout on the card and sizes the art from it', () => {
-    const { win, home, theme } = onHome();
-    const card = popCard(win, { parent: home.sections[0] });
-    // A 200x300 tile at x=100, grown 1.32x and centred on the tile's own x=200.
-    const box = theme.placePopout(card);
-    assert.deepStrictEqual(box, { left: 68, top: 152, width: 264, artHeight: 396 });
+    assert.ok(card.classList.contains('af-focused'));
+    // The hint is Home-only chrome: on a grid it is never asked for.
+    assert.strictEqual(theme.state().overlaysWanted, false);
     const ui = theme.state().ui;
-    assert.strictEqual(ui.popout.style.left, '68px');
-    assert.strictEqual(ui.popout.style.top, '152px');
-    assert.strictEqual(ui.popout.style.width, '264px');
-    assert.strictEqual(ui.art.style.height, '396px');
-});
-
-test('placePopout clamps a card at either end of a rail inward', () => {
-    const { win, home, theme } = onHome();
-    const EDGE = 16;
-    const first = popCard(win, { parent: home.sections[0] }, { left: 8 });
-    const a = theme.placePopout(first);
-    assert.strictEqual(a.left, EDGE, 'the first card opens inward, not off-screen');
-
-    const last = popCard(win, { parent: home.sections[0] }, { left: 1060 });
-    const b = theme.placePopout(last);
-    assert.strictEqual(b.left + b.width, win.innerWidth - EDGE, 'and so does the last');
-    assert.ok(b.left > a.left);
-});
-
-test('placePopout keeps the poster aspect when the viewport caps the width', () => {
-    const { win, home, theme } = onHome({ innerWidth: 300 });
-    // 400 wide is already more than the capped 300 - 2*16 the popout may have.
-    const card = popCard(win, { parent: home.sections[0] }, { width: 400, height: 600 });
-    const box = theme.placePopout(card);
-    assert.strictEqual(box.width, 300 - 32, 'capped, so it has somewhere to shift to');
-    assert.strictEqual(box.artHeight, 402, 'height follows the clamped width, not the scale');
-    assert.strictEqual(box.artHeight / box.width, 600 / 400);
-});
-
-test('placePopout widens a small card to the floor and keeps the art proportional', () => {
-    const { win, home, theme } = onHome();
-    // A square-ish music tile: 120 x 1.32 is 158, too narrow for a readable
-    // drawer line, so the floor takes over.
-    const small = popCard(win, { parent: home.sections[0] }, { width: 120, height: 180 });
-    const box = theme.placePopout(small);
-    assert.strictEqual(box.width, 200, 'the floor beat the proportional width');
-    // Widening enlarges the poster rather than stretching it: the art height
-    // follows the *clamped* width, so the card's aspect survives the floor.
-    assert.strictEqual(box.artHeight, 300);
-    assert.strictEqual(box.artHeight / box.width, 180 / 120);
-    assert.strictEqual(theme.state().ui.art.style.height, '300px');
-
-    // An ordinary rail card is already wider than the floor, which is the
-    // whole point of setting it low — a floor that bit here would cost height
-    // on every card to buy width on one.
-    const normal = popCard(win, { parent: home.sections[1] });
-    assert.strictEqual(theme.placePopout(normal).width, 264);
-
-    // And the floor is the token's, not a constant baked into the geometry.
-    win.document.documentElement.style.setProperty('--af-popout-min-width', '300px');
-    const raised = theme.placePopout(small);
-    assert.strictEqual(raised.width, 300);
-    assert.strictEqual(raised.artHeight / raised.width, 180 / 120);
-});
-
-test('placePopout caps the art to what is left of the band under a tall drawer', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    const EDGE = 16;
-    // Proportionally the art wants 396px, and the drawer already eats more of
-    // the band than that leaves. The art is `cover`, so it crops rather than
-    // hanging the popout off the bottom of the screen.
-    setRect(ui.drawer, { width: 264, height: 400 });
-    const band = win.innerHeight - EDGE * 2;
-    const capped = theme.placePopout(card);
-    assert.strictEqual(capped.artHeight, band - 400);
-    assert.ok(capped.artHeight < 396, 'reduced, not left proportional');
-    assert.strictEqual(capped.artHeight + 400, band, 'exactly fills the band, never more');
-    assert.strictEqual(ui.art.style.height, capped.artHeight + 'px');
-
-    // A pinned header comes out of the band too, so the same drawer crops the
-    // art further under one.
-    pinHeader(win, 88);
-    const underHeader = theme.placePopout(card);
-    assert.strictEqual(underHeader.artHeight, band - 88 - 400);
-    assert.ok(underHeader.artHeight < capped.artHeight);
-});
-
-test('placePopout never crops the art below the floor, however tall the drawer', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    // 688 of band against a 660px drawer leaves 28px — below that the art has
-    // stopped being a poster and is just a strip, so it holds at 96.
-    setRect(ui.drawer, { width: 264, height: 660 });
-    assert.strictEqual(theme.placePopout(card).artHeight, 96);
-    // A drawer taller than the whole band cannot push it any lower.
-    setRect(ui.drawer, { width: 264, height: 900 });
-    assert.strictEqual(theme.placePopout(card).artHeight, 96);
-    assert.strictEqual(ui.art.style.height, '96px');
-});
-
-test('placePopout clamps the popout below a pinned header and above the fold', () => {
-    const { win, home, theme } = onHome();
-    pinHeader(win, 88);
-    const high = popCard(win, { parent: home.sections[0] }, { top: 50 });
-    assert.strictEqual(theme.placePopout(high).top, 88 + 16, 'clear of the header');
-    assert.strictEqual(theme.state().ui.popout.style.top, '104px');
-
-    // The drawer grows past the bottom of the art, so it is part of what has
-    // to fit: a tall one lifts the whole popout off the bottom edge.
-    setRect(theme.state().ui.drawer, { width: 264, height: 200 });
-    const low = popCard(win, { parent: home.sections[0] }, { top: 380 });
-    assert.strictEqual(theme.placePopout(low).top, 720 - 16 - (396 + 200));
-});
-
-test('placePopout paints nothing for a card it cannot measure', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    assert.strictEqual(theme.placePopout(popCard(win, {})), null, 'never in the document');
-    // In the rail, but laid out as 0x0 - a rail that has not rendered yet.
-    assert.strictEqual(theme.placePopout(makeCard(win, { parent: home.sections[0] })), null);
-    assert.strictEqual(theme.placePopout(null), null);
-    assert.strictEqual(ui.popout.style.left, undefined, 'no popout was painted at 0,0');
-});
-
-// ---------------------------------------------------------------------------
-// Rendering the popout
-// ---------------------------------------------------------------------------
-
-test('cloneArt copies the tile, drops the canvas and disarms the delegation', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { action: 'play', link: true, parent: home.sections[0] });
-    const tile = card.querySelector('.cardScalable');
-    tile.id = 'cardScalable-1';
-    tile.appendChild(win.document.createElement('canvas'));
-    const overlay = win.document.createElement('div');
-    overlay.className = 'cardOverlayContainer';
-    tile.appendChild(overlay);
-    const indicators = win.document.createElement('div');
-    indicators.className = 'cardIndicators';
-    tile.appendChild(indicators);
-
-    const clone = theme.cloneArt(card);
-    assert.notStrictEqual(clone, tile, 'a copy, not the card tile itself');
-    assert.ok(clone.classList.contains('cardScalable'));
-    assert.strictEqual(clone.id, '', 'a duplicate id would break getElementById');
-    assert.strictEqual(clone.querySelector('canvas'), null, 'a cloned blurhash paints empty');
-    assert.strictEqual(clone.querySelector('.cardOverlayContainer'), null);
-    assert.ok(clone.querySelector('.cardIndicators'), 'everything else survives');
-    // The card itself is left exactly as it was.
-    assert.ok(tile.querySelector('canvas'));
-    assert.ok(card.querySelector('.cardOverlayButton[data-action="play"]'));
-});
-
-test('cloneArt disarms data-action without deleting the art it sits on', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { link: true, parent: home.sections[0] });
-    const tile = card.querySelector('.cardScalable');
-    tile.setAttribute('data-action', 'link');
-    // jf-web 10.11.11 hangs data-action="link" on .cardImageContainer, which
-    // *is* the picture: removing the node would remove the art. The attribute
-    // comes off instead, or jellyfin-web's delegated handler would resolve a
-    // click in the clone against whatever [data-id] the popout sits over.
-    const clone = theme.cloneArt(card);
-    assert.ok(clone.querySelector('.cardImageContainer'), 'the art survived');
-    assert.strictEqual(clone.querySelectorAll('[data-action]').length, 0, 'disarmed');
-    assert.strictEqual(clone.getAttribute('data-action'), null, 'the root too');
-});
-
-test('cloneArt has nothing to copy when the card has no tile', () => {
-    const { win, theme } = onHome();
-    const bare = win.document.createElement('div');
-    bare.className = 'card';
-    assert.strictEqual(theme.cloneArt(bare), null);
-    assert.strictEqual(theme.cloneArt(null), null);
-});
-
-test('setDiscAction renames the disc button and swaps its glyph', () => {
-    const { theme } = onHome();
-    const play = theme.state().ui.play;
-    theme.setDiscAction(play, 'af-po-glyph-browse', 'Browse');
-    // Icon-only, so the accessible name has to come from the label.
-    assert.strictEqual(play.getAttribute('aria-label'), 'Browse');
-    assert.strictEqual(play.title, 'Browse');
-    assert.strictEqual(play.firstChild.className, 'af-po-glyph af-po-glyph-browse');
-
-    theme.setDiscAction(play, 'af-po-glyph-play', 'Resume');
-    assert.strictEqual(play.getAttribute('aria-label'), 'Resume');
-    assert.strictEqual(play.firstChild.className, 'af-po-glyph af-po-glyph-play');
-    theme.setDiscAction(null, 'af-po-glyph-play', 'Play'); // never throws
-});
-
-test('writeJoined writes one dot-separated text node and hides an empty line', () => {
-    const { win, theme } = onHome();
-    const el = win.document.createElement('div');
-    theme.writeJoined(el, ['S1 E4', 'Pilot', '2011']);
-    assert.strictEqual(el.textContent, 'S1 E4 · Pilot · 2011');
-    // One text node, not a node per fact: the separator is punctuation here,
-    // and a single node is what lets the line ellipsize as prose.
-    assert.strictEqual(el.childNodes.length, 1);
-    assert.strictEqual(el.children.length, 0);
-    assert.strictEqual(el.hidden, false);
-
-    theme.writeJoined(el, ['2016']);
-    assert.strictEqual(el.textContent, '2016', 'one fact carries no separator');
-
-    theme.writeJoined(el, []);
-    assert.strictEqual(el.textContent, '');
-    assert.strictEqual(el.hidden, true, 'an empty tier holds no gap in the drawer');
-});
-
-test('writeBadges writes a box per label and replaces the previous set', () => {
-    const { win, theme } = onHome();
-    const el = win.document.createElement('div');
-    theme.writeBadges(el, ['PG-13', '4K', 'HDR10']);
-    assert.deepStrictEqual(childTexts(el), ['PG-13', '4K', 'HDR10']);
-    assert.deepStrictEqual(
-        el.children.map((b) => b.className),
-        ['af-po-badge', 'af-po-badge', 'af-po-badge']
-    );
-    assert.strictEqual(el.hidden, false);
-
-    theme.writeBadges(el, ['TV-MA']);
-    assert.deepStrictEqual(childTexts(el), ['TV-MA'], 'replaced, not appended to');
-
-    theme.writeBadges(el, []);
-    assert.strictEqual(el.children.length, 0);
-    assert.strictEqual(el.hidden, true);
-});
-
-test('writePopout puts the card tile in the art slot and replaces the drawer', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.writePopout({ Type: 'Movie', Name: 'The Matrix', ProductionYear: 1999 }, card);
-    assert.strictEqual(ui.art.children.length, 1);
-    assert.ok(ui.art.children[0].classList.contains('cardScalable'));
-    assert.strictEqual(ui.title.textContent, 'The Matrix');
-    assert.strictEqual(ui.meta.textContent, '1999');
-    assert.strictEqual(theme.state().shownCard, card);
-
-    const other = popCard(win, { parent: home.sections[1] });
-    theme.writePopout({ Type: 'Movie', Name: 'Amelie', ProductionYear: 2001 }, other);
-    assert.strictEqual(ui.art.children.length, 1, 'the first clone went with it');
-    assert.strictEqual(ui.title.textContent, 'Amelie', 'replaced, not appended to');
-    assert.strictEqual(ui.meta.textContent, '2001');
-    assert.strictEqual(theme.state().shownCard, other);
-});
-
-test('writePopout fills the four drawer tiers from the item and hides the empty ones', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.writePopout({
-        Type: 'Episode',
-        Name: 'Good News About Hell',
-        SeriesName: 'Severance',
-        ParentIndexNumber: 1,
-        IndexNumber: 2,
-        ProductionYear: 2022,
-        RunTimeTicks: 600000000 * 47,
-        OfficialRating: 'TV-MA',
-        CommunityRating: 8.1,
-        Genres: ['Drama', 'Mystery', 'Sci-Fi & Fantasy', 'Thriller'],
-        MediaStreams: [{ Type: 'Video', Width: 3840, VideoRangeType: 'HDR10' }]
-    }, card);
-    assert.strictEqual(ui.title.textContent, 'Severance', 'the series, not the episode');
-    assert.deepStrictEqual(childTexts(ui.badges), ['TV-MA', '4K', 'HDR10']);
-    assert.strictEqual(
-        ui.meta.textContent,
-        'S1 E2 · Good News About Hell · 2022 · 47m · ★ 8.1'
-    );
-    assert.strictEqual(ui.genres.textContent, 'Drama · Mystery · Sci-Fi & Fantasy');
-    for (const el of [ui.badges, ui.meta, ui.genres]) assert.strictEqual(el.hidden, false);
-
-    // A sparse item leaves three of the four tiers with nothing to say, and an
-    // empty tier is hidden rather than left holding a gap in the drawer.
-    theme.writePopout({ Type: 'Movie', Name: 'Untitled' }, card);
-    assert.strictEqual(ui.title.textContent, 'Untitled');
-    assert.strictEqual(ui.badges.hidden, true);
-    assert.strictEqual(ui.meta.hidden, true);
-    assert.strictEqual(ui.genres.hidden, true);
-    assert.strictEqual(ui.badges.children.length, 0, 'the old badges went with it');
-});
-
-test('writePopout labels a resumable item Resume and a fresh one Play', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.writePopout({ Type: 'Movie', Name: 'A' }, card);
-    assert.strictEqual(ui.play.getAttribute('aria-label'), 'Play');
-    assert.strictEqual(ui.details.hidden, false);
-
-    theme.writePopout(
-        { Type: 'Movie', Name: 'B', UserData: { PlaybackPositionTicks: 5 } }, card
-    );
-    assert.strictEqual(ui.play.getAttribute('aria-label'), 'Resume');
-    assert.strictEqual(ui.play.firstChild.className, 'af-po-glyph af-po-glyph-play');
-});
-
-test('writePopout turns a folder into a Browse-only panel', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.writePopout({ Type: 'BoxSet', Name: 'Trilogy', ChildCount: 3 }, card);
-    assert.strictEqual(ui.play.getAttribute('aria-label'), 'Browse');
-    assert.strictEqual(ui.play.firstChild.className, 'af-po-glyph af-po-glyph-browse');
-    assert.strictEqual(ui.details.hidden, true, 'a box set is browsed, not opened');
-    assert.strictEqual(ui.title.textContent, 'Trilogy');
-    assert.strictEqual(ui.meta.textContent, '3 items');
-    assert.strictEqual(ui.badges.hidden, true, 'a container has no file to describe');
-    assert.strictEqual(ui.genres.hidden, true);
-});
-
-test('renderPopout shows the popout over the card and moves af-popped with it', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const first = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, first);
-    assert.ok(first.classList.contains('af-popped'), 'cancels the tile hover scale');
-    assert.strictEqual(theme.state().poppedCard, first);
-    assert.strictEqual(ui.popout.hidden, false);
-    assert.ok(ui.popout.classList.contains('af-show'));
-    assert.strictEqual(ui.title.textContent, 'Arrival');
-    // The title is visible in the drawer now, so an aria-label on the
-    // container would override the content it duplicates.
-    assert.strictEqual(ui.popout.getAttribute('aria-label'), null);
-    assert.strictEqual(ui.popout.style.left, '68px', 'placed, not left at 0,0');
-
-    const second = popCard(win, { parent: home.sections[1] }, { left: 400 });
-    theme.renderPopout({ Type: 'Episode', SeriesName: 'Severance', Name: 'Ep 1' }, second);
-    assert.ok(!first.classList.contains('af-popped'), 'only ever one popped card');
-    assert.ok(second.classList.contains('af-popped'));
-    assert.strictEqual(theme.state().poppedCard, second);
-    assert.strictEqual(ui.title.textContent, 'Severance');
-    assert.strictEqual(ui.popout.style.left, '368px', 're-anchored');
-});
-
-test('renderPopout gives up rather than paint a popout over nothing', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { parent: home.sections[0] }); // never laid out
-    theme.renderPopout({ Type: 'Movie', Name: 'A' }, card);
-    assert.strictEqual(theme.state().poppedCard, null);
-    assert.ok(!card.classList.contains('af-popped'));
-    assert.ok(!theme.state().ui.popout.classList.contains('af-show'));
-});
-
-test('hidePopout drops the selection at once and hides the element on the timer', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.setBackdrop('https://server/a.jpg');
-    win.images[0].onload();
-    theme.setFocusedCard(card);
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
-
-    theme.hidePopout();
-    assert.ok(!card.classList.contains('af-popped'));
-    assert.ok(!card.classList.contains('af-focused'));
-    const state = theme.state();
-    assert.strictEqual(state.poppedCard, null);
-    assert.strictEqual(state.shownCard, null);
-    assert.strictEqual(state.shownItem, null);
-    assert.strictEqual(state.focusedCard, null, 're-entering the card opens it again');
-    assert.ok(!ui.popout.classList.contains('af-show'));
-    assert.strictEqual(ui.popout.hidden, false, 'still there for the fade-out');
-    win.timers.advance(180);
-    assert.strictEqual(ui.popout.hidden, true);
-    // The art is the page background on both routes; dropping it on every
-    // pointer exit would strobe it across a rail.
-    assert.strictEqual(theme.state().currentBackdropUrl, 'https://server/a.jpg');
-});
-
-test('syncPopout follows the card when the page scrolls under it', () => {
-    const { win, home, theme } = onHome();
-    win.timers.runAll();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
-    assert.strictEqual(ui.popout.style.top, '152px');
-
-    setRect(card.querySelector('.cardScalable'),
-        { left: 100, top: 120, width: 200, height: 300 });
-    theme.syncPopout();
-    assert.strictEqual(theme.state().syncQueued, true, 'coalesced, not measured inline');
-    theme.syncPopout();
-    win.timers.runAll();
-    assert.strictEqual(ui.popout.style.top, '72px', 'followed the card');
-    assert.strictEqual(theme.state().syncQueued, false);
-    assert.strictEqual(theme.state().poppedCard, card);
-});
-
-test('syncPopout closes the popout when the card goes out from under it', () => {
-    const { win, home, theme } = onHome();
-    win.timers.runAll();
-    const scrolled = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'A' }, scrolled);
-    setRect(scrolled.querySelector('.cardScalable'),
-        { left: 100, top: -400, width: 200, height: 300 });
-    theme.syncPopout();
-    win.timers.runAll();
-    assert.strictEqual(theme.state().poppedCard, null, 'scrolled out of the viewport');
-
-    const gone = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'B' }, gone);
-    gone.remove();
-    theme.syncPopout();
-    win.timers.runAll();
-    assert.strictEqual(theme.state().poppedCard, null, 'nothing left to anchor to');
-});
-
-test('inPopout claims the popout subtree and nothing else', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    assert.strictEqual(theme.inPopout(ui.popout), true);
-    assert.strictEqual(theme.inPopout(ui.play), true, 'the pointer crosses it on the way');
-    assert.strictEqual(theme.inPopout(makeCard(win, { parent: home.sections[0] })), false);
-    assert.strictEqual(theme.inPopout(null), false);
-});
-
-// ---------------------------------------------------------------------------
-// The two buttons
-// ---------------------------------------------------------------------------
-
-test('primaryCardButton finds resume, play and the primary fab', () => {
-    const { win, home, theme } = onHome();
-    const resume = makeCard(win, { action: 'resume', parent: home.sections[0] });
-    assert.strictEqual(
-        theme.primaryCardButton(resume), resume.querySelector('[data-action="resume"]')
-    );
-    const play = makeCard(win, { action: 'play', parent: home.sections[0] });
-    assert.ok(theme.primaryCardButton(play));
-    const plain = makeCard(win, { parent: home.sections[0] });
-    assert.strictEqual(theme.primaryCardButton(plain), null);
-});
-
-test('cardLinkTarget finds the delegated link node', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { link: true, parent: home.sections[0] });
-    assert.strictEqual(theme.cardLinkTarget(card), card.querySelector('.cardImageContainer'));
-    assert.strictEqual(theme.cardLinkTarget(makeCard(win, { parent: home.sections[0] })), null);
-});
-
-test('clickSyntheticAction clicks an itemAction inside the card and removes it', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { parent: home.sections[0] });
-    const seen = [];
-    home.container.addEventListener('click', (e) => {
-        seen.push([e.target.getAttribute('data-action'), e.target.parentNode === card]);
-    });
-    theme.clickSyntheticAction(card, 'resume');
-    assert.deepStrictEqual(seen, [['resume', true]], 'still attached while it dispatches');
-    assert.strictEqual(card.querySelector('.itemAction'), null, 'removed synchronously');
-});
-
-test('Play clicks the card button for a normal item and the link for a folder', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { action: 'play', link: true, parent: home.sections[0] });
-    theme.writePopout({ Type: 'Movie', Id: 'a' }, card);
-    theme.onPlayClick();
-    assert.deepStrictEqual(card.clicks, [['overlay', 'play']]);
-
-    const folder = makeCard(win, { action: 'play', link: true, parent: home.sections[0] });
-    theme.writePopout({ Type: 'CollectionFolder', Id: 'lib' }, folder);
-    theme.onPlayClick();
-    assert.deepStrictEqual(folder.clicks, [['link']], 'a library is browsed, not played');
-});
-
-test('Play falls back to a synthetic resume/play action when the card has no button', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { parent: home.sections[0] });
-    const seen = [];
-    home.container.addEventListener('click', (e) => seen.push(e.target.getAttribute('data-action')));
-    theme.writePopout({ Type: 'Movie', UserData: { PlaybackPositionTicks: 10 } }, card);
-    theme.onPlayClick();
-    theme.writePopout({ Type: 'Movie' }, card);
-    theme.onPlayClick();
-    assert.deepStrictEqual(seen, ['resume', 'play']);
-});
-
-test('Play acts on the item the panel is showing, not on a later hover', () => {
-    const { win, home, theme } = onHome();
-    const shown = makeCard(win, { id: 'shown', action: 'play', parent: home.sections[0] });
-    const hovered = makeCard(win, { id: 'hovered', action: 'play', parent: home.sections[1] });
-    win.ApiClient = makeThemeApiClient();
-    theme.writePopout({ Type: 'Movie', Id: 'shown' }, shown);
-    theme.setFocusedCard(hovered); // the fetch for it has not resolved
-    theme.onPlayClick();
-    assert.deepStrictEqual(shown.clicks, [['overlay', 'play']]);
-    assert.deepStrictEqual(hovered.clicks, []);
-});
-
-test('Play does nothing once the card has left the document', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { action: 'play', parent: home.sections[0] });
-    theme.writePopout({ Type: 'Movie' }, card);
-    card.remove();
-    theme.onPlayClick();
-    assert.deepStrictEqual(card.clicks, []);
-});
-
-test('navigateToDetails builds the hash from the item and the card server id', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { id: 'a b', serverId: 'srv 1', parent: home.sections[0] });
-    theme.navigateToDetails(card, { Id: 'a b', ServerId: 'ignored' });
-    assert.strictEqual(win.location.hash, '#/details?id=a%20b&serverId=srv%201');
-});
-
-test('navigateToDetails falls back to the item, then to the ApiClient, then omits the server', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { id: 'x', parent: home.sections[0] });
-    theme.navigateToDetails(card, { Id: 'x', ServerId: 'from-item' });
-    assert.match(win.location.hash, /serverId=from-item$/);
-
-    win.ApiClient = makeThemeApiClient({ serverId: 'from-client' });
-    theme.navigateToDetails(card, { Id: 'x' });
-    assert.match(win.location.hash, /serverId=from-client$/);
-
-    win.ApiClient = null;
-    theme.navigateToDetails(card, { Id: 'x' });
-    assert.strictEqual(win.location.hash, '#/details?id=x');
-
-    win.location.hash = '#/home.html';
-    theme.navigateToDetails(null, null);
-    assert.strictEqual(win.location.hash, '#/home.html', 'no id, no navigation');
-});
-
-test('Details navigates to the shown item', () => {
-    const { win, home, theme } = onHome();
-    const card = makeCard(win, { id: 'shown', parent: home.sections[0] });
-    theme.writePopout({ Type: 'Movie', Id: 'shown' }, card);
-    theme.onDetailsClick();
-    assert.strictEqual(win.location.hash, '#/details?id=shown');
+    assert.ok(!ui || ui.hint.hidden, 'no hint on a library grid');
+    assertNoPopout(win);
 });
 
 // ---------------------------------------------------------------------------
@@ -1604,22 +750,22 @@ test('Details navigates to the shown item', () => {
 test('cardFrom only claims cards inside the home rails', () => {
     const { win, home, theme } = onHome();
     const card = makeCard(win, { parent: home.sections[0] });
-    assert.strictEqual(theme.cardFrom(card.querySelector('.cardScalable')), card);
+    sameNode(theme.cardFrom(card.querySelector('.cardScalable')), card);
 
     const stray = makeCard(win, { parent: win.document.body });
-    assert.strictEqual(theme.cardFrom(stray), null);
-    assert.strictEqual(theme.cardFrom(null), null);
-    assert.strictEqual(theme.cardFrom(win.document.body), null);
+    sameNode(theme.cardFrom(stray), null);
+    sameNode(theme.cardFrom(null), null);
+    sameNode(theme.cardFrom(win.document.body), null);
 });
 
 test('cardFrom also claims cards inside a library grid', () => {
     const { win, library, theme } = onLibrary();
     const card = makeCard(win, { parent: library.grid });
-    assert.strictEqual(theme.cardFrom(card.querySelector('.cardScalable')), card);
+    sameNode(theme.cardFrom(card.querySelector('.cardScalable')), card);
 
     // Same page, but outside the grid: jellyfin-web keeps that card.
     const stray = makeCard(win, { parent: library.tab });
-    assert.strictEqual(theme.cardFrom(stray), null);
+    sameNode(theme.cardFrom(stray), null);
 });
 
 test('focusin selects the card immediately and cancels a pending hover', () => {
@@ -1630,27 +776,25 @@ test('focusin selects the card immediately and cancels a pending hover', () => {
     theme.onPointerOver({ target: hovered });
     assert.ok(theme.state().hoverTimer, 'hover is pending');
     theme.onFocusIn({ target: focused });
-    assert.strictEqual(theme.state().focusedCard, focused);
+    sameNode(theme.state().focusedCard, focused);
     win.timers.advance(500);
-    assert.strictEqual(theme.state().focusedCard, focused, 'the hover was cancelled');
+    sameNode(theme.state().focusedCard, focused, 'the hover was cancelled');
 });
 
 test('hover is debounced and re-anchors to whichever card the pointer reaches', () => {
     const { win, home, theme } = onHome();
     win.ApiClient = makeThemeApiClient();
-    const one = popCard(win, { id: 'one', parent: home.sections[0] });
-    const two = popCard(win, { id: 'two', parent: home.sections[1] }, { left: 400 });
-    // The popout no longer sits in the flow, so there is no reflow-induced
-    // mouseover to guard against and no pointer-moved gate to arm.
+    const one = makeCard(win, { id: 'one', parent: home.sections[0] });
+    const two = makeCard(win, { id: 'two', parent: home.sections[1] });
     theme.onPointerOver({ target: one });
     assert.ok(theme.state().hoverTimer, 'debounced, not immediate');
-    assert.strictEqual(theme.state().focusedCard, null, 'not yet');
+    sameNode(theme.state().focusedCard, null, 'not yet');
     win.timers.advance(120);
-    assert.strictEqual(theme.state().focusedCard, one);
+    sameNode(theme.state().focusedCard, one);
 
     theme.onPointerOver({ target: two });
     win.timers.advance(120);
-    assert.strictEqual(theme.state().focusedCard, two, 're-anchored to the new card');
+    sameNode(theme.state().focusedCard, two, 're-anchored to the new card');
 });
 
 test('hovering the card that is already focused does nothing', () => {
@@ -1662,37 +806,58 @@ test('hovering the card that is already focused does nothing', () => {
     assert.strictEqual(theme.state().hoverTimer, 0);
 });
 
-test('a pointer leaving for anything but a card or the popout closes it', () => {
-    const { win, home, theme } = onHome();
-    const ui = theme.state().ui;
-    const card = popCard(win, { parent: home.sections[0] });
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
+test('a pointer leaving the cards drops the selection but keeps the art', async () => {
+    const { win, home, card, theme } = homeWithCard();
+    theme.setFocusedCard(card);
+    await settle();
+    win.images[0].onload();
 
-    // Inside the popout: the pointer is on its way to the disc buttons.
-    theme.onPointerOver({ target: ui.play });
-    assert.strictEqual(theme.state().poppedCard, card, 'crossing it is not leaving');
-
-    // A rail heading. The popout covers its own card, so the card's own
-    // mouseout never fires and nothing else would say the pointer had gone.
+    // A rail heading, or the page background: anything that is not a card.
     const heading = win.document.createElement('h2');
     home.sections[0].appendChild(heading);
     theme.onPointerOver({ target: heading });
-    assert.strictEqual(theme.state().poppedCard, null);
-    assert.ok(!ui.popout.classList.contains('af-show'));
+    sameNode(theme.state().focusedCard, null);
+    assert.ok(!card.classList.contains('af-focused'));
+    // The art is the page background and stays up until the next card, so
+    // sweeping across a rail does not strobe it.
+    assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
+    assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
+});
+
+test('a pointer leaving the cards cancels a pending hover and drops an art-less selection', () => {
+    const { win, home, theme } = onHome();
+    // No item behind either card: the fetch fails and nothing is ever painted,
+    // which is the case where only the ring says a card is selected.
+    win.ApiClient = makeThemeApiClient();
+    const one = makeCard(win, { id: 'one', parent: home.sections[0] });
+    const two = makeCard(win, { id: 'two', parent: home.sections[1] });
+    theme.setFocusedCard(one);
+    theme.onPointerOver({ target: two });
+    assert.ok(theme.state().hoverTimer, 'hover is pending');
+
+    theme.onPointerOver({ target: win.document.body });
+    assert.strictEqual(theme.state().hoverTimer, 0, 'the pending hover is cancelled');
+    sameNode(theme.state().focusedCard, null);
+    assert.ok(!one.classList.contains('af-focused'));
+    win.timers.advance(500);
+    sameNode(theme.state().focusedCard, null, 'the cancelled hover never lands');
+    assert.ok(!two.classList.contains('af-focused'));
 });
 
 // ---------------------------------------------------------------------------
 // Visibility, refresh and the page observer
 // ---------------------------------------------------------------------------
 
-test('ensureUi rebuilds the panels when jellyfin-web has orphaned them', () => {
-    const { theme } = onHome();
+test('ensureUi rebuilds the hint when jellyfin-web has orphaned it', () => {
+    const { win, theme } = onHome();
     const first = theme.state().ui;
     theme.ensureUi();
-    assert.strictEqual(theme.state().ui, first, 'still connected: kept');
-    first.popout.remove();
+    sameNode(theme.state().ui, first, 'still connected: kept');
+    first.hint.remove();
     theme.ensureUi();
-    assert.notStrictEqual(theme.state().ui, first, 'orphaned: rebuilt');
+    assert.ok(theme.state().ui !== first, 'orphaned: rebuilt');
+    assert.ok(theme.state().ui.hint.isConnected);
+    assert.strictEqual(win.document.querySelectorAll('#af-hint').length, 1);
 });
 
 test('showOverlays shows the controller hint on Home and hides it elsewhere', () => {
@@ -1701,12 +866,6 @@ test('showOverlays shows the controller hint on Home and hides it elsewhere', ()
     const ui = theme.state().ui;
     assert.strictEqual(ui.hint.hidden, false);
     assert.ok(ui.hint.classList.contains('af-show'));
-    // The server card was dropped at the owner's request, so the hint is the
-    // whole of the Home-only chrome now.
-    assert.strictEqual(ui.server, undefined);
-    // The popout is not Home chrome either: it belongs to a card, shows on the
-    // library grids too, and is driven by renderPopout/hidePopout alone.
-    assert.strictEqual(ui.popout.hidden, true);
 
     win.location.hash = '#/details?id=1';
     theme.showOverlays();
@@ -1714,47 +873,40 @@ test('showOverlays shows the controller hint on Home and hides it elsewhere', ()
     assert.ok(!ui.hint.classList.contains('af-show'));
 });
 
-test('leaveHome tears the popout down and drops the selection and the art', () => {
-    const { win, home, theme } = onHome();
-    win.ApiClient = makeThemeApiClient();
-    const card = popCard(win, { parent: home.sections[0] });
+test('leaveHome drops the selection, the art and the hint', async () => {
+    const { win, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
-    theme.renderPopout({ Type: 'Movie', Name: 'A' }, card);
-    theme.setBackdrop('https://server/a.jpg');
+    await settle();
     win.images[0].onload();
+    assert.strictEqual(theme.state().ui.hint.hidden, false);
 
     theme.leaveHome();
     const state = theme.state();
-    assert.strictEqual(state.focusedCard, null);
-    assert.strictEqual(state.poppedCard, null);
-    assert.strictEqual(state.shownItem, null);
+    sameNode(state.focusedCard, null);
     assert.strictEqual(state.currentBackdropUrl, null);
+    assert.ok(!win.document.documentElement.classList.contains('af-backdrop'));
     assert.strictEqual(state.overlaysWanted, false);
     assert.ok(!card.classList.contains('af-focused'));
-    assert.ok(!card.classList.contains('af-popped'));
-    assert.ok(!state.ui.popout.classList.contains('af-show'));
-    win.timers.advance(500);
-    assert.strictEqual(theme.state().ui.popout.hidden, true);
+    assert.strictEqual(state.ui.hint.hidden, true);
+    assert.ok(!state.ui.hint.classList.contains('af-show'));
 });
 
-test('leaveHome for a library grid keeps the selection and the art', () => {
-    const { win, home, theme } = onHome();
-    win.ApiClient = makeThemeApiClient();
-    const card = popCard(win, { parent: home.sections[0] });
+test('leaveHome for a library grid keeps the selection and the art', async () => {
+    const { win, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
-    theme.renderPopout({ Type: 'Movie', Name: 'A' }, card);
-    theme.setBackdrop('https://server/a.jpg');
+    await settle();
     win.images[0].onload();
+    const art = theme.state().currentBackdropUrl;
 
     theme.leaveHome(true);
     const state = theme.state();
-    assert.strictEqual(state.focusedCard, card, 'the grid goes on hovering it');
+    sameNode(state.focusedCard, card, 'the grid goes on hovering it');
     assert.ok(card.classList.contains('af-focused'));
-    assert.strictEqual(state.currentBackdropUrl, 'https://server/a.jpg', 'the art stays up');
-    // The popout goes either way: it is anchored to a viewport rect the
-    // outgoing page owns.
-    assert.strictEqual(state.poppedCard, null);
-    assert.ok(!card.classList.contains('af-popped'));
+    assert.strictEqual(state.currentBackdropUrl, art, 'the art stays up');
+    assert.ok(win.document.documentElement.classList.contains('af-backdrop'));
+    // The hint is Home chrome and goes either way.
+    assert.strictEqual(state.overlaysWanted, false);
+    assert.strictEqual(state.ui.hint.hidden, true);
 });
 
 test('decorateCards mirrors the item type onto the card and its tile, once', () => {
@@ -1772,31 +924,47 @@ test('decorateCards mirrors the item type onto the card and its tile, once', () 
     assert.strictEqual(movie.getAttribute('data-af-kind'), null, 'a scanned card is skipped');
 });
 
-test('refresh on Home marks the root and builds the panels', () => {
+test('refresh on Home marks the root and builds the hint', () => {
     const { win, theme } = onHome();
     theme.refresh();
     assert.ok(win.document.documentElement.classList.contains('af-home'));
-    assert.ok(theme.state().ui, 'panels exist');
-    assert.ok(theme.state().ui.popout.isConnected);
+    assert.ok(theme.state().ui, 'the hint exists');
     assert.ok(theme.state().ui.hint.isConnected);
-    // No server card is built at all any more, on any route.
+    // Neither the server card nor the card popout is built any more.
     assert.strictEqual(win.document.querySelectorAll('#af-server-panel').length, 0);
+    assertNoPopout(win);
 });
 
-test('refresh off Home clears af-home and tears the selection down', () => {
-    const { win, home, theme } = onHome();
-    win.ApiClient = makeThemeApiClient();
-    const card = popCard(win, { parent: home.sections[0] });
+test('refresh on Home keeps the selected card and its art while the rails stream in', async () => {
+    const { win, home, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
-    theme.renderPopout({ Type: 'Movie', Name: 'A' }, card);
-    win.location.hash = '#/details?id=1';
+    await settle();
+    win.images[0].onload();
+    const art = theme.state().currentBackdropUrl;
+
+    // Every batch of cards jellyfin-web streams into the rails queues one.
+    makeCard(win, { id: 'late', parent: home.sections[1] });
+    win.timers.runAll();
+    sameNode(theme.state().focusedCard, card);
+    assert.ok(card.classList.contains('af-focused'));
+    assert.strictEqual(theme.state().currentBackdropUrl, art);
+    assert.strictEqual(theme.state().ui.hint.hidden, false);
+});
+
+test('refresh off Home clears af-home and tears the selection, art and hint down', async () => {
+    const { win, card, theme } = homeWithCard();
+    theme.setFocusedCard(card);
+    await settle();
+    win.images[0].onload();
+    win.location.hash = '#/search';
     theme.refresh();
-    assert.ok(!win.document.documentElement.classList.contains('af-home'));
-    assert.strictEqual(theme.state().focusedCard, null);
-    assert.strictEqual(theme.state().poppedCard, null);
-    assert.ok(!theme.state().ui.popout.classList.contains('af-show'));
-    win.timers.advance(500);
-    assert.strictEqual(theme.state().ui.popout.hidden, true);
+    const html = win.document.documentElement;
+    assert.ok(!html.classList.contains('af-home'));
+    sameNode(theme.state().focusedCard, null);
+    assert.ok(!card.classList.contains('af-focused'));
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+    assert.ok(!html.classList.contains('af-backdrop'));
+    assert.strictEqual(theme.state().ui.hint.hidden, true);
 });
 
 test('refresh on a library route sets af-library alone and keeps the selection', () => {
@@ -1810,7 +978,7 @@ test('refresh on a library route sets af-library alone and keeps the selection',
     assert.ok(!html.classList.contains('af-home'), 'never both');
     // Cards stream into the grid long after the first hover, and each batch
     // queues a refresh; the art must not blink off under the cursor.
-    assert.strictEqual(theme.state().focusedCard, card);
+    sameNode(theme.state().focusedCard, card);
     assert.ok(card.classList.contains('af-focused'));
 });
 
@@ -1834,50 +1002,25 @@ test('refresh moving between Home and a library never leaves both classes set', 
     assert.ok(!html.classList.contains('af-library'));
 });
 
-test('refresh leaving a library grid for Home drops the grid selection', () => {
+test('refresh leaving a library grid for Home drops the grid selection', async () => {
     const { win, library, theme } = onLibrary();
-    const item = { Id: 'one', Type: 'Movie', Name: 'Arrival', BackdropImageTags: ['bt'] };
-    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
+    win.ApiClient = makeThemeApiClient({ items: new Map([['one', movieWithArt('one')]]) });
     const card = makeCard(win, { id: 'one', parent: library.grid });
-    return theme.fetchItem('one').then(() => {
-        theme.setFocusedCard(card);
-        return Promise.resolve().then(() => {
-            theme.refresh();
-            assert.ok(theme.state().focusedItem, 'the grid selection is live');
+    theme.setFocusedCard(card);
+    await settle();
+    win.images[0].onload();
+    theme.refresh();
+    sameNode(theme.state().focusedCard, card, 'the grid selection is live');
+    assert.match(theme.state().currentBackdropUrl, /Images\/Backdrop/);
 
-            // The card is going away with the outgoing page, and the popout is
-            // anchored to a viewport rect that page owns.
-            buildHome(win);
-            win.location.hash = '#/home.html';
-            theme.refresh();
-            assert.strictEqual(theme.state().focusedCard, null);
-            assert.strictEqual(theme.state().focusedItem, null);
-            assert.ok(!card.classList.contains('af-focused'));
-            assert.strictEqual(theme.state().currentBackdropUrl, null);
-        });
-    });
-});
-
-test('refresh re-measures the popout for the card that is still focused', () => {
-    const { win, home, theme } = onHome();
-    const item = { Id: 'one', Type: 'Movie', Name: 'Arrival' };
-    win.ApiClient = makeThemeApiClient({ items: new Map([['one', item]]) });
-    const card = popCard(win, { id: 'one', parent: home.sections[0] });
-    return theme.fetchItem('one').then(() => {
-        theme.setFocusedCard(card);
-        return Promise.resolve().then(() => {
-            const ui = theme.state().ui;
-            assert.strictEqual(ui.popout.style.left, '68px');
-            // Cards stream into the rails for seconds after the first hover,
-            // and every batch reflows the one the popout is standing over.
-            setRect(card.querySelector('.cardScalable'),
-                { left: 500, top: 200, width: 200, height: 300 });
-            theme.refresh();
-            win.timers.runAll();
-            assert.strictEqual(ui.popout.style.left, '468px', 're-measured, not left hanging');
-            assert.strictEqual(theme.state().poppedCard, card);
-        });
-    });
+    // The card is going away with the outgoing page.
+    buildHome(win);
+    win.location.hash = '#/home.html';
+    theme.refresh();
+    sameNode(theme.state().focusedCard, null);
+    assert.ok(!card.classList.contains('af-focused'));
+    assert.strictEqual(theme.state().currentBackdropUrl, null);
+    assert.ok(!win.document.documentElement.classList.contains('af-backdrop'));
 });
 
 test('watchPages attaches once and a rail mutation queues one refresh', () => {
@@ -1893,18 +1036,19 @@ test('watchPages attaches once and a rail mutation queues one refresh', () => {
     assert.strictEqual(theme.state().refreshQueued, false);
 });
 
-test('the popout repainting itself does not queue a refresh', () => {
-    const { win, home, theme } = onHome();
-    const card = popCard(win, { parent: home.sections[0] });
+test('selecting a card and showing the hint do not queue a refresh', async () => {
+    const { win, card, theme } = homeWithCard();
     win.timers.runAll();
     assert.strictEqual(theme.state().refreshQueued, false);
-    // The popout lives in <body>, outside .mainAnimatedPages, so the observer
-    // that catches cards streaming into the rails never sees it and needs no
-    // filter of its own. Nothing Astrofin draws lives in that subtree.
-    theme.renderPopout({ Type: 'Movie', Name: 'Arrival' }, card);
+    // .af-focused is an attribute write, which the rail observer does not ask
+    // for, and the hint lives in <body>, outside .mainAnimatedPages. Nothing
+    // Astrofin draws lives in that subtree, so the observer needs no filter.
+    theme.setFocusedCard(card);
+    await settle();
+    theme.showOverlays(true);
+    theme.decorateCards();
+    assert.strictEqual(theme.state().ui.hint.hidden, false);
     assert.strictEqual(theme.state().refreshQueued, false);
-    theme.state().ui.badges.appendChild(win.document.createElement('div'));
-    assert.strictEqual(theme.state().refreshQueued, false, 'own subtree is ignored');
 });
 
 test('queueRefresh coalesces a burst into a single refresh', () => {
@@ -1921,7 +1065,7 @@ test('start defers to DOMContentLoaded while the document is still loading', () 
     const win = makeThemeWindow();
     win.document.readyState = 'loading';
     const theme = loadTheme(win);
-    assert.strictEqual(win.document.getElementById('af-space'), null, 'nothing built yet');
+    sameNode(win.document.getElementById('af-space'), null, 'nothing built yet');
     const ready = win.document.listeners.filter((l) => l.type === 'DOMContentLoaded');
     assert.strictEqual(ready.length, 1);
     ready[0].fn({ type: 'DOMContentLoaded' });
@@ -2025,32 +1169,28 @@ test('a details route fetches nothing, builds nothing and leaves the stock page 
     assert.strictEqual(win.images.length, 0, 'no backdrop was requested');
     assert.strictEqual(theme.state().currentBackdropUrl, null);
     assert.ok(!html.classList.contains('af-backdrop'));
-    assert.strictEqual(win.document.getElementById('af-detail-panel'), null);
+    sameNode(win.document.getElementById('af-detail-panel'), null);
     assert.strictEqual(html.getAttribute('data-af-detail-type'), null);
     assert.strictEqual(html.getAttribute('data-af-backdrop-src'), null);
-    const ui = theme.state().ui;
-    assert.ok(!ui || ui.popout.hidden, 'no popout over a details page');
+    assertNoPopout(win);
 
     // jellyfin-web's own layout, node for node: neither poster copy moved,
     // nothing inserted into the right column, the Resume pill unannotated.
-    assert.strictEqual(detail.poster.parentNode, detail.primary);
-    assert.strictEqual(detail.posterMobile.parentNode, detail.ribbon);
+    sameNode(detail.poster.parentNode, detail.primary);
+    sameNode(detail.posterMobile.parentNode, detail.ribbon);
     assert.strictEqual(detail.secondary.children.length, 1);
-    assert.strictEqual(detail.secondary.children[0], detail.content);
+    sameNode(detail.secondary.children[0], detail.content);
     assert.strictEqual(detail.play.getAttribute('data-af-left'), null);
 });
 
 test('entering a details route from Home clears the art and the selection', async () => {
-    const { win, home, theme } = onHome();
-    const api = makeThemeApiClient({ items: new Map([['one', movieWithArt('one')]]) });
-    win.ApiClient = api;
-    const card = popCard(win, { id: 'one', parent: home.sections[0] });
+    const { win, api, card, theme } = homeWithCard();
     theme.setFocusedCard(card);
     await settle();
     win.images[0].onload();
     const html = win.document.documentElement;
     assert.ok(html.classList.contains('af-backdrop'), 'the card is driving the art');
-    assert.strictEqual(theme.state().poppedCard, card);
+    assert.ok(card.classList.contains('af-focused'));
 
     buildDetail(win);
     win.location.hash = '#/details?id=item-9&serverId=srv';
@@ -2062,11 +1202,9 @@ test('entering a details route from Home clears the art and the selection', asyn
     // item's own art replaced it.
     assert.strictEqual(theme.state().currentBackdropUrl, null);
     assert.ok(!html.classList.contains('af-backdrop'));
-    assert.strictEqual(theme.state().focusedCard, null);
-    assert.strictEqual(theme.state().focusedItem, null);
-    assert.strictEqual(theme.state().poppedCard, null);
+    sameNode(theme.state().focusedCard, null);
     assert.ok(!card.classList.contains('af-focused'));
-    assert.ok(!card.classList.contains('af-popped'));
+    assert.strictEqual(theme.state().ui.hint.hidden, true, 'the hint is Home-only');
     assert.deepStrictEqual(
         api.calls.filter((c) => c[0] === 'getItem').map((c) => c[2]),
         ['one'], 'the card fetch only, never the details item');
@@ -2089,8 +1227,7 @@ test('a refresh on a details route keeps no art or selection alive', () => {
     assert.ok(html.classList.contains('af-detail'));
     assert.strictEqual(theme.state().currentBackdropUrl, null);
     assert.ok(!html.classList.contains('af-backdrop'));
-    assert.strictEqual(theme.state().focusedCard, null);
-    assert.strictEqual(theme.state().focusedItem, null);
+    sameNode(theme.state().focusedCard, null);
     assert.ok(!card.classList.contains('af-focused'));
 });
 
@@ -2111,4 +1248,50 @@ test('a details page streaming in queues one refresh, and the refresh writes not
     // next one before this line, and the two would feed each other forever.
     assert.strictEqual(theme.state().refreshQueued, false);
     assert.strictEqual(detail.secondary.children.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// The removed card popout
+// ---------------------------------------------------------------------------
+
+test('no #af-popout is ever created, on any route or any way a card is selected', async () => {
+    const { win, home, card, theme } = homeWithCard([movieWithArt('one'), movieWithArt('two')]);
+    assertNoPopout(win);
+
+    // Hover, debounced, with the fetch coming back and the art going up.
+    theme.onPointerOver({ target: card.querySelector('.cardScalable') });
+    win.timers.advance(500);
+    await settle();
+    win.images[0].onload();
+    sameNode(theme.state().focusedCard, card);
+    assertNoPopout(win);
+
+    // Keyboard/controller focus on another card.
+    const two = makeCard(win, { id: 'two', parent: home.sections[1] });
+    theme.onFocusIn({ target: two });
+    await settle();
+    win.timers.runAll();
+    assertNoPopout(win);
+
+    // A library grid, and a card selected on it.
+    const library = buildLibrary(win);
+    win.location.hash = '#/movies.html?topParentId=lib1';
+    theme.refresh();
+    const gridCard = makeCard(win, { id: 'one', parent: library.grid });
+    theme.setFocusedCard(gridCard);
+    await settle();
+    win.timers.runAll();
+    assertNoPopout(win);
+
+    // A details page, then playback, then a fresh context re-running the file.
+    buildDetail(win);
+    win.location.hash = '#/details?id=one&serverId=srv';
+    theme.refresh();
+    const container = win.document.createElement('div');
+    container.className = 'videoPlayerContainer';
+    win.document.body.appendChild(container);
+    theme.updateVideoMode();
+    win.timers.runAll();
+    loadModule('astrofin-theme.js', win);
+    assertNoPopout(win);
 });

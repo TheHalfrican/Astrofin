@@ -158,17 +158,6 @@
   --af-dur-drift-2: 150s;
 
   --af-tile-scale: 1.06;
-  /* How much bigger than its card the hover popout is. Read back in JS by
-     popoutScale(); the @media block in section (k) of the theme sheet drops
-     it on short viewports. */
-  --af-popout-scale: 1.32;
-  /* Floor on the popout's width, so a genuinely small card (a square music
-     tile, say) cannot produce a drawer too narrow to read. Deliberately low:
-     the popout is proportional to its card, and a floor high enough to bite on
-     a normal rail card would enlarge the art with it — measured, a 260px floor
-     took the 85" panel's popout to 90% of its usable height for no gain. At
-     200px it only rescues cards under ~170px wide. */
-  --af-popout-min-width: 200px;
   --af-backdrop-scale-from: 1.04;
   --af-page-offset: 24px;
   --af-page-scale: .98;

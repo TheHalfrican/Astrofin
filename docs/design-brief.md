@@ -19,9 +19,11 @@ Creative direction in one line: **the PlayStation 5 home screen, set in deep spa
 
 > **Superseded, 2026-09-13:** the Home "spotlight" panel below was built and
 > then replaced. An in-flow band reflowed the page on every hover; the hover
-> treatment is now a Netflix/Prime-style popout fixed over the card itself.
-> See `docs/design/theme-injection.md` § The card popout. Everything else in
-> this brief stands.
+> treatment became a Netflix/Prime-style popout fixed over the card itself,
+> and that was removed in turn on 2026-09-18. Hovering or focusing a tile now
+> gives the ring and the art bleed and nothing more; see
+> `docs/design/theme-injection.md` § "Card focus on Home and the library
+> grids". Everything else in this brief stands, except item detail (below).
 
 ## PS5 behaviors to borrow
 - Home: one horizontal row of large media tiles at the top (libraries, Continue Watching, Next Up), the focused tile enlarged with a glowing ring, and the rest of the screen dedicated to the focused item's artwork, logo, and a short "spotlight" panel with title, year, runtime, rating and a Play button.

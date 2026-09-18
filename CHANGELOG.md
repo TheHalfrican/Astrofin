@@ -20,6 +20,14 @@ project uses semantic versioning.
   also means these pages respond to Interface Scale like every other page,
   where the redesign sized itself from the window and largely ignored it.
 
+### Removed
+- **The card popout.** Hovering or focusing a card on Home or a library grid no
+  longer opens the enlarged card with the Play/Details drawer that 0.6.0
+  added; it wasn't working reliably enough to keep. Hovering a card still lifts
+  it with the cyan ring and crossfades the background art to it, and the
+  controller hint still appears on Home. To play or open an item, use the card
+  itself as in stock Jellyfin.
+
 ### Security
 - **Bumped `rustls` 0.23.43 -> 0.23.45** (and `rustls-webpki` 0.103.13 ->
   0.103.15 along with it) for RUSTSEC-2026-0285: rustls accepted TLS 1.3
