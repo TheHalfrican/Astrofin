@@ -5,6 +5,29 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+- **The movie, series, season and episode pages are Jellyfin's own layout
+  again, in Astrofin's colours.** The 0.6 redesign of these pages (the logo
+  column, the stack of action pills, the poster rail, the facts card and the
+  full-screen dimmed art) is gone. The pages now lay out exactly as jellyfin-web
+  draws them, which is what Jellium Desktop shows: Jellyfin's art band at the
+  top, the ribbon, the round detail buttons, and Jellyfin's text sizes and
+  spacing. Only the colours and typefaces are Astrofin's: the starfield where
+  Jellyfin has flat grey, Astrofin's surfaces and text colours, the cyan accent
+  (on the Play button, links, focus and the watched check), and Inter
+  throughout. On Jellyfin 12 this recolours through the server's own palette
+  variables, so it follows the page wherever jellyfin-web moves things. It
+  also means these pages respond to Interface Scale like every other page,
+  where the redesign sized itself from the window and largely ignored it.
+
+### Removed
+- **The card popout.** Hovering or focusing a card on Home or a library grid no
+  longer opens the enlarged card with the Play/Details drawer that 0.6.0
+  added; it wasn't working reliably enough to keep. Hovering a card still lifts
+  it with the cyan ring and crossfades the background art to it, and the
+  controller hint still appears on Home. To play or open an item, use the card
+  itself as in stock Jellyfin.
+
 ### Security
 - **Bumped `rustls` 0.23.43 -> 0.23.45** (and `rustls-webpki` 0.103.13 ->
   0.103.15 along with it) for RUSTSEC-2026-0285: rustls accepted TLS 1.3

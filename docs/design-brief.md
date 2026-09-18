@@ -19,13 +19,16 @@ Creative direction in one line: **the PlayStation 5 home screen, set in deep spa
 
 > **Superseded, 2026-09-13:** the Home "spotlight" panel below was built and
 > then replaced. An in-flow band reflowed the page on every hover; the hover
-> treatment is now a Netflix/Prime-style popout fixed over the card itself.
-> See `docs/design/theme-injection.md` § The card popout. Everything else in
-> this brief stands.
+> treatment became a Netflix/Prime-style popout fixed over the card itself,
+> and that was removed in turn on 2026-09-18. Hovering or focusing a tile now
+> gives the ring and the art bleed and nothing more; see
+> `docs/design/theme-injection.md` § "Card focus on Home and the library
+> grids". Everything else in this brief stands, except item detail (below).
 
 ## PS5 behaviors to borrow
 - Home: one horizontal row of large media tiles at the top (libraries, Continue Watching, Next Up), the focused tile enlarged with a glowing ring, and the rest of the screen dedicated to the focused item's artwork, logo, and a short "spotlight" panel with title, year, runtime, rating and a Play button.
 - Item detail ("game hub" layout): full-bleed key art, logo top-left, a vertical stack of quick actions (Play / Resume / Trailer / Mark watched), metadata chips, then horizontal shelves for cast, similar titles, and episodes.
+  - **Superseded 2026-09-18 (owner call):** the item detail pages keep jellyfin-web's own layout and take only Astrofin's colours and typefaces. See `docs/design/theme-injection.md` § "Item detail". Artboards 4 and 5 below record the design that was built and then removed.
 - Library browsing: a poster grid with a focused-card lift, and a fast alphabet or genre jump rail.
 - Transitions: crossfade plus a gentle scale/parallax between pages, never a hard cut. Tile focus scales 1.00 to 1.06 in ~180 ms ease-out with a glow ring fading in. Background art crossfades over ~600 ms. Idle ambient drift on the starfield. Provide a motion token table (durations, easings, distances) and a storyboard for the three key transitions: home tile focus change, home to item detail, and play button to player.
 - Player overlay: appears on input, hides after ~3 s. Frosted bar at the bottom with a constellation-style timeline (chapter markers as stars), current/remaining time, and minimal icons. Subtitles and audio pickers as glass popovers. Nothing else on screen during playback.
