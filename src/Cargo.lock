@@ -2444,6 +2444,8 @@ dependencies = [
  "libloading 0.9.0",
  "nix",
  "parking_lot",
+ "percent-encoding",
+ "serde",
  "tiny-skia",
  "tracing",
  "xkbcommon 0.9.0",
