@@ -38,6 +38,10 @@ use wayland_protocols::wp::fractional_scale::v1::client::{
 use wayland_protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
+use wayland_protocols::xdg::foreign::zv2::client::{
+    zxdg_exported_v2::{self, ZxdgExportedV2},
+    zxdg_exporter_v2::ZxdgExporterV2,
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_positioner::{Anchor, ConstraintAdjustment, Gravity},
     xdg_toplevel,
@@ -128,6 +132,12 @@ pub(crate) struct RootShared {
     /// must still read it as menu plumbing rather than real focus loss.
     menu_surface_id: AtomicU32,
     root_surface: OnceLock<RootSurfaceHandle>,
+    /// Handle from `zxdg_exporter_v2`, naming this toplevel to other
+    /// processes. Set once, when the compositor answers the export made at
+    /// window creation; read from CEF's UI thread to parent the XDG portal's
+    /// file chooser. Absent on a compositor without `xdg_foreign`, and an
+    /// absent parent is not a reason to withhold the dialog.
+    exported_handle: OnceLock<String>,
     /// The toplevel, parked for the life of the process. SCTK's `Window`
     /// destroys the root `wl_surface` when its last handle drops, and the CEF
     /// and mpv subsurfaces name that surface as their parent — so one handle
@@ -164,6 +174,7 @@ impl RootShared {
             pending_present: AtomicBool::new(false),
             menu_surface_id: AtomicU32::new(0),
             root_surface: OnceLock::new(),
+            exported_handle: OnceLock::new(),
             window: OnceLock::new(),
             thread: OnceLock::new(),
         }
@@ -203,6 +214,20 @@ impl RootShared {
 
     pub(crate) fn root_surface_handle(&self) -> Option<RootSurfaceHandle> {
         self.root_surface.get().copied()
+    }
+
+    /// Records the `zxdg_exporter_v2` handle for this toplevel. `true` when
+    /// this call is the one that set it; a repeat export is ignored so a
+    /// reader never sees the handle change under it.
+    pub(crate) fn set_exported_handle(&self, handle: String) -> bool {
+        self.exported_handle.set(handle).is_ok()
+    }
+
+    /// The exported toplevel handle, once the compositor has sent it. `None`
+    /// on a compositor without `xdg_foreign`, and for the short window between
+    /// window creation and the `handle` event.
+    pub(crate) fn exported_handle(&self) -> Option<&str> {
+        self.exported_handle.get().map(String::as_str)
     }
 
     fn wake(&self) {
@@ -342,6 +367,11 @@ struct RootState {
     frac_mgr: Option<WpFractionalScaleManagerV1>,
     #[allow(dead_code)]
     frac_scale: Option<WpFractionalScaleV1>,
+    /// Held alive for the life of the toplevel: dropping the exported object
+    /// revokes the handle, and the portal would then be parenting a window
+    /// the compositor no longer recognises.
+    #[allow(dead_code)]
+    exported: Option<ZxdgExportedV2>,
 
     current_size: Option<crate::window_state::WindowSize>,
     pending_w: Option<NonZeroI32>,
@@ -1288,6 +1318,20 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
 
     let seat: Option<WlSeat> = globals.bind(&qh, 1..=8, ()).ok();
 
+    // Export the toplevel so out-of-process dialogs — the XDG portal's file
+    // chooser — can name it as their parent. The handle arrives later, on the
+    // exported object's `handle` event; `open_file_dialog` reads the cached
+    // string rather than waiting, because it runs on CEF's UI thread and must
+    // not block on this queue. A compositor without `xdg_foreign` leaves the
+    // handle unset and the chooser parentless, which still works.
+    let exporter: Option<ZxdgExporterV2> = globals.bind(&qh, 1..=1, ()).ok();
+    if exporter.is_none() {
+        tracing::info!(target: "Main", "root window: no zxdg_exporter_v2; dialogs will be parentless");
+    }
+    let exported = exporter
+        .as_ref()
+        .map(|e| e.export_toplevel(&surface, &qh, ()));
+
     window
         .xdg_surface()
         .set_window_geometry(0, 0, boot_w, boot_h);
@@ -1321,6 +1365,7 @@ pub(crate) fn ensure_started(rt: &'static WlRuntime) {
         seat,
         #[cfg(feature = "kde-palette")]
         palette,
+        exported,
         shm_pool: new_slot_pool(&shm, "root window"),
         compositor,
         xdg_shell,
@@ -1705,7 +1750,29 @@ noop_dispatch!(
     WpViewport,
     WpFractionalScaleManagerV1,
     WlSeat,
+    ZxdgExporterV2,
 );
+
+impl Dispatch<ZxdgExportedV2, ()> for RootState {
+    fn event(
+        state: &mut Self,
+        _: &ZxdgExportedV2,
+        event: <ZxdgExportedV2 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // The protocol sends `handle` once per export, and re-sends it if the
+        // compositor ever reissues one; the first is the one we keep, so a
+        // second is dropped rather than racing a reader.
+        let zxdg_exported_v2::Event::Handle { handle } = event else {
+            return;
+        };
+        if state.rt.root().set_exported_handle(handle) {
+            tracing::debug!(target: "Main", "root window: toplevel exported for dialog parenting");
+        }
+    }
+}
 
 #[cfg(feature = "kde-palette")]
 impl Dispatch<OrgKdeKwinServerDecorationPaletteManager, ()> for RootState {

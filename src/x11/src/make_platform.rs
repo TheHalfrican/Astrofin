@@ -90,6 +90,15 @@ impl Platform for X11Platform {
         }
     }
 
+    fn open_file_dialog(&self, req: jfn_platform_abi::FileDialogRequest) -> bool {
+        // No host window yet means no parent to name; the portal takes an
+        // empty one and simply does not tie the chooser to us.
+        let parent = crate::x11_state::host()
+            .map(|h| jfn_linux_util::file_dialog::x11_parent(h.toplevel))
+            .unwrap_or_default();
+        jfn_linux_util::file_dialog::open(req, parent)
+    }
+
     fn media_session(&self) -> &dyn jfn_platform_abi::MediaSink {
         &jfn_mpris::MprisSink
     }

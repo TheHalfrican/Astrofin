@@ -5,6 +5,65 @@ project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Linux has a native file chooser**, through the XDG desktop portal
+  (`org.freedesktop.portal.FileChooser`). Until now `open_file_dialog` kept
+  the platform default on Linux, so every `<input type=file>` — a user image
+  upload, a subtitle picked from disk, anything in the admin dashboard that
+  browses for a file — resolved as an immediate cancel. Windows (Common Item
+  Dialog) and macOS (`NSOpenPanel`) have had real choosers since 0.4.0; both
+  Linux backends now do too, and share one implementation in
+  `jfn-linux-util`.
+
+  The portal was chosen over linking a toolkit: it behaves identically on
+  Wayland and X11, pulls no GTK or Qt into the process, opens whatever chooser
+  the desktop actually uses, and is the only route that can return a readable
+  path from inside a Flatpak sandbox — there it answers with a document-portal
+  URI rather than the raw file, which is precisely what the sandbox requires.
+  `zbus` was already a dependency for MPRIS, so the only new crate is
+  `percent-encoding`, which was already in the dependency graph.
+
+  Details worth keeping:
+  - The exchange runs on its own thread. `OpenFile` returns a request path at
+    once and the files only arrive later, on that object's `Response` signal,
+    when the user dismisses the dialog — which may be minutes. `on_done` is
+    called from that thread exactly once; `jfn_cef`'s `deliver` re-posts it to
+    `TID_UI`, so no thread affinity is needed.
+  - The signal subscription is opened **before** the method call and matches
+    on interface and member rather than on the request path. Matching the path
+    would mean knowing it first, and the reply carrying it can lose the race
+    against a portal that answers immediately. Filtering delivered signals by
+    path instead has no race, and does not depend on the portal honouring
+    `handle_token`.
+  - Filters are emitted in both cases (`*.jpg` *and* `*.JPG`). Portal filters
+    are matched with a shell glob, which is case-sensitive, so a lowercase
+    pattern alone would hide `IMG_0001.JPG` from a `jpg` filter. Each list
+    ends in "All files", the same escape hatch the Windows chooser appends; a
+    folder chooser gets no filters at all.
+  - URIs are decoded as bytes, not as a `str`, so a file name that is not
+    valid UTF-8 still survives the round trip. A URI that names no local file
+    (`trash://`, `smb://`) is dropped, and a selection left with nothing
+    usable reads as a cancel.
+
+  The chooser is parented to the app window, so the desktop treats the two as
+  one: modal where the desktop does that, stacked above, grouped in the task
+  switcher. The portal names a parent with an `x11:<xid>` or
+  `wayland:<handle>` string. X11 has its toplevel id to hand; Wayland has to
+  ask, so the backend now binds `zxdg_exporter_v2` and exports its toplevel
+  when the window is created, caching the handle the compositor sends back —
+  xdg-foreign exists for exactly this, and its own specification gives the
+  out-of-process file dialog as the motivating example. The export happens at
+  window creation rather than at dialog time because it is a round trip on the
+  Wayland queue, and `open_file_dialog` runs on CEF's UI thread, which must
+  not block on the compositor; by the time a dialog opens the handle is a
+  cached read. The exported object is held for the life of the toplevel, since
+  dropping it revokes the handle.
+
+  A compositor without `xdg_foreign` sends no handle, and the chooser then
+  opens parentless — it still appears and still returns files, it is simply
+  not tied to the window. Losing the parent is never a reason to lose the
+  dialog.
+
 ### Changed
 - **The movie, series, season and episode pages are Jellyfin's own layout
   again, in Astrofin's colours.** The 0.6 redesign of these pages (the logo
